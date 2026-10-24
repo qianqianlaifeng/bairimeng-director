@@ -982,3 +982,31 @@ body.theme-obsidian ::-webkit-scrollbar-thumb:hover, body.theme-gilt ::-webkit-s
   .editor-stats, .review-summary, .ach-stats { flex-wrap: wrap; gap: 12px; }
   .editor-pace-tip, .rv-sum-tip { margin-left: 0; }
 }
+
+/* ============================================================
+ * 场景搭建器 / 资料库 / AI 审核
+ * ============================================================ */
+.sb-layout { display: grid; grid-template-columns: 1.5fr 0.9fr; gap: 14px; }
+.sb-stage { border-radius: 10px; overflow: hidden; background: #e9ecf1; border: 1px solid var(--border); position: relative; }
+.sb-stage canvas { width: 100%; aspect-ratio: 16/9; display: block; }
+.sb-tip { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--text); background: rgba(255,255,255,.9); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; }
+.sb-side { min-width: 0; }
+.sb-palette { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.sb-props { border: 1px solid var(--border); border-radius: 9px; padding: 10px; min-height: 88px; background: var(--panel2); }
+.sb-obj-title { font-size: 12.5px; font-weight: 700; color: var(--acc-hi); margin-bottom: 8px; }
+.ref-card { margin-bottom: 14px; }
+.ref-list { display: flex; flex-direction: column; gap: 6px; }
+.ref-empty { font-size: 12px; padding: 6px 2px; }
+.ref-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 7px 11px; background: var(--panel2); }
+.ref-check input { accent-color: var(--acc); width: 15px; height: 15px; }
+.ref-name { font-size: 12.5px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ref-size { font-size: 11px; }
+.ref-tip { font-size: 11px; }
+.rv-shot-row { display: flex; gap: 14px; align-items: flex-start; }
+.rv-shot-pic { width: 168px; flex-shrink: 0; display: flex; flex-direction: column; gap: 7px; }
+.rv-img { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
+.rv-main { flex: 1; min-width: 0; }
+.rv-ai-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.rv-ai-status { font-size: 12px; }
+.rv-ai-res { font-size: 12.5px; line-height: 1.8; background: var(--chip-bg); border: 1px solid var(--border-hi); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
+@media (max-width: 900px) { .sb-layout { grid-template-columns: 1fr; } .rv-shot-row { flex-direction: column; } .rv-shot-pic { width: 100%; } }
