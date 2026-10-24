@@ -538,7 +538,7 @@ export function openShotEditor(shot, idx) {
     const loopFn = (now) => {
       if (!document.body.contains(cv)) return;
       const t = Math.min(1, (now - t0) / dur);
-      renderer.render(mv.sim, t, action, { duration: dur / 1000, hud: true, letterbox: true, angle: m.body.querySelector('#edAngle').value, moveSpeed: m.body.querySelector('#edSpeed').value, scene: shot.scene });
+      renderer.render(mv.sim, t, action, { duration: dur / 1000, hud: true, letterbox: true, angle: m.body.querySelector('#edAngle').value, moveSpeed: m.body.querySelector('#edSpeed').value, size: m.body.querySelector('#edSize').value, scene: shot.scene });
       if (t < 1) player.raf = requestAnimationFrame(loopFn);
       else setTimeout(() => { if (document.body.contains(cv)) playMove(); }, 600);
     };
