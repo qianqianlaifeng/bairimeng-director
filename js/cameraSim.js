@@ -539,7 +539,9 @@ class WhiteModelRenderer {
 
     // 演员部件（局部 → 世界）
     /* 场景对象：多人物（各自动作/朝向/大小）+ 道具 */
-    const objs = (opts.scene && opts.scene.objects) || [];
+    const objs = ((opts.scene && opts.scene.objects) || []).filter(o => o && typeof o === 'object')
+      .map(o => ({ ...o, x: +o.x || 0, z: +o.z || 0, rot: +o.rot || 0, scale: Math.min(3, Math.max(0.3, +o.scale || 1)) }))
+      .filter(o => isFinite(o.x) && isFinite(o.z));
     const sceneActors = objs.filter(o => o.type === 'actor');
     let actorDefs = sceneActors.length
       ? sceneActors.map((o, i) => {
@@ -602,6 +604,7 @@ class WhiteModelRenderer {
           pts2.push(pr);
         }
         if (!ok) continue;
+        if (pts2.some(p2 => !isFinite(p2.x) || !isFinite(p2.y) || !isFinite(p2.d))) continue;
         polys.push({ pts: pts2, n, shade: poly.shade, d: pts2.reduce((a, p2) => a + p2.d, 0) / pts2.length });
       }
     };
