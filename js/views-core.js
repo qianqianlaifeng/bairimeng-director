@@ -737,23 +737,35 @@ function openSceneBuilder(shot, onSaved) {
   const scene = shot.scene ? JSON.parse(JSON.stringify(shot.scene)) : { objects: [], cam: { az: 25, dist: 7, h: 1.8, fov: 55 } };
   if (!scene.cam) scene.cam = { az: 25, dist: 7, h: 1.8, fov: 55 };
   if (!scene.light) scene.light = { az: 0, el: 35, int: 1 };
-  let placeType = 'actor', selIdx = -1;
+  let placeType = 'actor', selIdx = -1, pathDraw = false, pathTarget = null;
   const TYPE_NAME = { actor: '人物', box: '木箱', pillar: '立柱', table: '桌子', wall: '围墙' };
   const m = modal({
     title: '🏗 场景搭建 · ' + (shot.desc || '未命名镜头').slice(0, 14), wide: true,
+    onClose: () => { if (typeof raf !== 'undefined' && raf) cancelAnimationFrame(raf); },
     body: `
       <div class="sb-layout">
         <div class="sb-stage"><canvas id="sbCanvas"></canvas>
           <div class="sb-tip" id="sbTip">点击地面放置「人物」 · 点击已有对象可选中挪动</div>
         </div>
         <div class="sb-side">
-          <div class="card-title">放置对象</div>
+          <div class="card-title">底景</div>
+          <div class="sb-palette" id="sbBase">
+            <button class="chip ${(scene.base || 'plain') === 'plain' ? 'chip-on' : ''}" data-b="plain">空舞台</button>
+            <button class="chip ${scene.base === 'street' ? 'chip-on' : ''}" data-b="street">街道</button>
+            <button class="chip ${scene.base === 'room' ? 'chip-on' : ''}" data-b="room">房间</button>
+            <button class="chip ${scene.base === 'stage' ? 'chip-on' : ''}" data-b="stage">舞台</button>
+          </div>
+          <div class="card-title" style="margin-top:10px">放置对象</div>
           <div class="sb-palette">
             <button class="chip chip-on" data-t="actor">👤 人物</button>
             <button class="chip" data-t="box">📦 木箱</button>
             <button class="chip" data-t="pillar">🏛 立柱</button>
             <button class="chip" data-t="table">🪑 桌子</button>
             <button class="chip" data-t="wall">🧱 围墙</button>
+            <button class="chip" data-t="door">🚪 门框</button>
+            <button class="chip" data-t="window">🪟 窗墙</button>
+            <button class="chip" data-t="sofa">🛋️ 沙发</button>
+            <button class="chip" data-t="tree">🌳 树</button>
           </div>
           <div id="sbProps" class="sb-props"><div class="dim">选中对象后在这里调整动作 / 朝向 / 大小</div></div>
           <div class="card-title" style="margin-top:14px">自由机位</div>
@@ -792,6 +804,29 @@ function openSceneBuilder(shot, onSaved) {
   const loop = (now) => {
     if (!document.body.contains(cv)) return;
     renderer.render(sim, ((now - t0) / 4000) % 1, 'stand', { duration: 4, hud: false, letterbox: true, scene });
+    // 轨迹叠加层
+    const tctx = cv.getContext('2d');
+    const tgtObj = (selIdx >= 0 && scene.objects[selIdx]) || pathTarget;
+    if (tgtObj && tgtObj.path && tgtObj.path.length) {
+      const camNow = solveCamera(sim, 0.35, { x: 0, y: 0, z: 0 }, { angle: 'eye', scene });
+      const fcal = (cv.getBoundingClientRect().height / 2) / Math.tan(((scene.cam?.fov || 55) * DEG2) / 2);
+      tctx.strokeStyle = '#ff5470'; tctx.lineWidth = 2;
+      tctx.beginPath();
+      let started = false;
+      for (const wp of tgtObj.path) {
+        const pr = renderer.project([wp.x, 0.06, wp.z], camNow, fcal, cv.clientWidth / 2, cv.clientHeight / 2);
+        if (!pr) { started = false; continue; }
+        started ? tctx.lineTo(pr.x, pr.y) : tctx.moveTo(pr.x, pr.y);
+        started = true;
+      }
+      tctx.stroke();
+      for (const wp of tgtObj.path) {
+        const pr = renderer.project([wp.x, 0.06, wp.z], camNow, fcal, cv.clientWidth / 2, cv.clientHeight / 2);
+        if (!pr) continue;
+        tctx.fillStyle = '#ff5470';
+        tctx.beginPath(); tctx.arc(pr.x, pr.y, 4, 0, Math.PI * 2); tctx.fill();
+      }
+    }
     raf = requestAnimationFrame(loop);
   };
   raf = requestAnimationFrame(loop);
@@ -822,6 +857,26 @@ function openSceneBuilder(shot, onSaved) {
       box.querySelector('#sbRot').value = o.rot;
       box.querySelector('#sbRotV').textContent = o.rot + '°';
     });
+    if (o.type === 'actor') {
+      const pathDiv = document.createElement('div');
+      pathDiv.innerHTML = `
+        <div class="form-row"><label>运动轨迹 <span class="dim">（${o.path?.length >= 2 ? '已设 ' + o.path.length + ' 个点，自动面向行进方向' : '未设置 · 绘制后沿路线来回行走'}）</span></label>
+        <div class="sb-palette">
+          <button class="btn btn-ghost btn-sm" id="sbPathDraw">${pathDraw && pathTarget === o ? '✅ 完成绘制' : '🎯 绘制轨迹'}</button>
+          ${o.path?.length ? '<button class="btn btn-ghost btn-sm" id="sbPathClear">🗑 清除</button>' : ''}
+        </div>
+        ${o.path?.length >= 2 ? `<div class="form-row"><label>行走速度 <span id="sbSpdV">${(o.speed || 1.2).toFixed(1)}</span></label><input type="range" id="sbSpd" class="scrub" min="0.4" max="2.5" step="0.1" value="${o.speed || 1.2}"></div>` : ''}
+      `;
+      box.appendChild(pathDiv);
+      pathDiv.querySelector('#sbPathDraw').onclick = () => {
+        if (pathDraw && pathTarget === o) { pathDraw = false; pathTarget = null; }
+        else { pathDraw = true; pathTarget = o; if (!o.path) o.path = []; }
+        renderProps();
+        m.body.querySelector('#sbTip').textContent = pathDraw ? '轨迹绘制中：依次点击地面添加途经点，完成后点「完成绘制」' : '点击地面放置「' + TYPE_NAME[placeType] + '」 · 点击已有对象可选中挪动';
+      };
+      pathDiv.querySelector('#sbPathClear')?.addEventListener('click', () => { o.path = null; pathDraw = false; pathTarget = null; renderProps(); });
+      pathDiv.querySelector('#sbSpd')?.addEventListener('input', e => { o.speed = +e.target.value; pathDiv.querySelector('#sbSpdV').textContent = (+e.target.value).toFixed(1); });
+    }
     box.querySelector('#sbScale').oninput = e => { o.scale = +e.target.value; box.querySelector('#sbScaleV').textContent = (+e.target.value).toFixed(1) + '×'; };
     box.querySelector('#sbDel').onclick = () => { scene.objects.splice(selIdx, 1); selIdx = -1; renderProps(); };
   };
@@ -850,7 +905,26 @@ function openSceneBuilder(shot, onSaved) {
     m.body.querySelector('#' + id).oninput = e => { scene.light[k] = +e.target.value; m.body.querySelector('#' + vid).textContent = e.target.value + u; };
   });
 
+  m.body.querySelectorAll('#sbBase .chip').forEach(b => b.onclick = () => {
+    scene.base = b.dataset.b;
+    m.body.querySelectorAll('#sbBase .chip').forEach(x => x.classList.toggle('chip-on', x === b));
+  });
+
+  let drag = null; // {sx, az, moved}
+  cv.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.sx;
+    if (Math.abs(dx) > 5) drag.moved = true;
+    if (drag.moved) {
+      scene.cam.az = ((drag.az - dx * 0.45) % 360 + 360) % 360;
+      m.body.querySelector('#sbAz').value = scene.cam.az;
+      m.body.querySelector('#sbAzV').textContent = Math.round(scene.cam.az) + '°';
+    }
+  });
+  cv.addEventListener('pointerup', () => { setTimeout(() => { drag = null; }, 0); });
+
   cv.addEventListener('pointerdown', e => {
+    drag = { sx: e.clientX, az: scene.cam.az || 0, moved: false };
     const r = cv.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const cam = solveCamera(sim, 0.35, { x: 0, y: 0, z: 0 }, { angle: 'eye', scene });
@@ -863,26 +937,44 @@ function openSceneBuilder(shot, onSaved) {
         if (dist < bd) { bd = dist; best = i; }
       }
     });
-    if (best >= 0) { selIdx = best; renderProps(); return; }
-    const g = unprojectGround(sx, sy, cam, focal, renderer.w, renderer.h);
-    if (!g) return;
-    const gx = Math.max(-11, Math.min(11, +g[0].toFixed(2))), gz = Math.max(-11, Math.min(11, +g[1].toFixed(2)));
-    if (selIdx >= 0 && scene.objects[selIdx]) {
-      scene.objects[selIdx].x = gx; scene.objects[selIdx].z = gz;
+    const place = () => {
+      if (pathDraw && pathTarget && selIdx >= 0 && scene.objects[selIdx] === pathTarget) {
+        const g2 = unprojectGround(sx, sy, cam, focal, renderer.w, renderer.h);
+        if (g2) { pathTarget.path = pathTarget.path || []; pathTarget.path.push({ x: +g2[0].toFixed(2), z: +g2[1].toFixed(2) }); }
+        renderProps();
+        return;
+      }
+      if (best >= 0) { selIdx = best; renderProps(); return; }
+      const g = unprojectGround(sx, sy, cam, focal, renderer.w, renderer.h);
+      if (!g) return;
+      const gx = Math.max(-11, Math.min(11, +g[0].toFixed(2))), gz = Math.max(-11, Math.min(11, +g[1].toFixed(2)));
+      if (selIdx >= 0 && scene.objects[selIdx]) {
+        scene.objects[selIdx].x = gx; scene.objects[selIdx].z = gz;
+        renderProps();
+        return;
+      }
+      const base = { type: placeType === 'actor' ? 'actor' : 'prop', x: gx, z: gz, rot: 205, scale: 1 };
+      if (placeType === 'actor') { base.action = 'stand'; base.seed = Math.round(Math.random() * 90); }
+      else base.shape = placeType;
+      scene.objects.push(base);
+      selIdx = scene.objects.length - 1;
       renderProps();
-      return;
-    }
-    const base = { type: placeType === 'actor' ? 'actor' : 'prop', x: gx, z: gz, rot: 205, scale: 1 };
-    if (placeType === 'actor') { base.action = 'stand'; base.seed = Math.round(Math.random() * 90); }
-    else base.shape = placeType;
-    scene.objects.push(base);
-    selIdx = scene.objects.length - 1;
-    renderProps();
+    };
+    // 拖拽=旋转机位；点按=放置/选中（延迟到 pointerup 判定）
+    const wait = () => {
+      if (drag && drag.moved) return;          // 拖拽中：不放置
+      setTimeout(() => {
+        if (drag && drag.moved) return;
+        place();
+      }, 120);
+    };
+    wait();
   });
 
   m.body.querySelector('#sbClear').onclick = () => { scene.objects = []; selIdx = -1; renderProps(); };
   m.body.querySelector('#sbCancel').onclick = () => m.close();
   m.body.querySelector('#sbSave').onclick = () => {
+    pathDraw = false; pathTarget = null;
     store.updateShot(shot.id, {
       scene: scene.objects.length ? scene : null,
       ...(scene.objects.length && scene.cam ? { cameraMove: 'free' } : {}),
@@ -892,10 +984,7 @@ function openSceneBuilder(shot, onSaved) {
     toast('场景已保存到镜头 🏗', 'ok');
     if (onSaved) onSaved();
   };
-  const origClose = m.close;
-  m.close = (r2) => { if (raf) cancelAnimationFrame(raf); origClose(r2); };
-  m.body.querySelector('.modal-x').onclick = () => m.close(null);
-}
+  m.cacheOnClose = () => { if (raf) cancelAnimationFrame(raf); };}
 
 /* ---------- 示例剧本（原创短故事） ---------- */
 const DEMO_SCRIPT = `第1场 便利店 夜 内
