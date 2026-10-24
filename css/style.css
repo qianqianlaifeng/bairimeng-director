@@ -599,6 +599,11 @@ body.theme-obsidian .modal, body.theme-gilt .modal { box-shadow: 0 30px 80px rgb
 .editor-3col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 10px; }
 .editor-2col { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 10px; }
 .img-ops { display: flex; gap: 8px; }
+.sketch-pad {
+  width: 100%; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: crosshair; touch-action: none; display: block; background: #faf9f4;
+}
+.sketch-hint { font-size: 11px; align-self: center; }
 .prompt-ops { display: flex; gap: 7px; margin-bottom: 5px; flex-wrap: wrap; }
 /* Ken Burns 参考图演示 */
 @keyframes kbDemo {
