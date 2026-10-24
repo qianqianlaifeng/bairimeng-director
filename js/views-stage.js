@@ -360,7 +360,9 @@ export function renderPreview(container, payload = {}) {
     pts.forEach((p, i) => { const [x, y] = m2p(p.x, p.z); i ? mapCtx.lineTo(x, y) : mapCtx.moveTo(x, y); });
     mapCtx.stroke();
     // 当前相机 + 视野扇形
-    const fx = Math.sin(cur.yaw + Math.PI), fz = -Math.cos(cur.yaw + Math.PI);
+    let fx = 0, fz = -1;
+    if (cur._tgt) { fx = cur._tgt[0] - cur.pos[0]; fz = cur._tgt[2] - cur.pos[2]; }
+    const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
     const half = ((cur.fov || 55) * Math.PI / 180) / 2;
     const base = Math.atan2(fz, fx);
     const [cx2, cy2] = m2p(cur.pos[0], cur.pos[2]);
