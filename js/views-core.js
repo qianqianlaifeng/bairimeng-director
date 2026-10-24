@@ -447,6 +447,7 @@ export function renderStoryboard(container) {
  * 镜头编辑器（弹窗）
  * ============================================================ */
 export function openShotEditor(shot, idx) {
+  if (window.__edOpen) { try { window.__edOpen.close(); } catch {} window.__edOpen = null; }
   const p = store.active;
   const m = modal({
     title: `✏️ 第 ${idx + 1} 镜`, wide: true,
@@ -657,19 +658,21 @@ export function openShotEditor(shot, idx) {
       note: m.body.querySelector('#edNote').value.trim(),
     };
   }
+  const __edClose = (r2) => { window.__edOpen = null; m.close(r2); };
   m.body.querySelector('#edSave').onclick = () => {
     store.updateShot(shot.id, readForm());
     store.addXP(1);
-    m.close();
+    __edClose();
     toast('镜头已保存 ✅', 'ok');
   };
-  m.body.querySelector('#edCancel').onclick = () => m.close();
+  m.body.querySelector('#edCancel').onclick = () => __edClose();
   m.body.querySelector('#edDelete').onclick = async () => {
     if (await confirmDlg('删除这个镜头？', { danger: true, okText: '删除' })) {
       store.deleteShot(shot.id);
-      m.close();
+      __edClose();
     }
   };
+  window.__edOpen = m;
   playMove();
 }
 
@@ -737,6 +740,7 @@ function unprojectGround(sx, sy, cam, focal, W, H) {
 }
 
 function openSceneBuilder(shot, onSaved) {
+  if (window.__sbOpen) { try { window.__sbOpen.close(); } catch {} window.__sbOpen = null; }
   const scene = shot.scene ? JSON.parse(JSON.stringify(shot.scene)) : { objects: [], cam: { az: 25, dist: 7, h: 1.8, fov: 55 } };
   if (!scene.cam) scene.cam = { az: 25, dist: 7, h: 1.8, fov: 55 };
   if (!scene.light) scene.light = { az: 0, el: 35, int: 1 };
@@ -750,7 +754,8 @@ function openSceneBuilder(shot, onSaved) {
   const TYPE_NAME = { actor: '人物', box: '木箱', pillar: '立柱', table: '桌子', wall: '围墙' };
   const m = modal({
     title: '🏗 场景搭建 · ' + (shot.desc || '未命名镜头').slice(0, 14), wide: true,
-    onClose: () => { if (typeof raf !== 'undefined' && raf) cancelAnimationFrame(raf); },
+    onClose: () => { if (typeof raf !== 'undefined' && raf) cancelAnimationFrame(raf); window.__sbOpen = null; },
+    __mark: true,
     body: `
       <div class="sb-layout">
         <div class="sb-stage"><canvas id="sbCanvas"></canvas>
@@ -825,6 +830,7 @@ function openSceneBuilder(shot, onSaved) {
         <button class="btn btn-primary" id="sbSave">💾 保存场景</button>
       </div>`,
   });
+  window.__sbOpen = m;
   const cv = m.body.querySelector('#sbCanvas');
   const renderer = new WhiteModelRenderer(cv);
   const sim = { type: 'free' };
@@ -1339,6 +1345,8 @@ function openSceneBuilder(shot, onSaved) {
   };
   m.body.querySelector('#sbClear').onclick = () => { scene.objects = []; scene.camPath = null; selIdx = -1; m.body.querySelector('#sbRec').textContent = '🎬 录制运镜'; renderProps(); };
   m.body.querySelector('#sbCancel').onclick = () => m.close();
+  const __origClose = m.close;
+  m.close = (r2) => { window.__sbOpen = null; __origClose(r2); };
   m.body.querySelector('#sbMax').onclick = () => {
     const box = m.root.querySelector('.modal');
     box.classList.toggle('modal-super');
