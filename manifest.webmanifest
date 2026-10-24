@@ -1,0 +1,18 @@
+{
+  "name": "白日梦导演台",
+  "short_name": "导演台",
+  "description": "AI 影片导演工作台：剧本拆分镜、运镜预演、动态分镜、剪辑、提示词生成",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0d1120",
+  "theme_color": "#0d1120",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
