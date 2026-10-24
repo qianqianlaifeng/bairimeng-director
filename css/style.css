@@ -1010,3 +1010,11 @@ body.theme-obsidian ::-webkit-scrollbar-thumb:hover, body.theme-gilt ::-webkit-s
 .rv-ai-status { font-size: 12px; }
 .rv-ai-res { font-size: 12.5px; line-height: 1.8; background: var(--chip-bg); border: 1px solid var(--border-hi); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
 @media (max-width: 900px) { .sb-layout { grid-template-columns: 1fr; } .rv-shot-row { flex-direction: column; } .rv-shot-pic { width: 100%; } }
+
+/* 搭建器放大 + 编辑器选项换行 */
+.modal-super { width: 97vw !important; max-height: 94vh; }
+.modal-super .sb-layout { grid-template-columns: 1.6fr 0.8fr; }
+.modal-super .sb-stage canvas { aspect-ratio: 16/9; }
+.editor-stage-opts { flex-wrap: wrap; }
+.editor-stage-opts .btn { flex-shrink: 0; }
+.pv-map-card canvas { border-radius: 9px; display: block; }
