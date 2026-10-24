@@ -3,7 +3,7 @@
  * 提示词工坊 / 审核台 / 成就图鉴 / 设置
  * ============================================================ */
 import { PROMPT_TEMPLATES, STYLE_BANK, LEVELS, BADGES, THEMES, BACKGROUNDS, SHOT_SIZES } from './data.js';
-import { buildPrompt, aiEnhancePrompt, testAPI, moveByKey } from './breakdown.js';
+import { buildPrompt, aiEnhancePrompt, testAPI, moveByKey, aiReview } from './breakdown.js';
 import { esc, el, modal, confirmDlg, toast, copyText, pickFile, fmtDur } from './ui.js';
 
 let store;
@@ -138,26 +138,79 @@ export function renderReview(container) {
 
   container.innerHTML = `
     <div class="page-head">
-      <h2>🔍 审核台 <span class="dim">· AI 出片后逐镜拉片打分，不满意的打回重拍</span></h2>
+      <h2>🔍 审核台 <span class="dim">· AI 出片后逐镜拉片：上传成片截图，AI 依据资料文档打分给建议</span></h2>
+    </div>
+    <div class="card ref-card">
+      <div class="card-title">📚 审核标准资料库 <span class="dim">（仅存本地 · 勾选后作为 AI 审核 / AI 拆分镜的依据）</span></div>
+      <div class="ref-list" id="refList"></div>
+      <div class="modal-actions" style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" id="refUp">📤 上传文档（txt/md/json/csv/srt）</button>
+        <button class="btn btn-ghost btn-sm" id="refPaste">✍️ 粘贴文本</button>
+        <span class="dim ref-tip">例：上传你的《短剧审核标准》，AI 会逐条对照打分</span>
+      </div>
     </div>
     <div class="card review-summary" id="rvSummary"></div>
     <div id="rvList" class="review-list"></div>`;
 
+  /* ---- 资料文档库 ---- */
+  const refList = container.querySelector('#refList');
+  const renderRefs = () => {
+    const sel = store.settings.refSel || [];
+    if (!store.refs.length) { refList.innerHTML = '<div class="dim ref-empty">还没有文档。上传你的审核标准 / 分镜规范，AI 审核时会严格依据。</div>'; return; }
+    refList.innerHTML = store.refs.map(r => `
+      <div class="ref-row">
+        <label class="ref-check"><input type="checkbox" ${sel.includes(r.id) ? 'checked' : ''} data-id="${r.id}"></label>
+        <span class="ref-name">${esc(r.name)}</span>
+        <span class="dim ref-size">${r.text.length} 字</span>
+        <button class="icon-btn ref-del" data-id="${r.id}" title="删除">✕</button>
+      </div>`).join('');
+    refList.querySelectorAll('.ref-check input').forEach(cb => cb.onchange = () => {
+      const cur = new Set(store.settings.refSel || []);
+      cb.checked ? cur.add(cb.dataset.id) : cur.delete(cb.dataset.id);
+      store.setSettings({ refSel: [...cur] });
+    });
+    refList.querySelectorAll('.ref-del').forEach(b => b.onclick = () => { store.delRef(b.dataset.id); renderRefs(); });
+  };
+  renderRefs();
+  container.querySelector('#refUp').onclick = async () => {
+    const f = await pickFile('.txt,.md,.markdown,.json,.csv,.srt,.lrc,.html,.htm,text/plain');
+    if (!f) return;
+    try { store.addRef(f.name, await f.text()); } catch { toast('读取文档失败', 'warn'); }
+    renderRefs();
+  };
+  container.querySelector('#refPaste').onclick = () => {
+    const m = modal({
+      title: '✍️ 粘贴审核标准',
+      body: `
+        <div class="form-row"><label>文档名称</label><input id="refPName" class="input" placeholder="例：短剧审核标准 v2"></div>
+        <div class="form-row"><label>内容</label><textarea id="refPText" class="input" rows="8" placeholder="逐条写标准，AI 会对照执行…"></textarea></div>
+        <div class="modal-actions"><button class="btn btn-ghost" data-act="c">取消</button><button class="btn btn-primary" data-act="ok">加入资料库</button></div>`,
+    });
+    m.body.querySelector('[data-act="c"]').onclick = () => m.close();
+    m.body.querySelector('[data-act="ok"]').onclick = () => {
+      const t = m.body.querySelector('#refPText').value.trim();
+      if (!t) { toast('内容是空的', 'warn'); return; }
+      store.addRef(m.body.querySelector('#refPName').value.trim() || '粘贴的文档', t);
+      m.close(); renderRefs();
+    };
+  };
+
+  /* ---- 汇总 ---- */
   const renderSummary = () => {
     const reviewed = p.shots.filter(s => s.review);
     const avg = reviewed.length ? reviewed.reduce((a, s) => a + s.review.score, 0) / reviewed.length : 0;
     const bad = p.shots.filter(s => s.review && s.review.score <= 2).length;
-    const box = container.querySelector('#rvSummary');
-    box.innerHTML = `
+    container.querySelector('#rvSummary').innerHTML = `
       <div class="rv-sum-item"><b>${reviewed.length}/${p.shots.length}</b><span>已审核</span></div>
       <div class="rv-sum-item"><b class="${avg >= 4 ? 'text-ok' : avg && avg < 3 ? 'text-bad' : ''}">${reviewed.length ? avg.toFixed(1) : '—'}</b><span>平均分</span></div>
       <div class="rv-sum-item"><b class="${bad ? 'text-bad' : 'text-ok'}">${bad}</b><span>待重拍</span></div>
-      <div class="rv-sum-tip dim">${!p.shots.length ? '没有镜头' : reviewed.length === p.shots.length ? '✅ 全部镜头已审核' : '逐镜审核中，出片后回来打分'}</div>`;
+      <div class="rv-sum-tip dim">${!p.shots.length ? '没有镜头' : reviewed.length === p.shots.length ? '✅ 全部镜头已审核' : '逐镜审核中'}</div>`;
   };
 
   const list = container.querySelector('#rvList');
   if (!p.shots.length) { list.innerHTML = '<div class="empty-tip">没有镜头可审核</div>'; return; }
 
+  const REVIEW_DIMS = ['构图', '运镜', '光线', '表演', '音画'];
   p.shots.forEach((s, i) => {
     const r = s.review || { score: 0, checks: {}, note: '' };
     const item = el(`<div class="review-item card" data-id="${s.id}">
@@ -165,24 +218,34 @@ export function renderReview(container) {
         <span class="pw-idx">${i + 1}</span>
         <span class="rv-desc">${esc((s.desc || '').slice(0, 44))}</span>
         <div class="spacer"></div>
-        <div class="rv-stars" data-id="${s.id}">${[1, 2, 3, 4, 5].map(n => `<button class="star ${r.score >= n ? 'on' : ''}" data-n="${n}">★</button>`).join('')}</div>
+        <div class="rv-stars">${[1, 2, 3, 4, 5].map(n => `<button class="star ${r.score >= n ? 'on' : ''}" data-n="${n}">★</button>`).join('')}</div>
       </div>
-      <div class="rv-checks">
-        ${REVIEW_DIMS.map(d => `<button class="chip ${r.checks?.[d] ? 'chip-on' : ''}" data-dim="${d}">${d}${r.checks?.[d] ? ' ✓' : ''}</button>`).join('')}
-        <span class="dim rv-checks-tip">点亮的维度 = 通过</span>
-      </div>
-      <div class="rv-note-row">
-        <input class="input rv-note" placeholder="修改意见：如「手部崩了，重出」「光线太暗」…" value="${esc(r.note || '')}">
-        <button class="btn btn-ghost btn-sm rv-save">保存</button>
+      <div class="rv-shot-row">
+        <div class="rv-shot-pic"><img class="rv-img" ${s.reviewImg ? '' : 'style="display:none"'} alt="成片截图"><button class="btn btn-ghost btn-sm" data-op="img">🖼 上传成片截图</button></div>
+        <div class="rv-main">
+          <div class="rv-ai-row">
+            <button class="btn btn-magic btn-sm" data-op="ai">🤖 AI 审核（依据资料库）</button>
+            <span class="dim rv-ai-status"></span>
+          </div>
+          <div class="rv-ai-out"></div>
+          <div class="rv-checks">
+            ${REVIEW_DIMS.map(d => `<button class="chip ${r.checks?.[d] ? 'chip-on' : ''}" data-dim="${d}">${d}${r.checks?.[d] ? ' ✓' : ''}</button>`).join('')}
+            <span class="dim rv-checks-tip">点亮的维度 = 通过</span>
+          </div>
+          <div class="rv-note-row">
+            <input class="input rv-note" placeholder="修改意见…" value="${esc(r.note || '')}">
+            <button class="btn btn-ghost btn-sm rv-save">保存</button>
+          </div>
+        </div>
       </div>
     </div>`);
     const stars = item.querySelectorAll('.star');
-    const setScore = (n) => {
-      const cur = (s.review?.score === n) ? 0 : n; // 再点一次取消
-      stars.forEach(st => st.classList.toggle('on', +st.dataset.n <= cur && cur > 0));
+    stars.forEach(st => st.onclick = () => {
+      const n = +st.dataset.n;
+      const cur = s.review?.score === n ? 0 : n;
+      stars.forEach(x => x.classList.toggle('on', +x.dataset.n <= cur && cur > 0));
       s.review = { ...(s.review || { checks: {}, note: '' }), score: cur };
-    };
-    stars.forEach(st => st.onclick = () => setScore(+st.dataset.n));
+    });
     item.querySelectorAll('[data-dim]').forEach(ch => ch.onclick = () => {
       s.review = s.review || { score: 0, checks: {}, note: '' };
       s.review.checks = s.review.checks || {};
@@ -190,27 +253,57 @@ export function renderReview(container) {
       ch.classList.toggle('chip-on', !!s.review.checks[ch.dataset.dim]);
       ch.textContent = ch.dataset.dim + (s.review.checks[ch.dataset.dim] ? ' ✓' : '');
     });
+    /* 成片截图 */
+    const imgEl = item.querySelector('.rv-img');
+    if (s.reviewImg) store.getImage(s.reviewImg).then(b => { if (b) imgEl.src = URL.createObjectURL(b); });
+    item.querySelector('[data-op="img"]').onclick = async () => {
+      const f = await pickFile('image/*');
+      if (!f) return;
+      await store.attachReviewImg(s.id, f);
+      const b = await store.getImage(s.reviewImg);
+      if (b) { imgEl.src = URL.createObjectURL(b); imgEl.style.display = ''; }
+      toast('成片截图已挂到该镜头 🖼', 'ok');
+    };
+    /* AI 审核 */
+    const status = item.querySelector('.rv-ai-status');
+    const out = item.querySelector('.rv-ai-out');
+    item.querySelector('[data-op="ai"]').onclick = async e => {
+      if (!store.settings.api) { toast('先到 设置 → AI接口 配置接口（审核图片需支持视觉的模型）', 'warn'); return; }
+      const btn = e.currentTarget;
+      const dataURL = await store.getReviewImgData(s.id);
+      if (!dataURL) { toast('请先给这个镜头上传成片截图，AI 才有得看', 'warn'); return; }
+      btn.disabled = true;
+      status.textContent = '🤖 AI 正在对照' + ((store.settings.refSel || []).length ? '资料库' : '五维常识') + '拉片…';
+      try {
+        const res = await aiReview(s, dataURL, store.selectedRefText(), store.settings);
+        s.review = { ...(s.review || { checks: {}, note: '' }), score: res.score };
+        s.review.note = ('AI：' + res.issues.join('；') + (res.suggestion ? ' ｜ 建议：' + res.suggestion : '')).slice(0, 290);
+        store.updateShot(s.id, { review: s.review });
+        item.querySelector('.rv-note').value = s.review.note;
+        stars.forEach(x => x.classList.toggle('on', +x.dataset.n <= res.score));
+        out.innerHTML = `<div class="rv-ai-res">🤖 AI 评分 <b>${res.score}/5</b>${res.issues.length ? ' · ' + res.issues.map(esc).join('；') : ''}${res.suggestion ? '<br>💡 ' + esc(res.suggestion) : ''}</div>`;
+        store.unlock('reviewer');
+        p.meta.reviewed = true;
+        store.addXP(3, 'AI 审核');
+        renderSummary();
+      } catch (err) {
+        status.textContent = '❌ ' + err.message;
+      } finally { btn.disabled = false; if (status.textContent.startsWith('🤖')) status.textContent = ''; }
+    };
+    /* 手动保存 */
     item.querySelector('.rv-save').onclick = () => {
-      const note = item.querySelector('.rv-note').value.trim();
-      if (!s.review) s.review = { score: 0, checks: {}, note };
-      s.review.note = note;
+      if (!s.review) s.review = { score: 0, checks: {}, note: '' };
+      s.review.note = item.querySelector('.rv-note').value.trim();
       store.updateShot(s.id, { review: s.review });
       store.unlock('reviewer');
       p.meta.reviewed = true;
       store.addXP(2, '镜头审核');
       toast('审核意见已保存 ✅', 'ok');
       renderSummary();
-      checkDreamBig();
     };
     list.appendChild(item);
   });
   renderSummary();
-
-  function checkDreamBig() {
-    const m = p.meta;
-    if (m.breakdownCount && m.previewPlayed && m.reviewed && m.exported) store.unlock('dreamBig');
-  }
-  void checkDreamBig;
 }
 
 /* ============================================================
