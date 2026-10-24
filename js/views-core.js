@@ -4,7 +4,7 @@
  * ============================================================ */
 import { CAMERA_MOVES, MOVE_CATS, SHOT_SIZES, ANGLES, TRANSITIONS, PROMPT_TEMPLATES, STYLE_BANK, ACTOR_ACTIONS, STAGE_SCENES } from './data.js';
 import { localBreakdown, aiBreakdown, aiEnhancePrompt, buildPrompt, moveByKey } from './breakdown.js';
-import { WhiteModelRenderer } from './cameraSim.js';
+import { WhiteModelRenderer, solveCamera } from './cameraSim.js';
 import { esc, el, modal, confirmDlg, toast, copyText, pickFile, fmtDur, opts } from './ui.js';
 
 let store;   // 由 init 注入
@@ -460,6 +460,7 @@ export function openShotEditor(shot, idx) {
           <select id="edAction" class="input">${opts(ACTOR_ACTIONS, 'stand')}</select>
           <label class="dim">布景</label>
           <select id="edScene" class="input">${opts(STAGE_SCENES, 'plain')}</select>
+          <button class="btn btn-magic btn-sm" id="edSceneBtn">🏗 场景搭建</button>
         </div>
         <div class="form-row">
           <label>参考图（可选，预演时替换白模）</label>
@@ -486,9 +487,14 @@ export function openShotEditor(shot, idx) {
           <div class="form-row"><label>景别</label><select id="edSize" class="input">${opts(SHOT_SIZES, shot.shotSize)}</select></div>
           <div class="form-row"><label>角度</label><select id="edAngle" class="input">${opts(ANGLES, shot.angle)}</select></div>
         </div>
-        <div class="editor-2col">
+        <div class="editor-3col">
           <div class="form-row"><label>时长（秒）</label><input id="edDur" class="input" type="number" min="1" max="20" step="0.5" value="${shot.duration}"></div>
           <div class="form-row"><label>转场（到下一镜）</label><select id="edTrans" class="input">${opts(TRANSITIONS, shot.transition, t => t.icon + ' ' + t.name)}</select></div>
+          <div class="form-row"><label>运镜速度</label><select id="edSpeed" class="input">
+            <option value="slow" ${shot.moveSpeed === 'slow' ? 'selected' : ''}>慢 · 细腻</option>
+            <option value="std" ${(!shot.moveSpeed || shot.moveSpeed === 'std') ? 'selected' : ''}>标准</option>
+            <option value="fast" ${shot.moveSpeed === 'fast' ? 'selected' : ''}>快 · 有力</option>
+          </select></div>
         </div>
         <div class="form-row">
           <label>提示词 <span class="dim">（喂给 AI 视频/图片工具的成品句）</span></label>
@@ -532,7 +538,7 @@ export function openShotEditor(shot, idx) {
     const loopFn = (now) => {
       if (!document.body.contains(cv)) return;
       const t = Math.min(1, (now - t0) / dur);
-      renderer.render(mv.sim, t, action, { duration: dur / 1000, hud: true, letterbox: true });
+      renderer.render(mv.sim, t, action, { duration: dur / 1000, hud: true, letterbox: true, angle: m.body.querySelector('#edAngle').value, moveSpeed: m.body.querySelector('#edSpeed').value, scene: shot.scene });
       if (t < 1) player.raf = requestAnimationFrame(loopFn);
       else setTimeout(() => { if (document.body.contains(cv)) playMove(); }, 600);
     };
@@ -608,6 +614,7 @@ export function openShotEditor(shot, idx) {
   m.body.querySelector('#edAction').onchange = e => { action = e.target.value; playMove(); };
   m.body.querySelector('#edScene').onchange = e => { scene = e.target.value; playMove(); };
   m.body.querySelector('#edReplay').onclick = playMove;
+  m.body.querySelector('#edSceneBtn').onclick = () => openSceneBuilder(shot, playMove);
 
   m.body.querySelector('#edGenPrompt').onclick = () => {
     const tpl = PROMPT_TEMPLATES[0].tpl;
@@ -642,6 +649,7 @@ export function openShotEditor(shot, idx) {
       angle: m.body.querySelector('#edAngle').value,
       duration: clampNum(+m.body.querySelector('#edDur').value || 3, 1, 20),
       transition: m.body.querySelector('#edTrans').value,
+      moveSpeed: m.body.querySelector('#edSpeed').value,
       prompt: m.body.querySelector('#edPrompt').value,
       note: m.body.querySelector('#edNote').value.trim(),
     };
@@ -709,6 +717,186 @@ function emptyProjectTip() {
   return `<div class="empty-tip">还没有打开的项目。<br><button class="btn btn-primary" onclick="window.dispatchEvent(new CustomEvent('bdm-nav',{detail:{view:'home'}}))">← 回项目台新建一个</button></div>`;
 }
 
+/* ============================================================
+ * 场景搭建器：点地面摆放人物/道具，自由机位滑块
+ * ============================================================ */
+const DEG2 = Math.PI / 180;
+function unprojectGround(sx, sy, cam, focal, W, H) {
+  const A = (sx - W / 2) / focal, B = (H / 2 - sy) / focal;
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const denom = B * cp + sp;
+  if (Math.abs(denom) < 0.02) return null;
+  const d = -cam.pos[1] / denom;
+  if (d <= 0.15 || d > 60) return null;
+  const x2 = A * d, z2 = B * d * sp - d * cp;
+  const cy_ = Math.cos(cam.yaw), sy_ = Math.sin(cam.yaw);
+  return [cam.pos[0] + x2 * cy_ - z2 * sy_, cam.pos[2] + x2 * sy_ + z2 * cy_];
+}
+
+function openSceneBuilder(shot, onSaved) {
+  const scene = shot.scene ? JSON.parse(JSON.stringify(shot.scene)) : { objects: [], cam: { az: 25, dist: 7, h: 1.8, fov: 55 } };
+  if (!scene.cam) scene.cam = { az: 25, dist: 7, h: 1.8, fov: 55 };
+  if (!scene.light) scene.light = { az: 0, el: 35, int: 1 };
+  let placeType = 'actor', selIdx = -1;
+  const TYPE_NAME = { actor: '人物', box: '木箱', pillar: '立柱', table: '桌子', wall: '围墙' };
+  const m = modal({
+    title: '🏗 场景搭建 · ' + (shot.desc || '未命名镜头').slice(0, 14), wide: true,
+    body: `
+      <div class="sb-layout">
+        <div class="sb-stage"><canvas id="sbCanvas"></canvas>
+          <div class="sb-tip" id="sbTip">点击地面放置「人物」 · 点击已有对象可选中挪动</div>
+        </div>
+        <div class="sb-side">
+          <div class="card-title">放置对象</div>
+          <div class="sb-palette">
+            <button class="chip chip-on" data-t="actor">👤 人物</button>
+            <button class="chip" data-t="box">📦 木箱</button>
+            <button class="chip" data-t="pillar">🏛 立柱</button>
+            <button class="chip" data-t="table">🪑 桌子</button>
+            <button class="chip" data-t="wall">🧱 围墙</button>
+          </div>
+          <div id="sbProps" class="sb-props"><div class="dim">选中对象后在这里调整动作 / 朝向 / 大小</div></div>
+          <div class="card-title" style="margin-top:14px">自由机位</div>
+          <div>
+            <div class="form-row"><label>方位角 <span id="sbAzV">${scene.cam.az}°</span></label><input type="range" id="sbAz" class="scrub" min="0" max="360" value="${scene.cam.az}"></div>
+            <div class="form-row"><label>距离 <span id="sbDistV">${scene.cam.dist}</span></label><input type="range" id="sbDist" class="scrub" min="3" max="12" step="0.5" value="${scene.cam.dist}"></div>
+            <div class="form-row"><label>高度 <span id="sbHV">${scene.cam.h}</span></label><input type="range" id="sbH" class="scrub" min="0.4" max="9" step="0.1" value="${scene.cam.h}"></div>
+            <div class="form-row"><label>视野 <span id="sbFovV">${scene.cam.fov}°</span></label><input type="range" id="sbFov" class="scrub" min="25" max="90" value="${scene.cam.fov}"></div>
+          </div>
+          <div class="card-title" style="margin-top:14px">光影光位 <span class="dim">（相对机位）</span></div>
+          <div class="sb-palette" id="sbLightPresets">
+            <button class="chip" data-l="key">☀️ 顺光</button>
+            <button class="chip" data-l="side">🧭 侧光</button>
+            <button class="chip" data-l="rim">🌅 侧逆光</button>
+            <button class="chip" data-l="back">🌇 逆光</button>
+            <button class="chip" data-l="top">🔆 顶光</button>
+            <button class="chip" data-l="flat">☁️ 高调平光</button>
+          </div>
+          <div class="form-row"><label>光方位 <span id="sbLAzV">${scene.light?.az ?? 0}°</span><span class="dim">（0°=机位后顺光 / 180°=逆光）</span></label><input type="range" id="sbLAz" class="scrub" min="0" max="360" value="${scene.light?.az ?? 0}"></div>
+          <div class="form-row"><label>光高度 <span id="sbLElV">${scene.light?.el ?? 35}°</span></label><input type="range" id="sbLEl" class="scrub" min="5" max="85" value="${scene.light?.el ?? 35}"></div>
+          <div class="form-row"><label>光强度 <span id="sbLIntV">${scene.light?.int ?? 1}</span></label><input type="range" id="sbLInt" class="scrub" min="0.3" max="1.3" step="0.05" value="${scene.light?.int ?? 1}"></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost btn-sm" id="sbClear">🗑 清空场景</button>
+        <div class="spacer"></div>
+        <button class="btn btn-ghost" id="sbCancel">取消</button>
+        <button class="btn btn-primary" id="sbSave">💾 保存场景</button>
+      </div>`,
+  });
+  const cv = m.body.querySelector('#sbCanvas');
+  const renderer = new WhiteModelRenderer(cv);
+  const sim = { type: 'free' };
+  let raf = null;
+  const t0 = performance.now();
+  const loop = (now) => {
+    if (!document.body.contains(cv)) return;
+    renderer.render(sim, ((now - t0) / 4000) % 1, 'stand', { duration: 4, hud: false, letterbox: true, scene });
+    raf = requestAnimationFrame(loop);
+  };
+  raf = requestAnimationFrame(loop);
+
+  const renderProps = () => {
+    const box = m.body.querySelector('#sbProps');
+    if (selIdx < 0) { box.innerHTML = '<div class="dim">未选中对象。点击画面中的对象进行选中，再点地面可挪动它。</div>'; return; }
+    const o = scene.objects[selIdx];
+    box.innerHTML = `
+      <div class="sb-obj-title">${TYPE_NAME[o.shape || o.type] || '对象'} · 已选中</div>
+      ${o.type === 'actor' ? `<div class="form-row"><label>动作</label><select id="sbAct" class="input">
+        ${['stand', 'walk', 'run', 'sit'].map(a => `<option value="${a}" ${o.action === a ? 'selected' : ''}>${a === 'stand' ? '站立' : a === 'walk' ? '行走' : a === 'run' ? '奔跑' : '坐下'}</option>`).join('')}
+      </select></div>` : ''}
+      ${o.type === 'actor' ? `<div class="form-row"><label>朝向快捷</label><div class="sb-palette">
+        <button class="chip" data-f="0">正对镜头</button>
+        <button class="chip" data-f="180">背对镜头</button>
+        <button class="chip" data-f="90">左侧身</button>
+        <button class="chip" data-f="-90">右侧身</button>
+      </div></div>` : ''}
+      <div class="form-row"><label>朝向 <span id="sbRotV">${Math.round(o.rot || 0)}°</span></label><input type="range" id="sbRot" class="scrub" min="0" max="360" value="${o.rot || 0}"></div>
+      <div class="form-row"><label>大小 <span id="sbScaleV">${(o.scale || 1).toFixed(1)}×</span></label><input type="range" id="sbScale" class="scrub" min="0.6" max="1.8" step="0.1" value="${o.scale || 1}"></div>
+      <button class="btn btn-danger btn-sm" id="sbDel">🗑 删除此对象</button>`;
+    const act = box.querySelector('#sbAct');
+    if (act) act.onchange = () => { o.action = act.value; };
+    box.querySelector('#sbRot').oninput = e => { o.rot = +e.target.value; box.querySelector('#sbRotV').textContent = e.target.value + '°'; };
+    box.querySelectorAll('[data-f]').forEach(fb => fb.onclick = () => {
+      o.rot = Math.round(((scene.cam.az || 0) + (+fb.dataset.f) + 360) % 360);
+      box.querySelector('#sbRot').value = o.rot;
+      box.querySelector('#sbRotV').textContent = o.rot + '°';
+    });
+    box.querySelector('#sbScale').oninput = e => { o.scale = +e.target.value; box.querySelector('#sbScaleV').textContent = (+e.target.value).toFixed(1) + '×'; };
+    box.querySelector('#sbDel').onclick = () => { scene.objects.splice(selIdx, 1); selIdx = -1; renderProps(); };
+  };
+  renderProps();
+
+  m.body.querySelectorAll('.sb-palette .chip').forEach(b => b.onclick = () => {
+    m.body.querySelectorAll('.sb-palette .chip').forEach(x => x.classList.remove('chip-on'));
+    b.classList.add('chip-on');
+    placeType = b.dataset.t;
+    selIdx = -1;
+    renderProps();
+    m.body.querySelector('#sbTip').textContent = '点击地面放置「' + TYPE_NAME[placeType] + '」 · 点击已有对象可选中挪动';
+  });
+  [['sbAz', 'az', '°', 'sbAzV'], ['sbDist', 'dist', '', 'sbDistV'], ['sbH', 'h', '', 'sbHV'], ['sbFov', 'fov', '°', 'sbFovV']].forEach(([id, k, u, vid]) => {
+    m.body.querySelector('#' + id).oninput = e => { scene.cam[k] = +e.target.value; m.body.querySelector('#' + vid).textContent = e.target.value + u; };
+  });
+  const LIGHT_PRESETS = { key: [0, 35, 1], side: [90, 30, 1.05], rim: [140, 28, 1.1], back: [180, 30, 1.15], top: [0, 78, 1.05], flat: [0, 18, 0.45] };
+  m.body.querySelectorAll('#sbLightPresets .chip').forEach(b => b.onclick = () => {
+    const [az, el, int] = LIGHT_PRESETS[b.dataset.l];
+    scene.light = { az, el, int };
+    m.body.querySelector('#sbLAz').value = az; m.body.querySelector('#sbLAzV').textContent = az + '°';
+    m.body.querySelector('#sbLEl').value = el; m.body.querySelector('#sbLElV').textContent = el + '°';
+    m.body.querySelector('#sbLInt').value = int; m.body.querySelector('#sbLIntV').textContent = int;
+  });
+  [['sbLAz', 'az', '°', 'sbLAzV'], ['sbLEl', 'el', '°', 'sbLElV'], ['sbLInt', 'int', '', 'sbLIntV']].forEach(([id, k, u, vid]) => {
+    m.body.querySelector('#' + id).oninput = e => { scene.light[k] = +e.target.value; m.body.querySelector('#' + vid).textContent = e.target.value + u; };
+  });
+
+  cv.addEventListener('pointerdown', e => {
+    const r = cv.getBoundingClientRect();
+    const sx = e.clientX - r.left, sy = e.clientY - r.top;
+    const cam = solveCamera(sim, 0.35, { x: 0, y: 0, z: 0 }, { angle: 'eye', scene });
+    const focal = (renderer.h / 2) / Math.tan((cam.fov * DEG2) / 2);
+    let best = -1, bd = 30;
+    scene.objects.forEach((o, i) => {
+      const pr = renderer.project([o.x, 0.6 * (o.scale || 1), o.z], cam, focal, renderer.w / 2, renderer.h / 2);
+      if (pr) {
+        const dist = Math.hypot(pr.x - sx, pr.y - sy);
+        if (dist < bd) { bd = dist; best = i; }
+      }
+    });
+    if (best >= 0) { selIdx = best; renderProps(); return; }
+    const g = unprojectGround(sx, sy, cam, focal, renderer.w, renderer.h);
+    if (!g) return;
+    const gx = Math.max(-11, Math.min(11, +g[0].toFixed(2))), gz = Math.max(-11, Math.min(11, +g[1].toFixed(2)));
+    if (selIdx >= 0 && scene.objects[selIdx]) {
+      scene.objects[selIdx].x = gx; scene.objects[selIdx].z = gz;
+      renderProps();
+      return;
+    }
+    const base = { type: placeType === 'actor' ? 'actor' : 'prop', x: gx, z: gz, rot: 205, scale: 1 };
+    if (placeType === 'actor') { base.action = 'stand'; base.seed = Math.round(Math.random() * 90); }
+    else base.shape = placeType;
+    scene.objects.push(base);
+    selIdx = scene.objects.length - 1;
+    renderProps();
+  });
+
+  m.body.querySelector('#sbClear').onclick = () => { scene.objects = []; selIdx = -1; renderProps(); };
+  m.body.querySelector('#sbCancel').onclick = () => m.close();
+  m.body.querySelector('#sbSave').onclick = () => {
+    store.updateShot(shot.id, {
+      scene: scene.objects.length ? scene : null,
+      ...(scene.objects.length && scene.cam ? { cameraMove: 'free' } : {}),
+    });
+    store.addXP(3, '搭建场景');
+    m.close();
+    toast('场景已保存到镜头 🏗', 'ok');
+    if (onSaved) onSaved();
+  };
+  const origClose = m.close;
+  m.close = (r2) => { if (raf) cancelAnimationFrame(raf); origClose(r2); };
+  m.body.querySelector('.modal-x').onclick = () => m.close(null);
+}
+
 /* ---------- 示例剧本（原创短故事） ---------- */
 const DEMO_SCRIPT = `第1场 便利店 夜 内
 深夜的便利店，灯光惨白，货架间的过道一眼望不到头。
@@ -727,4 +915,4 @@ const DEMO_SCRIPT = `第1场 便利店 夜 内
 小林搬了把椅子坐在旁边，两个人都没说话。
 远处传来第一班地铁的声音，天快亮了。`;
 
-export { DEMO_SCRIPT };
+export { DEMO_SCRIPT, openSceneBuilder };
