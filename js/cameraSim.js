@@ -116,6 +116,7 @@ function propPart(o) {
   else if (o.shape === 'window') polys = [...boxPolys(-0.9, 1.2, 0, 0.6, 2.4, 0.2, 0.82), ...boxPolys(0.9, 1.2, 0, 0.6, 2.4, 0.2, 0.82), ...boxPolys(0, 2.05, 0, 1.2, 0.7, 0.2, 0.82), ...boxPolys(0, 0.75, 0, 1.2, 0.3, 0.26, 0.86)];
   else if (o.shape === 'sofa') polys = [...boxPolys(0, 0.3, 0.15, 1.6, 0.35, 0.85, 0.9), ...boxPolys(0, 0.68, -0.28, 1.6, 0.75, 0.24, 0.88), ...boxPolys(-0.72, 0.52, 0.08, 0.18, 0.6, 0.85, 0.86), ...boxPolys(0.72, 0.52, 0.08, 0.18, 0.6, 0.85, 0.86)];
   else if (o.shape === 'tree') polys = [...frustumPolys(0, 0, 0, 0.15, 0.11, 1.5, 8, 0.78), ...spherePolys(0, 2.05, 0, 0.78, 4, 8, 0.72)];
+  else if (o.shape === 'lamp') polys = [...frustumPolys(0, 0, 0, 0.05, 0.04, 1.7, 6, 0.5), ...frustumPolys(0, 1.68, 0, 0.3, 0.13, 0.3, 8, 0.98)];
   else polys = boxPolys(0, 0.4, 0, 0.8, 0.8, 0.8, 0.85);
   const rot = (o.rot || 0) * DEG;
   polys = polys.map(p => ({
@@ -365,10 +366,29 @@ function solveCamera(sim, t, actor, opts = {}) {
     }
     case 'free': {
       const c = (opts.scene && opts.scene.cam) || { az: 25, dist: 7, h: 1.8, fov: 55 };
-      const a = (c.az || 0) * DEG;
-      const p = [Math.sin(a) * (c.dist || 7), c.h || 1.8, Math.cos(a) * (c.dist || 7)];
+      const path = opts.scene && opts.scene.camPath;
+      let cv = { ...c };
+      if (Array.isArray(path) && path.length >= 2) {
+        // 按进度 t 在关键帧间插值（az 走最短角）
+        const tt = clamp(t, 0, 1) * (path[path.length - 1].t || 1);
+        let i = 0;
+        while (i < path.length - 2 && path[i + 1].t < tt) i++;
+        const a0 = path[i], a1 = path[i + 1];
+        const span = Math.max(0.0001, (a1.t - a0.t) || 1);
+        const f = clamp((tt - a0.t) / span, 0, 1);
+        let dAz = (a1.az - a0.az) % 360;
+        if (dAz > 180) dAz -= 360; if (dAz < -180) dAz += 360;
+        cv = {
+          az: a0.az + dAz * f,
+          h: lerp(a0.h, a1.h, f),
+          dist: lerp(a0.dist, a1.dist, f),
+          fov: lerp(a0.fov ?? 55, a1.fov ?? 55, f),
+        };
+      }
+      const a = (cv.az || 0) * DEG;
+      const p = [Math.sin(a) * (cv.dist || 7), cv.h || 1.8, Math.cos(a) * (cv.dist || 7)];
       set(p, [0, 1.15, 0]);
-      cam.fov = c.fov || 55;
+      cam.fov = cv.fov || 55;
       break;
     }
     case 'swingOver': {
@@ -469,7 +489,7 @@ class WhiteModelRenderer {
     this.scene = 'plain';
     this.theme = { bg1: '#eef1f5', bg2: '#e2e6ed', ground: '#d9dde5', line: 'rgba(96,106,134,.30)', fog: '#e9ecf1', ink: '#2a3040', hud: 'rgba(35,42,60,.38)' };
     this._shadeLo = 150; this._shadeHi = 255;
-    this._dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this._dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     this.resize();
   }
   resize() {
@@ -617,7 +637,9 @@ class WhiteModelRenderer {
         }
         if (!ok) continue;
         if (pts2.some(p2 => !isFinite(p2.x) || !isFinite(p2.y) || !isFinite(p2.d))) continue;
-        polys.push({ pts: pts2, n, shade: poly.shade, d: pts2.reduce((a, p2) => a + p2.d, 0) / pts2.length });
+        let wcx = 0, wcy = 0, wcz = 0;
+        for (const w of pts3) { wcx += w[0]; wcy += w[1]; wcz += w[2]; }
+        polys.push({ pts: pts2, n, shade: poly.shade, d: pts2.reduce((a, p2) => a + p2.d, 0) / pts2.length, wc: [wcx / pts3.length, wcy / pts3.length, wcz / pts3.length] });
       }
     };
     for (const part of buildScene((opts.scene && opts.scene.base) || this.scene)) collectPart(part, 0, 0, 0, 0, 1);
@@ -671,6 +693,7 @@ class WhiteModelRenderer {
     /* ---- 画家算法绘制 ---- */
     polys.sort((a, b) => b.d - a.d);
     let L = [0.45, 0.8, 0.4], lightInt = 1; // 光方向
+    const lamps = objs.filter(o => o.type === 'prop' && o.shape === 'lamp').slice(0, 3);
     if (opts.scene && opts.scene.light) {
       const lt = opts.scene.light;
       const azR = (lt.az || 0) * DEG, elR = (lt.el ?? 35) * DEG;
@@ -680,7 +703,16 @@ class WhiteModelRenderer {
     for (const poly of polys) {
       const n = poly.n;
       const lit = clamp(n[0] * L[0] + n[1] * L[1] + n[2] * L[2], 0, 1);
-      const litAdj = Math.max(0, Math.min(1, lightInt * lit + (1 - lightInt) * 0.5));
+      let litL = lit;
+      for (const lp of lamps) {
+        const lx = lp.x - poly.wc[0], ly = (1.85 * (lp.scale || 1)) - poly.wc[1], lz = lp.z - poly.wc[2];
+        const dist = Math.hypot(lx, ly, lz) || 1;
+        if (dist < 9) {
+          const dot = Math.max(0, -(lx * n[0] + ly * n[1] + lz * n[2]) / dist);
+          litL += dot * (lp.lint ?? 0.55) * Math.max(0, 1 - dist / 9);
+        }
+      }
+      const litAdj = Math.max(0, Math.min(1, lightInt * litL + (1 - lightInt) * 0.5));
       const v = this._shadeLo + (this._shadeHi - this._shadeLo) * litAdj * (poly.shade || 0.9);
       const fog = clamp(1 - poly.d / 30, 0.25, 1);
       const c = mixColor(th.fog, v, fog);
