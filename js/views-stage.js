@@ -83,7 +83,7 @@ export function renderDict(container) {
         }
         const key = card.dataset.key;
         const mv = moveByKey[key];
-        cv._player.renderer.setTheme({ bg1: '#12151d', bg2: '#1c212e', fog: '#141824', line: 'rgba(150,162,190,.24)' });
+        cv._player.renderer.setTheme({ bg1: '#182136', bg2: '#0f1526', fog: '#131a2b', line: 'rgba(148,164,200,.24)' });
         const scenes = ['plain', 'street', 'room'];
         const scene = scenes[(mv.name.length + CAMERA_MOVES.indexOf(mv)) % 3];
         cv._player.renderer.scene = scene;
