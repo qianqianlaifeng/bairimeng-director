@@ -132,6 +132,17 @@ function propPart(o) {
 
 /* ---------- 演员白模（关节链接的小人：肩/肘/髋/膝 正向动力学） ----------
  * parts: [{ polys, joints }]，joints 从近端到远端排列，渲染时按远端优先依次施加旋转 */
+/* 五官：深色眼睛/眉毛/嘴（贴在头球正面 +z），让特写能读到脸和朝向 */
+function addFace(hx, hy, r) {
+  const parts = [];
+  const eye = (ex, ey) => ({ polys: boxPolys(ex, ey, r * 0.86, 0.034, 0.034, 0.02, 0.22), joints: [] });
+  parts.push(eye(hx - 0.055, hy + 0.03), eye(hx + 0.055, hy + 0.03));
+  parts.push({ polys: boxPolys(hx - 0.055, hy + 0.075, r * 0.86, 0.052, 0.013, 0.02, 0.3), joints: [] });
+  parts.push({ polys: boxPolys(hx + 0.055, hy + 0.075, r * 0.86, 0.052, 0.013, 0.02, 0.3), joints: [] });
+  parts.push({ polys: boxPolys(hx, hy - 0.045, r * 0.9, 0.06, 0.014, 0.02, 0.4), joints: [] });
+  return parts;
+}
+
 function buildActor(pose) {
   const p = pose.phase, wk = pose.walk;
   const parts = [];
@@ -142,6 +153,7 @@ function buildActor(pose) {
     add(frustumPolys(0, 0.585, 0, 0.13, 0.165, 0.50));                               // 躯干
     add(frustumPolys(0, 1.085, 0, 0.05, 0.05, 0.09));                                // 颈
     add(spherePolys(0, 1.30, 0, 0.14));                                              // 头
+    for (const fp of addFace(0, 1.30, 0.14)) parts.push(fp);
     for (const s of [-1, 1]) {
       const hipJ = { pivot: [s * 0.09, 0.56, 0], angle: -1.42 };
       const kneeJ = { pivot: [s * 0.09, 0.24, 0], angle: 1.36 };
@@ -168,6 +180,7 @@ function buildActor(pose) {
   add(frustumPolys(0, 0.92, 0, 0.135, 0.17, 0.50));                                  // 躯干
   add(frustumPolys(0, 1.42, 0, 0.05, 0.05, 0.09));                                   // 颈
   add(spherePolys(0, 1.655, 0, 0.145));                                              // 头
+  for (const fp of addFace(0, 1.655, 0.145)) parts.push(fp);                          // 五官
   for (const s of [-1, 1]) {
     const isA = s === -1;
     const th = isA ? thighA : thighB;
@@ -377,7 +390,7 @@ function solveCamera(sim, t, actor, opts = {}) {
 
   /* 景别：按标准取景重定位 —— 保留运镜的相对运动，把距离重映射到该景别的目标距离
    * 大远景=人物极小 · 远景=全身带环境 · 中景=膝盖以上 · 中近景=胸上 · 近景=上半身 · 特写=脸充满画面 */
-  const SIZE_CFG = { ELS: { d: 6.7, fov: 55, aim: 1.0 }, LS: { d: 3.1, fov: 45, aim: 1.05 }, MS: { d: 2.2, fov: 34, aim: 1.15 }, MCU: { d: 2.0, fov: 30, aim: 1.26 }, CU: { d: 1.9, fov: 26, aim: 1.36 }, ECU: { d: 1.28, fov: 20, aim: 1.6 } };
+  const SIZE_CFG = { ELS: { d: 6.7, fov: 55, aim: 1.0 }, LS: { d: 3.1, fov: 45, aim: 1.05 }, MS: { d: 2.2, fov: 34, aim: 1.15 }, MCU: { d: 2.0, fov: 30, aim: 1.26 }, CU: { d: 2.1, fov: 26, aim: 1.45 }, ECU: { d: 1.35, fov: 18, aim: 1.66 } };
   if (sim.type !== 'free' && opts.size && SIZE_CFG[opts.size] && cam._tgt) {
     const cfg = SIZE_CFG[opts.size];
     const mid = solveCamera(sim, 0.5, actor, { scene: opts.scene });
