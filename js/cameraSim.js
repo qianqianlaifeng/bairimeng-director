@@ -57,7 +57,7 @@ function buildActor(pose) {
     parts.push(makeBox(0, 0.14, -0.34, 0.14, 0.5, 0.14, { shade: 0.88 }));           // 小腿垂直
   } else {
     parts.push(makeBox(0, 1.18, 0, 0.5, 0.66, 0.3, { shade: 0.98 }));                // 躯干
-    parts.push(makeBox(0, 1.63, 0, 0.27, 0.27, 0.25, { shade: 1.0 }));               // 头
+    parts.push(makeBox(0, 1.60, 0, 0.27, 0.27, 0.25, { shade: 1.0 }));               // 头
     // 腿：绕髋部 X 轴摆动
     parts.push(makeBox(-0.13, 0.42, 0, 0.17, 0.8, 0.2, { pivot: P(-0.13, 0.83, 0), rotX: swing * 0.7, shade: 0.88 }));
     parts.push(makeBox(0.13, 0.42, 0, 0.17, 0.8, 0.2, { pivot: P(0.13, 0.83, 0), rotX: -swing * 0.7, shade: 0.86 }));
@@ -395,9 +395,20 @@ class WhiteModelRenderer {
     // 演员
     for (const part of parts) pushBox(part, toWorld);
 
-    /* ---- 地面网格 ---- */
+    /* ---- 地面（填充面 + 网格） ---- */
     ctx.lineWidth = 1;
     const G = 12;
+    // 先铺一层地面填充，高机位时不再像漂浮在半空
+    {
+      const gc = [[-G, -G], [G, -G], [G, G], [-G, G]].map(([x, z]) => this.project([x, 0, z], cam, focal, cx, cyv));
+      if (gc.every(p => p)) {
+        ctx.fillStyle = th.ground;
+        ctx.beginPath();
+        ctx.moveTo(gc[0].x, gc[0].y);
+        for (let i = 1; i < 4; i++) ctx.lineTo(gc[i].x, gc[i].y);
+        ctx.closePath(); ctx.fill();
+      }
+    }
     for (let i = -G; i <= G; i += 1.5) {
       ctx.beginPath();
       let started = false;
@@ -409,6 +420,18 @@ class WhiteModelRenderer {
         const alpha = clamp(1.1 - dd / 26, 0.05, 0.5);
         ctx.strokeStyle = th.line.replace(/[\d.]+\)$/, alpha.toFixed(3) + ')');
         ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+      }
+    }
+
+    /* ---- 演员脚下阴影（画在人物之前，避免盖在身体上） ---- */
+    if (parts.length) {
+      const sp1 = this.project([actor.x - 0.42, 0.012, actor.z - 0.32], cam, focal, cx, cyv);
+      const sp2 = this.project([actor.x + 0.42, 0.012, actor.z + 0.32], cam, focal, cx, cyv);
+      if (sp1 && sp2) {
+        ctx.fillStyle = isLight ? 'rgba(50,58,80,0.28)' : 'rgba(8,10,20,0.35)';
+        ctx.beginPath();
+        ctx.ellipse((sp1.x + sp2.x) / 2, (sp1.y + sp2.y) / 2, Math.abs(sp2.x - sp1.x) / 2, Math.abs(sp2.y - sp1.y) / 2 + 2, 0, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
@@ -429,18 +452,6 @@ class WhiteModelRenderer {
       if (poly.d < 14) { // 近处描边
         ctx.strokeStyle = 'rgba(255,255,255,0.10)';
         ctx.stroke();
-      }
-    }
-
-    /* ---- 演员脚下阴影 ---- */
-    if (parts.length) {
-      const sp1 = this.project([actor.x - 0.42, 0.012, actor.z - 0.32], cam, focal, cx, cyv);
-      const sp2 = this.project([actor.x + 0.42, 0.012, actor.z + 0.32], cam, focal, cx, cyv);
-      if (sp1 && sp2) {
-        ctx.fillStyle = 'rgba(8,10,20,0.35)';
-        ctx.beginPath();
-        ctx.ellipse((sp1.x + sp2.x) / 2, (sp1.y + sp2.y) / 2, Math.abs(sp2.x - sp1.x) / 2, Math.abs(sp2.y - sp1.y) / 2 + 2, 0, 0, Math.PI * 2);
-        ctx.fill();
       }
     }
 
