@@ -35,7 +35,22 @@ const VIEWS = {
 const appEl = el(`<div class="app">
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-logo">🎬</div>
+      <div class="brand-logo">
+        <svg viewBox="0 0 100 100" width="20" height="20" aria-hidden="true">
+          <defs><clipPath id="brandBar"><rect x="24" y="30" width="52" height="13" rx="6.5"/></clipPath></defs>
+          <g transform="rotate(-6 50 55)">
+            <rect x="24" y="30" width="52" height="13" rx="6.5" fill="#ffffff"/>
+            <g clip-path="url(#brandBar)" fill="#c93346">
+              <rect x="29" y="26" width="7" height="22" transform="rotate(24 32.5 37)"/>
+              <rect x="44" y="26" width="7" height="22" transform="rotate(24 47.5 37)"/>
+              <rect x="59" y="26" width="7" height="22" transform="rotate(24 62.5 37)"/>
+            </g>
+            <rect x="24" y="47" width="52" height="33" rx="7" fill="#ffffff"/>
+            <path d="M45 55.5 L61.5 63.5 L45 71.5 Z" fill="#c93346"/>
+          </g>
+          <path d="M81 11 L83.4 16.6 L89 19 L83.4 21.4 L81 27 L78.6 21.4 L73 19 L78.6 16.6 Z" fill="#ffffff" opacity=".95"/>
+        </svg>
+      </div>
       <div class="brand-text"><b>白日梦导演台</b><span>Daydream Director</span></div>
     </div>
     <nav class="nav" id="nav"></nav>
