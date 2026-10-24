@@ -777,6 +777,7 @@ function openSceneBuilder(shot, onSaved) {
             <button class="chip" data-t="window">🪟 窗墙</button>
             <button class="chip" data-t="sofa">🛋️ 沙发</button>
             <button class="chip" data-t="tree">🌳 树</button>
+            <button class="chip" data-t="wallline">📐 墙线</button>
           </div>
           <div id="sbProps" class="sb-props"><div class="dim">选中对象后在这里调整动作 / 朝向 / 大小</div></div>
           <div class="card-title" style="margin-top:14px">自由机位</div>
@@ -785,6 +786,7 @@ function openSceneBuilder(shot, onSaved) {
             <button class="chip" id="sbVOblique">📍 斜视</button>
             <button class="chip" id="sbVFront">📍 正视</button>
             <button class="chip ${scene.vf ? 'chip-on' : ''}" id="sbVF">🖼 取景框</button>
+            <button class="chip" id="sbCut">🔪 剖开前方墙</button>
           </div>
           <div>
             <div class="form-row"><label>方位角 <span id="sbAzV">${scene.cam.az}°</span></label><input type="range" id="sbAz" class="scrub" min="0" max="360" value="${scene.cam.az}"></div>
@@ -823,6 +825,7 @@ function openSceneBuilder(shot, onSaved) {
   const t0 = performance.now();
   const loop = (now) => {
     if (!document.body.contains(cv)) return;
+    renderer.setTheme({ ground: scene.floor || '#d9dde5' });
     if (sbView === '2d') { try { draw2D(); } catch (e) { console.warn('draw2D', e); } raf = requestAnimationFrame(loop); return; }
     try { renderer.render(sim, ((now - t0) / 4000) % 1, 'stand', { duration: 4, hud: false, letterbox: true, scene }); } catch (e) { console.warn('sb render', e); }
     if (scene.vf) {
@@ -940,6 +943,20 @@ function openSceneBuilder(shot, onSaved) {
   const syncVF = () => m.body.querySelector('#sbVF').classList.toggle('chip-on', !!scene.vf);
   m.body.querySelector('#sbVF').onclick = () => { scene.vf = !scene.vf; syncVF(); };
   syncVF();
+  const syncCut = () => m.body.querySelector('#sbCut').classList.toggle('chip-on', !!scene.cutaway);
+  m.body.querySelector('#sbCut').onclick = () => { scene.cutaway = !scene.cutaway; syncCut(); };
+  syncCut();
+  const FLOORS = { default: '#d9dde5', wood: '#c9a877', cool: '#8fa3ad', warm: '#e8e2d5', dark: '#565d6b' };
+  const floorRow = document.createElement('div');
+  floorRow.className = 'form-row';
+  floorRow.innerHTML = '<label>地面颜色</label><div class="sb-palette" id="sbFloor">' +
+    Object.entries(FLOORS).map(([k, c]) => '<button class="chip' + (scene.floor === c || (!scene.floor && k === 'default') ? ' chip-on' : '') + '" data-c="' + c + '" style="display:inline-flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:2px;background:' + c + ';display:inline-block"></i>' + (k === 'default' ? '默认' : k === 'wood' ? '木色' : k === 'cool' ? '青灰' : k === 'warm' ? '暖白' : '深灰') + '</button>').join('') + '</div>';
+  m.body.querySelector('#sbLEl').closest('.form-row').after(floorRow);
+  floorRow.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
+    scene.floor = b.dataset.c === FLOORS.default ? '' : b.dataset.c;
+    floorRow.querySelectorAll('[data-c]').forEach(x => x.classList.toggle('chip-on', x.dataset.c === (scene.floor || FLOORS.default)));
+    if (sbView !== '2d') renderer.setTheme({ ground: scene.floor || '#d9dde5' });
+  });
   const LIGHT_PRESETS = { key: [0, 35, 1], side: [90, 30, 1.05], rim: [140, 28, 1.1], back: [180, 30, 1.15], top: [0, 78, 1.05], flat: [0, 18, 0.45] };
   m.body.querySelectorAll('#sbLightPresets .chip').forEach(b => b.onclick = () => {
     const [az, el, int] = LIGHT_PRESETS[b.dataset.l];
@@ -959,14 +976,14 @@ function openSceneBuilder(shot, onSaved) {
   m.body.querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
     sbView = b.dataset.v;
     m.body.querySelectorAll('[data-v]').forEach(x => x.classList.toggle('chip-on', x === b));
-    cv.style.display = sbView === '2d' ? 'block' : 'none';
+    // 2D/3D 共用同一画布，只切换绘制方式，不隐藏画布
     m.body.querySelector('#sbTip').textContent = sbView === '2d'
       ? '2D 画空间：拖拽画房间（自动生成四面墙）· 点对象选中/挪动 · 右键删除 · 滚轮无效'
       : '点击地面放置「' + TYPE_NAME[placeType] + '」 · 拖拽旋转机位 · 右键删除 · 滚轮缩放';
   });
 
   let drag = null; // 指针交互状态
-  let sbView = '3d', roomDrag = null;
+  let sbView = '3d', roomDrag = null, lineStart = null;
   const W2 = () => cv.clientWidth / 2;
   const S2 = 13;
   const w2p = (x, z) => [W2() + (x / S2) * (W2() - 14), cv.clientHeight / 2 + (z / S2) * (cv.clientHeight / 2 - 14)];
@@ -1114,6 +1131,15 @@ function openSceneBuilder(shot, onSaved) {
       let hit2 = -1, bd2 = 0.55;
       scene.objects.forEach((o, i) => { const dd = Math.hypot(o.x - wx, o.z - wz); if (dd < bd2) { bd2 = dd; hit2 = i; } });
       if (hit2 >= 0) { selIdx = hit2; renderProps(); return; }
+      if (placeType === 'wallline') {
+        if (!lineStart) { lineStart = { x: wx, z: wz }; toast('起点已定，再点一下终点'); return; }
+        const dxL = wx - lineStart.x, dzL = wz - lineStart.z;
+        const len = Math.hypot(dxL, dzL);
+        if (len > 0.3) scene.objects.push({ type: 'prop', shape: 'wall', x: +((lineStart.x + wx) / 2).toFixed(2), z: +((lineStart.z + wz) / 2).toFixed(2), rot: Math.round(Math.atan2(dzL, dxL) / (Math.PI / 180)), scale: 1, w: +(len + 0.24).toFixed(2), h: 2.4 });
+        lineStart = null;
+        draw2D();
+        return;
+      }
       if (pathDraw && pathTarget && selIdx >= 0 && scene.objects[selIdx] === pathTarget) { pathTarget.path.push({ x: +wx.toFixed(2), z: +wz.toFixed(2) }); renderProps(); return; }
       const base2 = { type: placeType === 'actor' ? 'actor' : 'prop', x: +wx.toFixed(2), z: +wz.toFixed(2), rot: 205, scale: 1 };
       if (placeType === 'actor') { base2.action = 'stand'; base2.seed = Math.round(Math.random() * 90); }
