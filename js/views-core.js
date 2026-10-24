@@ -789,7 +789,7 @@ function openSceneBuilder(shot, onSaved) {
             <button class="chip" data-t="lamp">💡 灯</button>
           </div>
           <div id="sbProps" class="sb-props"><div class="dim">选中对象后在这里调整动作 / 朝向 / 大小</div></div>
-          <div class="sb-list-head" id="sbListHead">📋 场景清单</div>
+          <div class="sb-list-head" id="sbListHead"><span id="sbCount">📋 场景清单 0</span><input id="sbSearch" class="input input-sm" placeholder="搜索" style="width:86px;margin-left:6px;padding:2px 6px;font-size:11px"><button class="chip" id="sbHideA" style="padding:1px 8px;font-size:10.5px">人物</button><button class="chip" id="sbHideP" style="padding:1px 8px;font-size:10.5px">道具</button></div>
           <div id="sbList" class="sb-list"></div>
           <div class="card-title" style="margin-top:14px">自由机位</div>
           <div class="sb-palette" style="margin-bottom:8px">
@@ -888,8 +888,18 @@ function openSceneBuilder(shot, onSaved) {
   const renderList = () => {
     const lb = m.body.querySelector('#sbList');
     if (!lb) return;
+    const q = (m.body.querySelector('#sbSearch')?.value || '').trim();
+    const hideA = m.body.querySelector('#sbHideA')?.classList.contains('chip-on');
+    const hideP = m.body.querySelector('#sbHideP')?.classList.contains('chip-on');
     const groups = { actor: [], prop: [] };
-    scene.objects.forEach((o, i) => groups[o.type === 'actor' ? 'actor' : 'prop'].push([o, i]));
+    scene.objects.forEach((o, i) => {
+      const typeKey = o.type === 'actor' ? 'actor' : 'prop';
+      if (typeKey === 'actor' && hideA) return;
+      if (typeKey === 'prop' && hideP) return;
+      const label = (ICON[o.shape || o.type] || '') + (o.type === 'actor' ? '人物' : ({ box: '木箱', pillar: '立柱', table: '桌子', door: '门框', window: '窗墙', sofa: '沙发', tree: '树', lamp: '灯', wall: '墙' }[o.shape] || '物件'));
+      if (q && !label.includes(q)) return;
+      groups[typeKey].push([o, i]);
+    });
     const row = (o, i) => '<div class="sb-list-row' + (i === selIdx ? ' on' : '') + '" data-i="' + i + '"><span>' + (ICON[o.shape || o.type] || '▪') + '</span><span class="sb-list-name">' + (o.type === 'actor' ? '人物' : o.shape === 'wall' ? '墙 ' + (o.w || 3).toFixed(1) + 'm' : { box: '木箱', pillar: '立柱', table: '桌子', door: '门框', window: '窗墙', sofa: '沙发', tree: '树', lamp: '灯' }[o.shape] || '物件') + '</span><span class="dim">' + (+o.x).toFixed(1) + ',' + (+o.z).toFixed(1) + '</span><button class="icon-btn" data-del="' + i + '">✕</button></div>';
     lb.innerHTML = (groups.actor.length ? '<div class="sb-list-group">人物 ' + groups.actor.length + '</div>' + groups.actor.map(([o, i]) => row(o, i)).join('') : '') +
       (groups.prop.length ? '<div class="sb-list-group">道具 ' + groups.prop.length + '</div>' + groups.prop.map(([o, i]) => row(o, i)).join('') : '') +
@@ -898,7 +908,7 @@ function openSceneBuilder(shot, onSaved) {
       if (e.target.dataset.del !== undefined) { scene.objects.splice(+e.target.dataset.del, 1); if (selIdx === +e.target.dataset.del) selIdx = -1; renderProps(); return; }
       selIdx = +r2.dataset.i; renderProps();
     });
-    const hd = m.body.querySelector('#sbListHead');
+    const hd = m.body.querySelector('#sbCount');
     if (hd) hd.textContent = '📋 场景清单 ' + scene.objects.length;
   };
 
@@ -1106,6 +1116,9 @@ function openSceneBuilder(shot, onSaved) {
     }
     if (hit >= 0) { scene.objects.splice(hit, 1); if (selIdx === hit) selIdx = -1; renderProps(); toast('已删除'); }
   });
+  m.body.querySelector('#sbSearch').oninput = () => renderList();
+  m.body.querySelector('#sbHideA').onclick = () => { m.body.querySelector('#sbHideA').classList.toggle('chip-on'); renderList(); };
+  m.body.querySelector('#sbHideP').onclick = () => { m.body.querySelector('#sbHideP').classList.toggle('chip-on'); renderList(); };
   cv.addEventListener('wheel', e => {
     e.preventDefault();
     scene.cam.dist = Math.max(3, Math.min(12, (scene.cam.dist || 7) + (e.deltaY > 0 ? 0.5 : -0.5)));
