@@ -144,6 +144,7 @@ export function renderAnimatic(container) {
     } else {
       canvas.style.display = '';
       imgEl.style.display = 'none';
+      if (s.scene?.floor) renderer.setTheme({ ground: s.scene.floor });
       renderer.render(mv.sim, t, 'stand', { duration: s.duration, hud: false, letterbox: true, angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize, scene: s.scene });
     }
     /* 转场淡入 */
