@@ -1,7 +1,7 @@
 /* ============================================================
  * 白日梦导演台 · 运镜词典 + 运镜预演
  * ============================================================ */
-import { CAMERA_MOVES, MOVE_CATS, ACTOR_ACTIONS, STAGE_SCENES } from './data.js';
+import { CAMERA_MOVES, MOVE_CATS, ACTOR_ACTIONS, STAGE_SCENES, ANGLES } from './data.js';
 import { MovePlayer } from './cameraSim.js';
 import { moveByKey } from './breakdown.js';
 import { esc, el, modal, toast, copyText, opts } from './ui.js';
@@ -210,6 +210,10 @@ export function renderPreview(container, payload = {}) {
           <div class="card-title">舞台设置</div>
           <div class="form-row"><label>人物动作</label><select id="pvAction" class="input">${opts(ACTOR_ACTIONS, 'stand')}</select></div>
           <div class="form-row"><label>布景</label><select id="pvScene" class="input">${opts(STAGE_SCENES, 'plain')}</select></div>
+          <div class="form-row"><label>拍摄角度（直观可见）</label><select id="pvAngle" class="input">${opts(ANGLES, 'eye')}</select></div>
+          <div class="form-row"><label>运镜速度</label><select id="pvMoveSpeed" class="input">
+            <option value="std" selected>标准</option><option value="slow">慢 · 细腻</option><option value="fast">快 · 有力</option>
+          </select></div>
           <div class="form-row"><label>镜头时长</label><input id="pvDur" type="range" min="1" max="12" step="0.5" value="4" class="scrub"><span class="dim" id="pvDurLabel">4s</span></div>
           ${p?.shots?.length ? `<button class="btn btn-magic" id="pvAssign">🎬 把当前运镜写回镜头</button>` : ''}
         </div>
@@ -260,7 +264,7 @@ export function renderPreview(container, payload = {}) {
     const action = container.querySelector('#pvAction').value;
     const scene = container.querySelector('#pvScene').value;
     const dur = +container.querySelector('#pvDur').value;
-    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT });
+    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value });
     playBtn.textContent = '⏸ 暂停';
     player.onEnd = () => { playBtn.textContent = '▶ 播放'; };
   };
@@ -276,6 +280,8 @@ export function renderPreview(container, payload = {}) {
   };
   container.querySelector('#pvSpeed').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvAction').onchange = () => startPlay(0);
+  container.querySelector('#pvAngle').onchange = () => startPlay(player.t || 0);
+  container.querySelector('#pvMoveSpeed').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvScene').onchange = () => startPlay(0);
   const durInput = container.querySelector('#pvDur');
   durInput.oninput = () => { container.querySelector('#pvDurLabel').textContent = durInput.value + 's'; };
@@ -290,6 +296,8 @@ export function renderPreview(container, payload = {}) {
       action: container.querySelector('#pvAction').value,
       scene: container.querySelector('#pvScene').value,
       duration: +durInput.value,
+      angle: container.querySelector('#pvAngle').value,
+      moveSpeed: container.querySelector('#pvMoveSpeed').value,
     });
     timeEl.textContent = `${(t * +durInput.value).toFixed(1)}s / ${durInput.value}s`;
   });
