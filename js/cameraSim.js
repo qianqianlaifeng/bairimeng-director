@@ -79,6 +79,28 @@ function spherePolys(cx, cy, cz, r, stacks = 4, sectors = 8, shade = 0.97) {
   return polys;
 }
 
+/* ---------- 场景道具（世界坐标烘焙） ---------- */
+function propPart(o) {
+  let polys = [];
+  const sc = o.scale || 1;
+  if (o.shape === 'box') polys = boxPolys(0, 0.4, 0, 0.8, 0.8, 0.8, 0.85);
+  else if (o.shape === 'pillar') polys = frustumPolys(0, 0, 0, 0.16, 0.2, 2.4, 8, 0.88);
+  else if (o.shape === 'table') polys = [...boxPolys(0, 0.72, 0, 1.3, 0.08, 0.85, 0.92), ...boxPolys(0, 0.36, 0, 0.18, 0.72, 0.7, 0.78)];
+  else if (o.shape === 'wall') polys = boxPolys(0, 1.2, 0, 3, 2.4, 0.24, 0.8);
+  else polys = boxPolys(0, 0.4, 0, 0.8, 0.8, 0.8, 0.85);
+  const rot = (o.rot || 0) * DEG;
+  polys = polys.map(p => ({
+    pts: p.pts.map(pt => {
+      let w = [pt[0] * sc, pt[1] * sc, pt[2] * sc];
+      if (rot) w = rotYpt(w, [0, 0, 0], rot);
+      return [w[0] + o.x, w[1], w[2] + o.z];
+    }),
+    n: rot ? rotYpt(p.n, [0, 0, 0], rot) : p.n,
+    shade: p.shade,
+  }));
+  return { polys, joints: [] };
+}
+
 /* ---------- 演员白模（关节链接的小人：肩/肘/髋/膝 正向动力学） ----------
  * parts: [{ polys, joints }]，joints 从近端到远端排列，渲染时按远端优先依次施加旋转 */
 function buildActor(pose) {
@@ -173,12 +195,12 @@ function lookAt(pos, target) {
 }
 
 /* 依据运镜定义与进度 t ∈ [0,1] 求相机状态 */
-function solveCamera(sim, t, actor) {
+function solveCamera(sim, t, actor, opts = {}) {
   const head = [actor.x, actor.y + 1.5, actor.z];
   const e = easeInOut(t);
   const sp = sim.speed || 0.5;
   const cam = { pos: [0, 1.7, 7], fov: 55, yaw: 0, pitch: 0 };
-  const set = (p, target = head) => { cam.pos = p; Object.assign(cam, lookAt(p, target)); };
+  const set = (p, target = head) => { cam.pos = p; cam._tgt = target; Object.assign(cam, lookAt(p, target)); };
 
   switch (sim.type) {
     case 'static':
@@ -221,7 +243,7 @@ function solveCamera(sim, t, actor) {
       const base = lookAt(p, head);
       const sweep = (sim.speed > 1.5 ? 0.9 : 0.55) * (0.5 + sp);
       const a = sim.dir === 'left' ? lerp(sweep, -sweep, e) : lerp(-sweep, sweep, e);
-      cam.pos = p;
+      cam.pos = p; cam._tgt = head;
       cam.yaw = base.yaw + a;
       cam.pitch = base.pitch;
       cam.blur = sim.blur && sp * Math.abs(Math.sin(t * Math.PI)) > 0.4;
@@ -229,7 +251,7 @@ function solveCamera(sim, t, actor) {
     }
     case 'tilt': {
       const p = [0, 1.6, 6.5];
-      cam.pos = p;
+      cam.pos = p; cam._tgt = head;
       cam.fov = 55;
       cam.yaw = lookAt(p, [0, 1.5, 0]).yaw;
       cam.pitch = sim.dir === 'up' ? lerp(-0.45, 0.5, e) : lerp(0.5, -0.45, e);
@@ -292,11 +314,19 @@ function solveCamera(sim, t, actor) {
     }
     case 'rotate': {
       const p = [0.01, 15, 0.01];
-      cam.pos = p;
+      cam.pos = p; cam._tgt = [0, 0, 0];
       const base = lookAt(p, [0, 0, 0]);
       cam.yaw = base.yaw + t * Math.PI * 0.6;
       cam.pitch = base.pitch;
       cam.fov = 60;
+      break;
+    }
+    case 'free': {
+      const c = (opts.scene && opts.scene.cam) || { az: 25, dist: 7, h: 1.8, fov: 55 };
+      const a = (c.az || 0) * DEG;
+      const p = [Math.sin(a) * (c.dist || 7), c.h || 1.8, Math.cos(a) * (c.dist || 7)];
+      set(p, [0, 1.15, 0]);
+      cam.fov = c.fov || 55;
       break;
     }
     case 'swingOver': {
@@ -315,6 +345,18 @@ function solveCamera(sim, t, actor) {
     default:
       set([0, 1.7, 7], head);
   }
+
+  /* 角度叠加：在运镜机位基础上抬高/压低/偏移/转屏 */
+  const ang = opts.angle || 'eye';
+  if (sim.type !== 'free' && ang !== 'eye') {
+    if (ang === 'low') cam.pos = [cam.pos[0], Math.max(0.35, cam.pos[1] * 0.35), cam.pos[2]];
+    else if (ang === 'high') cam.pos = [cam.pos[0], cam.pos[1] + 4.2, cam.pos[2]];
+    else if (ang === 'bird') cam.pos = [cam.pos[0], cam.pos[1] + 9.5, cam.pos[2]];
+    else if (ang === 'ots') cam.pos = [cam.pos[0] + 0.95, cam.pos[1] - 0.1, cam.pos[2]];
+    else if (ang === 'dutch') cam.roll = 0.16;
+    if (ang !== 'dutch' && cam._tgt) Object.assign(cam, lookAt(cam.pos, cam._tgt));
+  }
+  cam.roll = cam.roll || 0;
   return cam;
 }
 
@@ -418,27 +460,37 @@ class WhiteModelRenderer {
     ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
 
     const actor = solveActor(action, t, sim, opts.duration || 4);
+    // 运镜速度：快推提前走完并定住，慢推到结束时只走一部分
+    const speedF = opts.moveSpeed === 'slow' ? 0.62 : opts.moveSpeed === 'fast' ? 1.55 : 1;
     // POV 模式不画演员（自己就是演员）
-    const cam = solveCamera(sim, t, actor);
+    const cam = solveCamera(sim, clamp(t * speedF, 0, 1), actor, { angle: opts.angle, scene: opts.scene });
     const focal = (H / 2) / Math.tan((cam.fov * DEG) / 2);
     const cx = W / 2, cyv = H / 2;
 
     // 演员部件（局部 → 世界）
-    const parts = (opts.hideActor || sim.type === 'pov') ? [] : buildActor({
-      phase: actor.phase, walk: actor.walk, sit: actor.sit,
-    });
+    /* 场景对象：多人物（各自动作/朝向/大小）+ 道具 */
+    const objs = (opts.scene && opts.scene.objects) || [];
+    const sceneActors = objs.filter(o => o.type === 'actor');
+    const actorDefs = sceneActors.length
+      ? sceneActors.map((o, i) => ({
+          x: o.x, z: o.z, yaw: (o.rot || 0) * DEG, scale: o.scale || 1,
+          pose: { phase: t * Math.PI * 6 * (o.action === 'run' ? 1.7 : 1) + i * 1.7, walk: o.action === 'walk' ? 0.55 : o.action === 'run' ? 0.95 : 0, sit: o.action === 'sit' },
+        }))
+      : [{ x: actor.x, z: actor.z, yaw: actor.yaw, scale: 1, pose: { phase: actor.phase, walk: actor.walk, sit: actor.sit } }];
+    const parts = (opts.hideActor || sim.type === 'pov') ? [] : actorDefs.map(d => ({ d, parts: buildActor(d.pose) }));
+    const propParts = (opts.hideActor ? [] : objs.filter(o => o.type === 'prop')).map(o => propPart(o));
 
     /* ---- 收集多边形（场景 + 关节化演员） ---- */
     const polys = [];
-    const collectPart = (part, ax, ay, az, ayaw) => {
+    const collectPart = (part, ax, ay, az, ayaw, ascale = 1) => {
       for (const poly of part.polys) {
         const pts3 = [];
         let ok = true;
         for (const pt of poly.pts) {
-          let w = pt;
+          let w = ascale !== 1 ? [pt[0] * ascale, pt[1] * ascale, pt[2] * ascale] : pt;
           for (let i = part.joints.length - 1; i >= 0; i--) {
             const j = part.joints[i];
-            w = rotXpt(w, j.pivot, j.angle);
+            w = rotXpt(w, [j.pivot[0] * ascale, j.pivot[1] * ascale, j.pivot[2] * ascale], j.angle);
           }
           if (ayaw) w = rotYpt(w, [0, 0, 0], ayaw);
           w = [w[0] + ax, w[1] + ay, w[2] + az];
@@ -447,7 +499,7 @@ class WhiteModelRenderer {
         let n = poly.n;
         for (let i = part.joints.length - 1; i >= 0; i--) {
           const j = part.joints[i];
-          n = rotXpt(n, j.pivot, j.angle);
+          n = rotXpt(n, [j.pivot[0] * ascale, j.pivot[1] * ascale, j.pivot[2] * ascale], j.angle);
         }
         if (ayaw) n = rotYpt(n, [0, 0, 0], ayaw);
         const pts2 = [];
@@ -460,8 +512,11 @@ class WhiteModelRenderer {
         polys.push({ pts: pts2, n, shade: poly.shade, d: pts2.reduce((a, p2) => a + p2.d, 0) / pts2.length });
       }
     };
-    for (const part of buildScene(this.scene)) collectPart(part, 0, 0, 0, 0);
-    for (const part of parts) collectPart(part, actor.x, actor.y, actor.z, actor.yaw);
+    for (const part of buildScene(this.scene)) collectPart(part, 0, 0, 0, 0, 1);
+    for (const pp of propParts) collectPart(pp, 0, 0, 0, 0, 1);
+    for (const ap of parts) for (const part of ap.parts) collectPart(part, ap.d.x, 0, ap.d.z, ap.d.yaw, ap.d.scale);
+
+    if (cam.roll) { ctx.save(); ctx.translate(W / 2, H / 2); ctx.rotate(cam.roll); ctx.translate(-W / 2, -H / 2); }
 
     /* ---- 地面（填充面 + 网格） ---- */
     ctx.lineWidth = 1;
@@ -493,23 +548,32 @@ class WhiteModelRenderer {
 
     /* ---- 演员脚下阴影（画在人物之前，避免盖在身体上） ---- */
     if (parts.length) {
-      const sp1 = this.project([actor.x - 0.42, 0.012, actor.z - 0.32], cam, focal, cx, cyv);
-      const sp2 = this.project([actor.x + 0.42, 0.012, actor.z + 0.32], cam, focal, cx, cyv);
-      if (sp1 && sp2) {
-        ctx.fillStyle = isLight ? 'rgba(50,58,80,0.28)' : 'rgba(8,10,20,0.35)';
-        ctx.beginPath();
-        ctx.ellipse((sp1.x + sp2.x) / 2, (sp1.y + sp2.y) / 2, Math.abs(sp2.x - sp1.x) / 2, Math.abs(sp2.y - sp1.y) / 2 + 2, 0, 0, Math.PI * 2);
-        ctx.fill();
+      for (const ap of parts) {
+        const sp1 = this.project([ap.d.x - 0.42 * ap.d.scale, 0.012, ap.d.z - 0.32 * ap.d.scale], cam, focal, cx, cyv);
+        const sp2 = this.project([ap.d.x + 0.42 * ap.d.scale, 0.012, ap.d.z + 0.32 * ap.d.scale], cam, focal, cx, cyv);
+        if (sp1 && sp2) {
+          ctx.fillStyle = isLight ? 'rgba(50,58,80,0.28)' : 'rgba(8,10,20,0.35)';
+          ctx.beginPath();
+          ctx.ellipse((sp1.x + sp2.x) / 2, (sp1.y + sp2.y) / 2, Math.abs(sp2.x - sp1.x) / 2, Math.abs(sp2.y - sp1.y) / 2 + 2, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
 
     /* ---- 画家算法绘制 ---- */
     polys.sort((a, b) => b.d - a.d);
-    const L = [0.45, 0.8, 0.4]; // 光方向
+    let L = [0.45, 0.8, 0.4], lightInt = 1; // 光方向
+    if (opts.scene && opts.scene.light) {
+      const lt = opts.scene.light;
+      const azR = (lt.az || 0) * DEG, elR = (lt.el ?? 35) * DEG;
+      L = [Math.sin(azR) * Math.cos(elR), Math.sin(elR), Math.cos(azR) * Math.cos(elR)];
+      lightInt = lt.int ?? 1;
+    }
     for (const poly of polys) {
       const n = poly.n;
       const lit = clamp(n[0] * L[0] + n[1] * L[1] + n[2] * L[2], 0, 1);
-      const v = this._shadeLo + (this._shadeHi - this._shadeLo) * lit * (poly.shade || 0.9);
+      const litAdj = Math.max(0, Math.min(1, lightInt * lit + (1 - lightInt) * 0.5));
+      const v = this._shadeLo + (this._shadeHi - this._shadeLo) * litAdj * (poly.shade || 0.9);
       const fog = clamp(1 - poly.d / 30, 0.25, 1);
       const c = mixColor(th.fog, v, fog);
       ctx.fillStyle = c;
@@ -522,6 +586,8 @@ class WhiteModelRenderer {
         ctx.stroke();
       }
     }
+
+    if (cam.roll) ctx.restore();
 
     /* ---- 甩镜运动模糊 ---- */
     if (cam.blur) {
@@ -583,7 +649,8 @@ class MovePlayer {
     this.duration = 4;
     this.hud = true;
   }
-  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0 } = {}) {
+  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0, angle, moveSpeed } = {}) {
+    this.extra = { angle, moveSpeed };
     this.sim = sim; this.duration = duration;
     this.action = action; this.loop = loop;
     this.renderer.scene = scene;
@@ -593,9 +660,10 @@ class MovePlayer {
   }
   seek(sim, t, opts) {
     this.sim = sim; this.action = opts?.action || this.action || 'stand';
+    if (opts?.angle !== undefined) this.extra = { angle: opts.angle, moveSpeed: opts.moveSpeed };
     this.renderer.scene = opts?.scene || this.renderer.scene;
     this.duration = opts?.duration || this.duration;
-    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true });
+    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed });
   }
   stop() { this.playing = false; }
   destroy() { this.playing = false; if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
@@ -609,7 +677,7 @@ class MovePlayer {
         else { t = 1; this.playing = false; if (this.onEnd) this.onEnd(); }
       }
       this.t = t;
-      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true });
+      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed });
       if (this.onTick) this.onTick(t);
       this._raf = requestAnimationFrame(this._frame.bind(this));
     }
@@ -641,4 +709,4 @@ function imageTransformFor(sim, t) {
   return { scale, dx, dy, rot };
 }
 
-export { WhiteModelRenderer, MovePlayer, imageTransformFor, solveCamera, solveActor, clamp, lerp, easeInOut, easeOut };
+export { WhiteModelRenderer, MovePlayer, imageTransformFor, solveCamera, solveActor, clamp, lerp, easeInOut, easeOut, propPart, rotXpt, rotYpt };
