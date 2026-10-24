@@ -780,6 +780,12 @@ function openSceneBuilder(shot, onSaved) {
           </div>
           <div id="sbProps" class="sb-props"><div class="dim">选中对象后在这里调整动作 / 朝向 / 大小</div></div>
           <div class="card-title" style="margin-top:14px">自由机位</div>
+          <div class="sb-palette" style="margin-bottom:8px">
+            <button class="chip" id="sbVTop">📍 俯视</button>
+            <button class="chip" id="sbVOblique">📍 斜视</button>
+            <button class="chip" id="sbVFront">📍 正视</button>
+            <button class="chip ${scene.vf ? 'chip-on' : ''}" id="sbVF">🖼 取景框</button>
+          </div>
           <div>
             <div class="form-row"><label>方位角 <span id="sbAzV">${scene.cam.az}°</span></label><input type="range" id="sbAz" class="scrub" min="0" max="360" value="${scene.cam.az}"></div>
             <div class="form-row"><label>距离 <span id="sbDistV">${scene.cam.dist}</span></label><input type="range" id="sbDist" class="scrub" min="3" max="12" step="0.5" value="${scene.cam.dist}"></div>
@@ -802,6 +808,7 @@ function openSceneBuilder(shot, onSaved) {
       </div>
       <div class="modal-actions">
         <button class="btn btn-magic btn-sm" id="sbAI">🤖 AI 搭建</button>
+        <button class="btn btn-ghost btn-sm" id="sbTpl">🏘 模板</button>
         <button class="btn btn-ghost btn-sm" id="sbClear">🗑 清空场景</button>
         <div class="spacer"></div>
         <button class="btn btn-ghost" id="sbMax">⛶ 放大搭建</button>
@@ -818,6 +825,18 @@ function openSceneBuilder(shot, onSaved) {
     if (!document.body.contains(cv)) return;
     if (sbView === '2d') { try { draw2D(); } catch (e) { console.warn('draw2D', e); } raf = requestAnimationFrame(loop); return; }
     try { renderer.render(sim, ((now - t0) / 4000) % 1, 'stand', { duration: 4, hud: false, letterbox: true, scene }); } catch (e) { console.warn('sb render', e); }
+    if (scene.vf) {
+      const vc = cv.getContext('2d');
+      const cw = cv.clientWidth, ch = cv.clientHeight;
+      const fh = cw * 9 / 16;
+      if (fh <= ch) {
+        const y0 = (ch - fh) / 2;
+        vc.strokeStyle = 'rgba(255,255,255,0.55)'; vc.lineWidth = 1.5;
+        vc.setLineDash([6, 5]);
+        vc.strokeRect(cw * 0.06, y0, cw * 0.88, fh);
+        vc.setLineDash([]);
+      }
+    }
     renderer.render(sim, ((now - t0) / 4000) % 1, 'stand', { duration: 4, hud: false, letterbox: true, scene });
     // 轨迹叠加层
     const tctx = cv.getContext('2d');
@@ -908,6 +927,19 @@ function openSceneBuilder(shot, onSaved) {
   [['sbAz', 'az', '°', 'sbAzV'], ['sbDist', 'dist', '', 'sbDistV'], ['sbH', 'h', '', 'sbHV'], ['sbFov', 'fov', '°', 'sbFovV']].forEach(([id, k, u, vid]) => {
     m.body.querySelector('#' + id).oninput = e => { scene.cam[k] = +e.target.value; m.body.querySelector('#' + vid).textContent = e.target.value + u; };
   });
+  const VIEWS = { sbVTop: { az: 0, dist: 6, h: 9, fov: 45 }, sbVOblique: { az: 30, dist: 8, h: 4.5, fov: 50 }, sbVFront: { az: 0, dist: 8, h: 1.6, fov: 50 } };
+  Object.entries(VIEWS).forEach(([id, v]) => {
+    m.body.querySelector('#' + id).onclick = () => {
+      Object.assign(scene.cam, v);
+      m.body.querySelector('#sbAz').value = v.az; m.body.querySelector('#sbAzV').textContent = v.az + '°';
+      m.body.querySelector('#sbDist').value = v.dist; m.body.querySelector('#sbDistV').textContent = v.dist;
+      m.body.querySelector('#sbH').value = v.h; m.body.querySelector('#sbHV').textContent = v.h;
+      m.body.querySelector('#sbFov').value = v.fov; m.body.querySelector('#sbFovV').textContent = v.fov + '°';
+    };
+  });
+  const syncVF = () => m.body.querySelector('#sbVF').classList.toggle('chip-on', !!scene.vf);
+  m.body.querySelector('#sbVF').onclick = () => { scene.vf = !scene.vf; syncVF(); };
+  syncVF();
   const LIGHT_PRESETS = { key: [0, 35, 1], side: [90, 30, 1.05], rim: [140, 28, 1.1], back: [180, 30, 1.15], top: [0, 78, 1.05], flat: [0, 18, 0.45] };
   m.body.querySelectorAll('#sbLightPresets .chip').forEach(b => b.onclick = () => {
     const [az, el, int] = LIGHT_PRESETS[b.dataset.l];
@@ -1166,6 +1198,53 @@ function openSceneBuilder(shot, onSaved) {
         store.addXP(3, 'AI 搭建');
       } catch (e) { toast('JSON 解析失败：' + e.message, 'warn'); }
     };
+  };
+  const SB_TEMPLATES = {
+    living: { name: '客厅', data: { base: 'room', objects: [
+      { type: 'prop', shape: 'wall', x: 0, z: -5, rot: 0, scale: 1, w: 10, h: 2.4 },
+      { type: 'prop', shape: 'wall', x: -5, z: 0, rot: 90, scale: 1, w: 10, h: 2.4 },
+      { type: 'prop', shape: 'wall', x: 5, z: 0, rot: 90, scale: 1, w: 10, h: 2.4 },
+      { type: 'prop', shape: 'sofa', x: -1.5, z: 2.5, rot: 0, scale: 1.2 },
+      { type: 'prop', shape: 'table', x: -1.5, z: 0.8, rot: 0, scale: 1 },
+      { type: 'prop', shape: 'window', x: 0, z: -4.9, rot: 0, scale: 1 },
+      { type: 'actor', x: 0.5, z: 1.5, rot: 190, scale: 1, action: 'stand' } ],
+      light: { az: 140, el: 32, int: 1.05 }, cam: { az: 15, dist: 6.5, h: 1.7, fov: 50 } } },
+    bedroom: { name: '卧室', data: { base: 'room', objects: [
+      { type: 'prop', shape: 'wall', x: 0, z: -4.5, rot: 0, scale: 1, w: 8, h: 2.4 },
+      { type: 'prop', shape: 'wall', x: -4, z: 0, rot: 90, scale: 1, w: 9, h: 2.4 },
+      { type: 'prop', shape: 'wall', x: 4, z: 0, rot: 90, scale: 1, w: 9, h: 2.4 },
+      { type: 'prop', shape: 'door', x: 3.4, z: -4.4, rot: 0, scale: 1 },
+      { type: 'prop', shape: 'table', x: -2.5, z: -3.4, rot: 0, scale: 1 },
+      { type: 'actor', x: 1, z: 1, rot: 200, scale: 1, action: 'sit' } ],
+      light: { az: 60, el: 25, int: 0.9 }, cam: { az: 5, dist: 5.5, h: 1.5, fov: 46 } } },
+    street: { name: '夜晚街道', data: { base: 'street', objects: [
+      { type: 'actor', x: -1, z: 0.5, rot: 175, scale: 1, action: 'stand' },
+      { type: 'actor', x: 2.5, z: -1.5, rot: 320, scale: 0.95, action: 'stand' },
+      { type: 'prop', shape: 'pillar', x: -4, z: -2, rot: 0, scale: 1 },
+      { type: 'prop', shape: 'pillar', x: 4, z: -2, rot: 0, scale: 1 } ],
+      light: { az: 200, el: 22, int: 1.2 }, cam: { az: 190, dist: 5.5, h: 1.6, fov: 48 } } },
+    lift: { name: '电梯间', data: { base: 'room', objects: [
+      { type: 'prop', shape: 'wall', x: -1.6, z: 0, rot: 90, scale: 1, w: 3.6, h: 2.4 },
+      { type: 'prop', shape: 'wall', x: 1.6, z: 0, rot: 90, scale: 1, w: 3.6, h: 2.4 },
+      { type: 'prop', shape: 'wall', x: 0, z: -1.9, rot: 0, scale: 1, w: 3.44, h: 2.4 },
+      { type: 'actor', x: 0, z: 0.8, rot: 180, scale: 1, action: 'stand' } ],
+      light: { az: 0, el: 70, int: 1.15 }, cam: { az: 0, dist: 4.5, h: 1.6, fov: 44 } } },
+  };
+  m.body.querySelector('#sbTpl').onclick = () => {
+    const tm = modal({
+      title: '🏘 场景模板',
+      body: '<div class="export-opts">' + Object.entries(SB_TEMPLATES).map(([k, t]) => '<button class="btn btn-ghost" data-k="' + k + '">' + t.name + '</button>').join('') + '</div>',
+    });
+    tm.body.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
+      const t = SB_TEMPLATES[b.dataset.k];
+      scene.base = t.data.base; scene.objects = JSON.parse(JSON.stringify(t.data.objects));
+      scene.light = { ...t.data.light }; scene.cam = { ...t.data.cam };
+      selIdx = -1; renderProps();
+      m.body.querySelectorAll('#sbBase .chip').forEach(x => x.classList.toggle('chip-on', x.dataset.b === scene.base));
+      tm.close();
+      toast('模板「' + t.name + '」已载入，可继续调整', 'ok');
+      store.addXP(1, '场景模板');
+    });
   };
   m.body.querySelector('#sbClear').onclick = () => { scene.objects = []; selIdx = -1; renderProps(); };
   m.body.querySelector('#sbCancel').onclick = () => m.close();
