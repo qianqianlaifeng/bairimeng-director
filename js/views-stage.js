@@ -72,9 +72,11 @@ export function renderDict(container) {
     grid.querySelectorAll('.dict-demo').forEach(d => io.observe(d));
 
     const t0 = performance.now();
+    let dictFrame = 0;
     const loop = (now) => {
       if (!document.body.contains(grid)) { cancelAnimationFrame(rafId); return; }
-      const t = ((now - t0) / 3600) % 1;
+      dictFrame++; if (dictFrame % 3) { rafId = requestAnimationFrame(loop); return; }
+    const t = ((now - t0) / 3600) % 1;
       for (const card of running) {
         const cv = card.querySelector('canvas');
         if (!cv._player) {
