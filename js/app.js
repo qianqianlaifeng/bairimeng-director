@@ -176,6 +176,7 @@ window.addEventListener('bdm-levelup', e => {
 
 /* ---------- 导航事件 ---------- */
 window.addEventListener('bdm-nav', e => navigate(e.detail.view, e.detail.payload || {}));
+window.addEventListener('bdm-tutorial', () => openTutorial());
 
 /* ---------- 顶部按钮 ---------- */
 appEl.querySelector('#btnExport').onclick = () => openProjectExport();
