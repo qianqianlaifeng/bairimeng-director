@@ -75,9 +75,10 @@ function newProject(name, aspect = '16:9') {
  * ============================================================ */
 class Store {
   constructor() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, load(LS.settings, {}));
-    // 视觉 v3 迁移：老设置一次性切到浅色主题
-    if (!this.settings.uiRev || this.settings.uiRev < 2) {
+    const stored = load(LS.settings, {});
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, stored);
+    // 视觉 v3 迁移：老存档没有 uiRev 标记 → 一次性切到浅色主题
+    if (!stored.uiRev || stored.uiRev < 2) {
       this.settings.theme = 'porcelain';
       this.settings.uiRev = 2;
       this.persistSettings();
