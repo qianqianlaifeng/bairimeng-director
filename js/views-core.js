@@ -91,7 +91,7 @@ export function renderHome(container) {
   /* 首页舞台小动画 */
   const canvas = container.querySelector('#heroCanvas');
   const renderer = new WhiteModelRenderer(canvas);
-  renderer.setTheme({ bg1: '#12151d', bg2: '#1c212e', fog: '#141824', line: 'rgba(150,162,190,.26)' });
+  renderer.setTheme({ bg1: '#1a2338', bg2: '#0f1524', fog: '#131a2c', line: 'rgba(150,168,208,.28)' });
   const demoMoves = CAMERA_MOVES.filter(m => ['slowPush', 'orbitRight', 'craneUp', 'truckRight', 'spiralUp', 'dollyZoom'].includes(m.key));
   let mi = 0, raf = null, t0 = performance.now();
   const loop = (now) => {
@@ -328,7 +328,7 @@ export function renderStoryboard(container) {
         });
       } else {
         const r = new WhiteModelRenderer(cv);
-        r.setTheme({ bg1: '#12151d', bg2: '#1a1f2c', fog: '#141824', line: 'rgba(150,162,190,.22)' });
+        r.setTheme({ bg1: '#172032', bg2: '#0e1422', fog: '#121928', line: 'rgba(148,164,200,.22)' });
         r.render(mv.sim, 0.55, 'stand', { duration: s.duration });
       }
     });
