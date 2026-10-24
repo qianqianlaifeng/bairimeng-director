@@ -68,12 +68,14 @@ export function renderHome(container) {
         </div>
         <div class="proj-ops">
           <button class="icon-btn" data-op="open" title="打开">打开</button>
+          <button class="icon-btn" data-op="rename" title="重命名">✏️</button>
           <button class="icon-btn" data-op="dup" title="复制">⧉</button>
           <button class="icon-btn" data-op="del" title="删除">🗑</button>
         </div>
       </div>`);
       card.addEventListener('click', e => {
         const op = e.target.closest('[data-op]')?.dataset.op;
+        if (op === 'rename') { e.stopPropagation(); openProjectRename(p.id, () => renderHome(container)); return; }
         if (op === 'dup') { e.stopPropagation(); store.duplicateProject(p.id); renderHome(container); return; }
         if (op === 'del') {
           e.stopPropagation();
@@ -661,6 +663,46 @@ export function openShotEditor(shot, idx) {
 }
 
 const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ---------- 重命名项目（项目卡 ✏️ / 顶栏 ✏️ 共用） ---------- */
+export function openProjectRename(id, onDone) {
+  const p = store.projects.find(x => x.id === id) || store.active;
+  if (!p) { toast('先打开一个项目', 'warn'); return; }
+  const m = modal({
+    title: '✏️ 重命名项目',
+    body: `
+      <div class="form-row"><label>项目名称</label><input id="rnName" class="input" maxlength="40" value="${esc(p.name)}"></div>
+      <div class="form-row"><label>画幅</label>
+        <div class="aspect-picker" id="rnAspect">
+          ${['16:9', '9:16', '1:1'].map(v => `
+            <button class="aspect-opt ${v === p.aspect ? 'selected' : ''}" data-v="${v}">
+              <span class="ar ${v === '16:9' ? 'ar-169' : v === '9:16' ? 'ar-916' : 'ar-11'}"></span>
+              ${v === '16:9' ? '横屏 16:9' : v === '9:16' ? '竖屏 9:16' : '方形 1:1'}
+            </button>`).join('')}
+        </div>
+      </div>
+      <div class="dim" style="font-size:12px">内容（剧本 / 分镜）不受影响，改完即时生效。</div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-act="cancel">取消</button>
+        <button class="btn btn-primary" data-act="ok">保存</button>
+      </div>`,
+  });
+  let aspect = p.aspect;
+  m.body.querySelectorAll('#rnAspect .aspect-opt').forEach(b => b.onclick = () => {
+    m.body.querySelectorAll('#rnAspect .aspect-opt').forEach(x => x.classList.remove('selected'));
+    b.classList.add('selected');
+    aspect = b.dataset.v;
+  });
+  m.body.querySelector('[data-act="cancel"]').onclick = () => m.close();
+  m.body.querySelector('[data-act="ok"]').onclick = () => {
+    const name = m.body.querySelector('#rnName').value.trim();
+    store.updateProject(p.id, { name: name || p.name, aspect });
+    m.close();
+    toast('项目已更新 ✅', 'ok');
+    if (onDone) onDone();
+  };
+  setTimeout(() => { const i = m.body.querySelector('#rnName'); i.focus(); i.select(); }, 60);
+}
 
 /* ---------- 空项目提示 ---------- */
 function emptyProjectTip() {
