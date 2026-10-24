@@ -114,7 +114,7 @@ export function renderAnimatic(container) {
     shotT = t;
     transitionAlpha = idx > 0 ? 1 : 0;
     const s = p.shots[shotIdx];
-    ensureImage(s.image).then(img => { curImg = img; curImgKey = s.image; });
+    const key = s.image || s.sketch; ensureImage(key).then(img => { curImg = img; curImgKey = key; });
     renderShotList();
     updateHUD();
   }
@@ -133,7 +133,8 @@ export function renderAnimatic(container) {
     const s = p.shots[shotIdx];
     const mv = moveByKey[s.cameraMove] || moveByKey.static;
     const t = shotT;
-    const useImg = curImg && curImgKey === s.image && !whiteOnly;
+    const wantKey = s.image || s.sketch;
+    const useImg = curImg && curImgKey === wantKey && !whiteOnly;
     if (useImg) {
       canvas.style.display = 'none';
       imgEl.style.display = '';
