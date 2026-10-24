@@ -737,6 +737,12 @@ function openSceneBuilder(shot, onSaved) {
   const scene = shot.scene ? JSON.parse(JSON.stringify(shot.scene)) : { objects: [], cam: { az: 25, dist: 7, h: 1.8, fov: 55 } };
   if (!scene.cam) scene.cam = { az: 25, dist: 7, h: 1.8, fov: 55 };
   if (!scene.light) scene.light = { az: 0, el: 35, int: 1 };
+  scene.cam = { az: +scene.cam.az || 0, dist: Math.min(12, Math.max(3, +scene.cam.dist || 7)), h: Math.min(9, Math.max(0.4, +scene.cam.h || 1.8)), fov: Math.min(90, Math.max(25, +scene.cam.fov || 55)) };
+  scene.light = { az: +scene.light.az || 0, el: Math.min(85, Math.max(5, +scene.light.el ?? 35)), int: Math.min(1.3, Math.max(0.3, +scene.light.int ?? 1)) };
+  scene.base = ['plain', 'street', 'room', 'stage'].includes(scene.base) ? scene.base : 'plain';
+  scene.objects = (Array.isArray(scene.objects) ? scene.objects : []).filter(o => o && typeof o === 'object')
+    .map(o => ({ ...o, x: +o.x || 0, z: +o.z || 0, rot: +o.rot || 0, scale: Math.min(3, Math.max(0.3, +o.scale || 1)) }))
+    .filter(o => isFinite(o.x) && isFinite(o.z));
   let placeType = 'actor', selIdx = -1, pathDraw = false, pathTarget = null;
   const TYPE_NAME = { actor: '人物', box: '木箱', pillar: '立柱', table: '桌子', wall: '围墙' };
   const m = modal({
@@ -810,7 +816,8 @@ function openSceneBuilder(shot, onSaved) {
   const t0 = performance.now();
   const loop = (now) => {
     if (!document.body.contains(cv)) return;
-    if (sbView === '2d') { draw2D(); raf = requestAnimationFrame(loop); return; }
+    if (sbView === '2d') { try { draw2D(); } catch (e) { console.warn('draw2D', e); } raf = requestAnimationFrame(loop); return; }
+    try { renderer.render(sim, ((now - t0) / 4000) % 1, 'stand', { duration: 4, hud: false, letterbox: true, scene }); } catch (e) { console.warn('sb render', e); }
     renderer.render(sim, ((now - t0) / 4000) % 1, 'stand', { duration: 4, hud: false, letterbox: true, scene });
     // 轨迹叠加层
     const tctx = cv.getContext('2d');
@@ -933,7 +940,7 @@ function openSceneBuilder(shot, onSaved) {
   const w2p = (x, z) => [W2() + (x / S2) * (W2() - 14), cv.clientHeight / 2 + (z / S2) * (cv.clientHeight / 2 - 14)];
   const p2w = (sx, sy) => [((sx - W2()) / (W2() - 14)) * S2, ((sy - cv.clientHeight / 2) / (cv.clientHeight / 2 - 14)) * S2];
   const PROP_SIZE = { box: [0.8, 0.8], pillar: [0.4, 0.4], table: [1.3, 0.85], wall: [3, 0.24], door: [1.24, 0.14], window: [2.4, 0.2], sofa: [1.6, 0.85], tree: [1.2, 1.2] };
-  const draw2D = () => {
+  const draw2D = () => { try {
     const ctx2 = cv.getContext('2d');
     const cw = cv.clientWidth, ch = cv.clientHeight;
     ctx2.setTransform(1, 0, 0, 1, 0, 0);
@@ -989,6 +996,7 @@ function openSceneBuilder(shot, onSaved) {
     ctx2.fillStyle = '#ffc857'; ctx2.beginPath(); ctx2.arc(cxp, cyp, 6, 0, Math.PI * 2); ctx2.fill();
     ctx2.fillStyle = 'rgba(255,255,255,0.75)'; ctx2.font = '10px sans-serif';
     ctx2.fillText('相机', cxp + 8, cyp - 6);
+  } catch (e) { console.warn('draw2D', e); }
   };
   cv.addEventListener('contextmenu', e => {
     e.preventDefault();
