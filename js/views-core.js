@@ -96,8 +96,11 @@ export function renderHome(container) {
   renderer.setTheme({ bg1: '#eef1f6', bg2: '#e2e6ee', fog: '#e9ecf2', line: 'rgba(96,106,134,.30)', ink: '#2a3040', hud: 'rgba(35,42,60,.38)' });
   const demoMoves = CAMERA_MOVES.filter(m => ['slowPush', 'orbitRight', 'craneUp', 'truckRight', 'spiralUp', 'dollyZoom'].includes(m.key));
   let mi = 0, raf = null, t0 = performance.now();
+  let heroFrame = 0, heroVisible = true;
+  new IntersectionObserver(es => { heroVisible = es[0].isIntersecting; }).observe(canvas);
   const loop = (now) => {
     if (!document.body.contains(canvas)) return;
+    if (!heroVisible || (heroFrame++ % 3)) { raf = requestAnimationFrame(loop); return; }
     const t = ((now - t0) / 5200) % 1;
     renderer.scene = ['plain', 'street', 'room'][Math.floor(((now - t0) / 5200) % 3)];
     renderer.render(demoMoves[mi].sim, t, ['stand', 'walk', 'turn'][Math.floor(((now - t0) / 5200) % 3)], { hud: false });
@@ -778,8 +781,11 @@ function openSceneBuilder(shot, onSaved) {
             <button class="chip" data-t="sofa">🛋️ 沙发</button>
             <button class="chip" data-t="tree">🌳 树</button>
             <button class="chip" data-t="wallline">📐 墙线</button>
+            <button class="chip" data-t="lamp">💡 灯</button>
           </div>
           <div id="sbProps" class="sb-props"><div class="dim">选中对象后在这里调整动作 / 朝向 / 大小</div></div>
+          <div class="sb-list-head" id="sbListHead">📋 场景清单</div>
+          <div id="sbList" class="sb-list"></div>
           <div class="card-title" style="margin-top:14px">自由机位</div>
           <div class="sb-palette" style="margin-bottom:8px">
             <button class="chip" id="sbVTop">📍 俯视</button>
@@ -813,6 +819,7 @@ function openSceneBuilder(shot, onSaved) {
         <button class="btn btn-ghost btn-sm" id="sbTpl">🏘 模板</button>
         <button class="btn btn-ghost btn-sm" id="sbClear">🗑 清空场景</button>
         <div class="spacer"></div>
+        <button class="btn btn-magic btn-sm" id="sbRec">🎬 录制运镜</button>
         <button class="btn btn-ghost" id="sbMax">⛶ 放大搭建</button>
         <button class="btn btn-ghost" id="sbCancel">取消</button>
         <button class="btn btn-primary" id="sbSave">💾 保存场景</button>
@@ -823,9 +830,12 @@ function openSceneBuilder(shot, onSaved) {
   const sim = { type: 'free' };
   let raf = null;
   const t0 = performance.now();
+  let frame = 0, lastFloor = null;
   const loop = (now) => {
     if (!document.body.contains(cv)) return;
-    renderer.setTheme({ ground: scene.floor || '#d9dde5' });
+    frame++;
+    if (frame % 2) { raf = requestAnimationFrame(loop); return; } // 30fps 足够预览
+    if (lastFloor !== (scene.floor || '')) { renderer.setTheme({ ground: scene.floor || '#d9dde5' }); lastFloor = scene.floor || ''; }
     if (sbView === '2d') { try { draw2D(); } catch (e) { console.warn('draw2D', e); } raf = requestAnimationFrame(loop); return; }
     try { renderer.render(sim, ((now - t0) / 4000) % 1, 'stand', { duration: 4, hud: false, letterbox: true, scene }); } catch (e) { console.warn('sb render', e); }
     if (scene.vf) {
@@ -868,8 +878,27 @@ function openSceneBuilder(shot, onSaved) {
   };
   raf = requestAnimationFrame(loop);
 
+  const ICON = { actor: '👤', box: '📦', pillar: '🏛', table: '🪑', wall: '🧱', door: '🚪', window: '🪟', sofa: '🛋️', tree: '🌳', lamp: '💡' };
+  const renderList = () => {
+    const lb = m.body.querySelector('#sbList');
+    if (!lb) return;
+    const groups = { actor: [], prop: [] };
+    scene.objects.forEach((o, i) => groups[o.type === 'actor' ? 'actor' : 'prop'].push([o, i]));
+    const row = (o, i) => '<div class="sb-list-row' + (i === selIdx ? ' on' : '') + '" data-i="' + i + '"><span>' + (ICON[o.shape || o.type] || '▪') + '</span><span class="sb-list-name">' + (o.type === 'actor' ? '人物' : o.shape === 'wall' ? '墙 ' + (o.w || 3).toFixed(1) + 'm' : { box: '木箱', pillar: '立柱', table: '桌子', door: '门框', window: '窗墙', sofa: '沙发', tree: '树', lamp: '灯' }[o.shape] || '物件') + '</span><span class="dim">' + (+o.x).toFixed(1) + ',' + (+o.z).toFixed(1) + '</span><button class="icon-btn" data-del="' + i + '">✕</button></div>';
+    lb.innerHTML = (groups.actor.length ? '<div class="sb-list-group">人物 ' + groups.actor.length + '</div>' + groups.actor.map(([o, i]) => row(o, i)).join('') : '') +
+      (groups.prop.length ? '<div class="sb-list-group">道具 ' + groups.prop.length + '</div>' + groups.prop.map(([o, i]) => row(o, i)).join('') : '') +
+      (scene.objects.length ? '' : '<div class="dim" style="padding:6px 2px">还没有对象</div>');
+    lb.querySelectorAll('.sb-list-row').forEach(r2 => r2.onclick = e => {
+      if (e.target.dataset.del !== undefined) { scene.objects.splice(+e.target.dataset.del, 1); if (selIdx === +e.target.dataset.del) selIdx = -1; renderProps(); return; }
+      selIdx = +r2.dataset.i; renderProps();
+    });
+    const hd = m.body.querySelector('#sbListHead');
+    if (hd) hd.textContent = '📋 场景清单 ' + scene.objects.length;
+  };
+
   const renderProps = () => {
     const box = m.body.querySelector('#sbProps');
+    renderList();
     if (selIdx < 0) { box.innerHTML = '<div class="dim">未选中对象。点击画面中的对象进行选中，再点地面可挪动它。</div>'; return; }
     const o = scene.objects[selIdx];
     box.innerHTML = `
@@ -885,10 +914,13 @@ function openSceneBuilder(shot, onSaved) {
       </div></div>` : ''}
       <div class="form-row"><label>朝向 <span id="sbRotV">${Math.round(o.rot || 0)}°</span></label><input type="range" id="sbRot" class="scrub" min="0" max="360" value="${o.rot || 0}"></div>
       <div class="form-row"><label>大小 <span id="sbScaleV">${(o.scale || 1).toFixed(1)}×</span></label><input type="range" id="sbScale" class="scrub" min="0.6" max="1.8" step="0.1" value="${o.scale || 1}"></div>
+      ${o.shape === 'lamp' ? `<div class="form-row"><label>灯强度 <span id="sbLintV">${(o.lint ?? 0.55).toFixed(2)}</span></label><input type="range" id="sbLint" class="scrub" min="0.1" max="1" step="0.05" value="${o.lint ?? 0.55}"></div>` : ''}
       <button class="btn btn-danger btn-sm" id="sbDel">🗑 删除此对象</button>`;
     const act = box.querySelector('#sbAct');
     if (act) act.onchange = () => { o.action = act.value; };
     box.querySelector('#sbRot').oninput = e => { o.rot = +e.target.value; box.querySelector('#sbRotV').textContent = e.target.value + '°'; };
+    const lintS = box.querySelector('#sbLint');
+    if (lintS) lintS.oninput = e => { o.lint = +e.target.value; box.querySelector('#sbLintV').textContent = (+e.target.value).toFixed(2); };
     box.querySelectorAll('[data-f]').forEach(fb => fb.onclick = () => {
       o.rot = Math.round(((scene.cam.az || 0) + (+fb.dataset.f) + 360) % 360);
       box.querySelector('#sbRot').value = o.rot;
@@ -916,6 +948,7 @@ function openSceneBuilder(shot, onSaved) {
     }
     box.querySelector('#sbScale').oninput = e => { o.scale = +e.target.value; box.querySelector('#sbScaleV').textContent = (+e.target.value).toFixed(1) + '×'; };
     box.querySelector('#sbDel').onclick = () => { scene.objects.splice(selIdx, 1); selIdx = -1; renderProps(); };
+    renderList();
   };
   renderProps();
 
@@ -1103,6 +1136,7 @@ function openSceneBuilder(shot, onSaved) {
     m.body.querySelector('#sbHV').textContent = (+scene.cam.h).toFixed(1);
   });
   cv.addEventListener('pointerup', e => {
+    try {
     const wasDrag = drag && drag.moved;
     const upInfo = drag ? { sx: drag.sx, sy: drag.sy } : null;
     setTimeout(() => { drag = null; }, 0);
@@ -1272,7 +1306,37 @@ function openSceneBuilder(shot, onSaved) {
       store.addXP(1, '场景模板');
     });
   };
-  m.body.querySelector('#sbClear').onclick = () => { scene.objects = []; selIdx = -1; renderProps(); };
+  let rec = null, recTimer = null;
+  m.body.querySelector('#sbRec').onclick = () => {
+    const btn = m.body.querySelector('#sbRec');
+    if (!rec) {
+      rec = { samples: [{ t: 0, az: scene.cam.az, h: scene.cam.h, dist: scene.cam.dist, fov: scene.cam.fov }], t0: performance.now() };
+      scene.camPath = null;
+      btn.textContent = '⏹ 结束录制 (0.0s)';
+      m.body.querySelector('#sbTip').textContent = '录制中：拖拽画面转机位 / 拉滑块，运镜路径实时采样，再点结束';
+      recTimer = setInterval(() => {
+        const t = (performance.now() - rec.t0) / 1000;
+        const last = rec.samples[rec.samples.length - 1];
+        if (Math.abs(scene.cam.az - last.az) + Math.abs(scene.cam.h - last.h) + Math.abs(scene.cam.dist - last.dist) + Math.abs(scene.cam.fov - last.fov) > 0.05) {
+          rec.samples.push({ t: +t.toFixed(2), az: scene.cam.az, h: scene.cam.h, dist: scene.cam.dist, fov: scene.cam.fov });
+          if (rec.samples.length > 40) rec.samples.shift();
+        }
+        btn.textContent = '⏹ 结束录制 (' + t.toFixed(1) + 's)';
+        if (t > 30) m.body.querySelector('#sbRec').click();
+      }, 200);
+    } else {
+      clearInterval(recTimer);
+      const dur = (performance.now() - rec.t0) / 1000;
+      rec.samples.push({ t: +Math.max(dur, 0.5).toFixed(2), az: scene.cam.az, h: scene.cam.h, dist: scene.cam.dist, fov: scene.cam.fov });
+      scene.camPath = rec.samples;
+      rec = null;
+      btn.textContent = '🎬 录制运镜 ✓';
+      m.body.querySelector('#sbTip').textContent = '运镜路径已录 ' + scene.camPath.length + ' 个关键帧，保存后动态分镜按它移动';
+      toast('运镜已录制：' + scene.camPath.length + ' 帧', 'ok');
+      store.addXP(3, '录制运镜');
+    }
+  };
+  m.body.querySelector('#sbClear').onclick = () => { scene.objects = []; scene.camPath = null; selIdx = -1; m.body.querySelector('#sbRec').textContent = '🎬 录制运镜'; renderProps(); };
   m.body.querySelector('#sbCancel').onclick = () => m.close();
   m.body.querySelector('#sbMax').onclick = () => {
     const box = m.root.querySelector('.modal');
