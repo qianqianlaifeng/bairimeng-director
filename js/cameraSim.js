@@ -79,6 +79,31 @@ function spherePolys(cx, cy, cz, r, stacks = 4, sectors = 8, shade = 0.97) {
   return polys;
 }
 
+/* ---------- 人物运动轨迹：沿折线路径来回行走 ---------- */
+function pathPosAt(obj, t) {
+  const pts = obj.path;
+  const NL = null;
+  let total = 0;
+  const segs = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const L = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z);
+    segs.push(L); total += L;
+  }
+  if (total < 0.01) return { x: pts[0].x, z: pts[0].z, yaw: (obj.rot || 0) * DEG };
+  const sp = obj.speed || 1.2;
+  let d = (t * sp) % (total * 2);
+  let dir = 1;
+  if (d > total) { d = total * 2 - d; dir = -1; }
+  let acc = 0, i = 0;
+  while (i < segs.length - 1 && acc + segs[i] < d) { acc += segs[i]; i++; }
+  const f = Math.min(1, (d - acc) / (segs[i] || 0.001));
+  const x = pts[i].x + (pts[i + 1].x - pts[i].x) * f;
+  const z = pts[i].z + (pts[i + 1].z - pts[i].z) * f;
+  let yawDeg = Math.atan2(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z) / DEG;
+  if (dir < 0) yawDeg = (yawDeg + 180) % 360;
+  return { x, z, yaw: yawDeg };
+}
+
 /* ---------- 场景道具（世界坐标烘焙） ---------- */
 function propPart(o) {
   let polys = [];
@@ -87,6 +112,10 @@ function propPart(o) {
   else if (o.shape === 'pillar') polys = frustumPolys(0, 0, 0, 0.16, 0.2, 2.4, 8, 0.88);
   else if (o.shape === 'table') polys = [...boxPolys(0, 0.72, 0, 1.3, 0.08, 0.85, 0.92), ...boxPolys(0, 0.36, 0, 0.18, 0.72, 0.7, 0.78)];
   else if (o.shape === 'wall') polys = boxPolys(0, 1.2, 0, 3, 2.4, 0.24, 0.8);
+  else if (o.shape === 'door') polys = [...boxPolys(-0.55, 1.05, 0, 0.14, 2.1, 0.14, 0.82), ...boxPolys(0.55, 1.05, 0, 0.14, 2.1, 0.14, 0.82), ...boxPolys(0, 2.15, 0, 1.24, 0.14, 0.16, 0.82)];
+  else if (o.shape === 'window') polys = [...boxPolys(-0.9, 1.2, 0, 0.6, 2.4, 0.2, 0.82), ...boxPolys(0.9, 1.2, 0, 0.6, 2.4, 0.2, 0.82), ...boxPolys(0, 2.05, 0, 1.2, 0.7, 0.2, 0.82), ...boxPolys(0, 0.75, 0, 1.2, 0.3, 0.26, 0.86)];
+  else if (o.shape === 'sofa') polys = [...boxPolys(0, 0.3, 0.15, 1.6, 0.35, 0.85, 0.9), ...boxPolys(0, 0.68, -0.28, 1.6, 0.75, 0.24, 0.88), ...boxPolys(-0.72, 0.52, 0.08, 0.18, 0.6, 0.85, 0.86), ...boxPolys(0.72, 0.52, 0.08, 0.18, 0.6, 0.85, 0.86)];
+  else if (o.shape === 'tree') polys = [...frustumPolys(0, 0, 0, 0.15, 0.11, 1.5, 8, 0.78), ...spherePolys(0, 2.05, 0, 0.78, 4, 8, 0.72)];
   else polys = boxPolys(0, 0.4, 0, 0.8, 0.8, 0.8, 0.85);
   const rot = (o.rot || 0) * DEG;
   polys = polys.map(p => ({
@@ -362,7 +391,18 @@ function solveCamera(sim, t, actor, opts = {}) {
     if (ang === 'low') cam.pos = [cam.pos[0], Math.max(0.35, cam.pos[1] * 0.35), cam.pos[2]];
     else if (ang === 'high') cam.pos = [cam.pos[0], cam.pos[1] + 4.2, cam.pos[2]];
     else if (ang === 'bird') cam.pos = [cam.pos[0], cam.pos[1] + 9.5, cam.pos[2]];
-    else if (ang === 'ots') cam.pos = [cam.pos[0] + 0.95, cam.pos[1] - 0.1, cam.pos[2]];
+    else if (ang === 'ots') {
+      // 越肩：机位撤到主体斜后方、贴近前景人物肩膀的高度
+      if (actor && (actor.x || actor.z)) {
+        const dx = cam.pos[0] - actor.x, dz = cam.pos[2] - actor.z;
+        const len = Math.hypot(dx, dz) || 1;
+        const nd = Math.max(1.05, len * 0.38);
+        const px = -dz / len, pz = dx / len; // 侧向
+        cam.pos = [actor.x + (dx / len) * nd + px * 0.52, Math.max(1.42, cam.pos[1] * 0.55 + 0.72), actor.z + (dz / len) * nd + pz * 0.52];
+      } else {
+        cam.pos = [cam.pos[0] + 0.95, Math.max(1.42, cam.pos[1] - 0.1), cam.pos[2]];
+      }
+    }
     else if (ang === 'dutch') cam.roll = 0.16;
     if (ang !== 'dutch' && cam._tgt) Object.assign(cam, lookAt(cam.pos, cam._tgt));
   }
@@ -481,12 +521,35 @@ class WhiteModelRenderer {
     /* 场景对象：多人物（各自动作/朝向/大小）+ 道具 */
     const objs = (opts.scene && opts.scene.objects) || [];
     const sceneActors = objs.filter(o => o.type === 'actor');
-    const actorDefs = sceneActors.length
-      ? sceneActors.map((o, i) => ({
-          x: o.x, z: o.z, yaw: (o.rot || 0) * DEG, scale: o.scale || 1,
-          pose: { phase: t * Math.PI * 6 * (o.action === 'run' ? 1.7 : 1) + i * 1.7, walk: o.action === 'walk' ? 0.55 : o.action === 'run' ? 0.95 : 0, sit: o.action === 'sit' },
-        }))
+    let actorDefs = sceneActors.length
+      ? sceneActors.map((o, i) => {
+          let x = o.x, z = o.z, yaw = (o.rot || 0) * DEG;
+          let moving = o.action === 'walk' || o.action === 'run';
+          if (o.path && o.path.length >= 2) {
+            const pp = pathPosAt(o, t);
+            x = pp.x; z = pp.z;
+            yaw = pp.yaw * DEG;
+            moving = true;
+          }
+          return {
+            x, z, yaw, scale: o.scale || 1,
+            pose: { phase: t * Math.PI * 6 * (o.action === 'run' ? 1.7 : 1) + i * 1.7, walk: moving ? (o.action === 'run' ? 0.95 : 0.55) : 0, sit: o.action === 'sit' },
+          };
+        })
       : [{ x: actor.x, z: actor.z, yaw: actor.yaw, scale: 1, pose: { phase: actor.phase, walk: actor.walk, sit: actor.sit } }];
+    if (opts.angle === 'ots' && !(opts.hideActor || sim.type === 'pov')) {
+      const fx0 = (cam._tgt ? cam._tgt[0] - cam.pos[0] : 0), fz0 = (cam._tgt ? cam._tgt[2] - cam.pos[2] : -1);
+      const fl = Math.hypot(fx0, fz0) || 1;
+      const fw = { x: fx0 / fl, z: fz0 / fl };
+      actorDefs = actorDefs.slice();
+      actorDefs.push({
+        x: cam.pos[0] + fw.x * 0.62 + fw.z * 0.34,
+        z: cam.pos[2] + fw.z * 0.62 - fw.x * 0.34,
+        yaw: cam.yaw + Math.PI, scale: 1.06,
+        pose: { phase: 0, walk: 0, sit: false },
+        ots: true,
+      });
+    }
     const parts = (opts.hideActor || sim.type === 'pov') ? [] : actorDefs.map(d => ({ d, parts: buildActor(d.pose) }));
     const propParts = (opts.hideActor ? [] : objs.filter(o => o.type === 'prop')).map(o => propPart(o));
 
@@ -522,7 +585,7 @@ class WhiteModelRenderer {
         polys.push({ pts: pts2, n, shade: poly.shade, d: pts2.reduce((a, p2) => a + p2.d, 0) / pts2.length });
       }
     };
-    for (const part of buildScene(this.scene)) collectPart(part, 0, 0, 0, 0, 1);
+    for (const part of buildScene((opts.scene && opts.scene.base) || this.scene)) collectPart(part, 0, 0, 0, 0, 1);
     for (const pp of propParts) collectPart(pp, 0, 0, 0, 0, 1);
     for (const ap of parts) for (const part of ap.parts) collectPart(part, ap.d.x, 0, ap.d.z, ap.d.yaw, ap.d.scale);
 
