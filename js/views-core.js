@@ -792,6 +792,7 @@ function openSceneBuilder(shot, onSaved) {
       <div class="modal-actions">
         <button class="btn btn-ghost btn-sm" id="sbClear">🗑 清空场景</button>
         <div class="spacer"></div>
+        <button class="btn btn-ghost" id="sbMax">⛶ 放大搭建</button>
         <button class="btn btn-ghost" id="sbCancel">取消</button>
         <button class="btn btn-primary" id="sbSave">💾 保存场景</button>
       </div>`,
@@ -973,6 +974,13 @@ function openSceneBuilder(shot, onSaved) {
 
   m.body.querySelector('#sbClear').onclick = () => { scene.objects = []; selIdx = -1; renderProps(); };
   m.body.querySelector('#sbCancel').onclick = () => m.close();
+  m.body.querySelector('#sbMax').onclick = () => {
+    const box = m.root.querySelector('.modal');
+    box.classList.toggle('modal-super');
+    const sup = box.classList.contains('modal-super');
+    m.body.querySelector('#sbMax').textContent = sup ? '🗗 还原大小' : '⛶ 放大搭建';
+    renderer.resize();
+  };
   m.body.querySelector('#sbSave').onclick = () => {
     pathDraw = false; pathTarget = null;
     store.updateShot(shot.id, {
