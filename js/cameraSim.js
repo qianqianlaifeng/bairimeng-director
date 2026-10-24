@@ -573,7 +573,19 @@ class WhiteModelRenderer {
       });
     }
     const parts = (opts.hideActor || sim.type === 'pov') ? [] : actorDefs.map(d => ({ d, parts: buildActor(d.pose) }));
-    const propParts = (opts.hideActor ? [] : objs.filter(o => o.type === 'prop')).map(o => propPart(o));
+    let propObjs = (opts.hideActor ? [] : objs.filter(o => o.type === 'prop'));
+    if (opts.scene && opts.scene.cutaway) {
+      // 剖开前方外墙：剔除面向相机的墙
+      const azR = ((opts.scene.cam && opts.scene.cam.az) || 0) * DEG;
+      const camX = Math.sin(azR) * (opts.scene.cam?.dist || 7), camZ = Math.cos(azR) * (opts.scene.cam?.dist || 7);
+      propObjs = propObjs.filter(o => {
+        if (o.shape !== 'wall') return true;
+        const rr = (o.rot || 0) * DEG;
+        const nx = Math.sin(rr), nz = Math.cos(rr);
+        return (nx * (camX - o.x) + nz * (camZ - o.z)) <= 0;
+      });
+    }
+    const propParts = propObjs.map(o => propPart(o));
 
     /* ---- 收集多边形（场景 + 关节化演员） ---- */
     const polys = [];
