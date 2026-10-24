@@ -106,6 +106,7 @@ function openDictDetail(mv) {
   store.addXP(1, '学习运镜');
   const m = modal({
     title: `${mv.name} · ${mv.en}`, wide: true,
+    onClose: () => player.destroy(),
     body: `
       <div class="dict-detail">
         <div class="dict-detail-stage">
@@ -142,9 +143,6 @@ function openDictDetail(mv) {
   m.body.querySelector('#ddCopy').onclick = () => copyText(mv.prompt);
   const useBtn = m.body.querySelector('#ddUse');
   if (useBtn) useBtn.onclick = () => { m.close(); assignMove(mv.key); };
-  const origClose = m.close;
-  m.close = (r) => { player.destroy(); origClose(r); };
-  m.body.querySelector('.modal-x').onclick = () => m.close(null);
 }
 
 /* 把运镜指派给当前项目某个镜头 */
