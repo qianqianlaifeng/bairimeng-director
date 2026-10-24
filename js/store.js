@@ -28,13 +28,14 @@ function save(key, val) {
 
 /* ---------------- 默认值 ---------------- */
 const DEFAULT_SETTINGS = {
-  theme: 'obsidian',
+  theme: 'porcelain',  // 白瓷浅色（对齐原版导演台观感）
   background: 'aurora',
   bgMask: 40,
   effects: true,       // 动效全开
-  noise: false,        // 噪点质感（默认关闭，工具风格更干净）
+  noise: false,        // 噪点质感（默认关闭）
   api: null,           // {name,url,model,key}
   lastProjectId: null,
+  uiRev: 2,            // 2 = 浅色红点缀视觉
 };
 
 /* ---------------- 项目模型 ---------------- */
@@ -75,6 +76,12 @@ function newProject(name, aspect = '16:9') {
 class Store {
   constructor() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, load(LS.settings, {}));
+    // 视觉 v3 迁移：老设置一次性切到浅色主题
+    if (!this.settings.uiRev || this.settings.uiRev < 2) {
+      this.settings.theme = 'porcelain';
+      this.settings.uiRev = 2;
+      this.persistSettings();
+    }
     this.projects = load(LS.projects, []);
     this.achv = Object.assign({
       xp: 0, unlocked: {}, lastCheckin: null, streak: 0, maxStreak: 0,
