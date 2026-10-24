@@ -315,11 +315,12 @@ export function renderStoryboard(container) {
         openShotEditor(s, i);
       });
       grid.appendChild(card);
-      // 缩略图：有参考图用图，否则白模静帧
+      // 缩略图：参考图 > 手绘稿 > 白模静帧
       const cv = card.querySelector('.shot-thumb');
       const img = card.querySelector('.shot-img');
-      if (s.image) {
-        store.getImage(s.image).then(blob => {
+      const thumbKey = s.image || s.sketch;
+      if (thumbKey) {
+        store.getImage(thumbKey).then(blob => {
           if (!blob || !document.body.contains(card)) return;
           const url = URL.createObjectURL(blob);
           img.src = url; img.style.display = '';
@@ -368,6 +369,10 @@ export function renderStoryboard(container) {
     if (!p.shots.length) { toast('分镜板是空的，先拆个分镜', 'warn'); return; }
     window.dispatchEvent(new CustomEvent('bdm-nav', { detail: { view: 'animatic' } }));
   };
+
+  /* 数据变化时刷新卡片（加/删/改镜头立即反映） */
+  const refreshFn = () => { if (document.body.contains(grid)) renderCards(); };
+  store.subscribe(refreshFn);
 
   /* 傻瓜模式 */
   container.querySelector('#btnSimpleMode').onclick = () => {
@@ -461,6 +466,15 @@ export function openShotEditor(shot, idx) {
             <button class="btn btn-ghost" id="edImgDel" style="display:none">移除图片</button>
           </div>
         </div>
+        <div class="form-row">
+          <label>手绘分镜稿（可选 · 动态分镜会播放手绘稿）</label>
+          <canvas id="edSketch" class="sketch-pad" width="640" height="360"></canvas>
+          <div class="img-ops" style="margin-top:6px">
+            <button class="btn btn-ghost btn-sm" id="edSketchClear">🗑 清空重画</button>
+            <button class="btn btn-ghost btn-sm" id="edSketchSave">💾 保存手绘稿</button>
+            <span class="dim sketch-hint">按住鼠标在画板上画</span>
+          </div>
+        </div>
       </div>
       <div class="editor-right">
         <div class="form-row"><label>画面描述</label><textarea id="edDesc" class="input" rows="3" placeholder="谁、在哪、做什么，越具体越好">${esc(shot.desc)}</textarea></div>
@@ -533,7 +547,8 @@ export function openShotEditor(shot, idx) {
     imgDel.style.display = '';
     imgEl.onload = () => { imgEl.classList.add('kb-play'); };
   };
-  if (shot.image) store.getImage(shot.image).then(showImg);
+  const overlayKey = shot.image || shot.sketch;
+  if (overlayKey) store.getImage(overlayKey).then(showImg);
   m.body.querySelector('#edImgUp').onclick = async () => {
     const f = await pickFile('image/*');
     if (!f) return;
@@ -547,6 +562,44 @@ export function openShotEditor(shot, idx) {
     imgEl.style.display = 'none'; imgDel.style.display = '';
     cv.style.display = '';
     playMove();
+  };
+
+  /* 手绘分镜稿画板 */
+  const skCanvas = m.body.querySelector('#edSketch');
+  const skCtx = skCanvas.getContext('2d');
+  const paperFill = () => { skCtx.fillStyle = '#faf9f4'; skCtx.fillRect(0, 0, skCanvas.width, skCanvas.height); };
+  let skDirty = false;
+  paperFill();
+  if (shot.sketch) {
+    store.getImage(shot.sketch).then(blob => {
+      if (!blob) return;
+      const img = new Image();
+      img.onload = () => skCtx.drawImage(img, 0, 0, skCanvas.width, skCanvas.height);
+      img.src = URL.createObjectURL(blob);
+    });
+  }
+  let drawing = false, lastPt = null;
+  const ptOf = (e) => {
+    const r = skCanvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * skCanvas.width / r.width, y: (e.clientY - r.top) * skCanvas.height / r.height };
+  };
+  skCanvas.addEventListener('pointerdown', e => { drawing = true; lastPt = ptOf(e); try { skCanvas.setPointerCapture(e.pointerId); } catch {} });
+  skCanvas.addEventListener('pointermove', e => {
+    if (!drawing) return;
+    const pt = ptOf(e);
+    skCtx.strokeStyle = '#2a2f3a'; skCtx.lineWidth = 3; skCtx.lineCap = 'round'; skCtx.lineJoin = 'round';
+    skCtx.beginPath(); skCtx.moveTo(lastPt.x, lastPt.y); skCtx.lineTo(pt.x, pt.y); skCtx.stroke();
+    lastPt = pt; skDirty = true;
+  });
+  skCanvas.addEventListener('pointerup', () => { drawing = false; });
+  m.body.querySelector('#edSketchClear').onclick = async () => {
+    paperFill(); skDirty = false;
+    await store.deleteSketch(shot.id);
+    toast('手绘稿已清空');
+  };
+  m.body.querySelector('#edSketchSave').onclick = () => {
+    if (!skDirty) { toast('画板上还没有新画的内容'); return; }
+    skCanvas.toBlob(async b => { if (b) await store.attachSketch(shot.id, b); }, 'image/png');
   };
 
   m.body.querySelector('#edMove').onchange = playMove;
