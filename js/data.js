@@ -161,6 +161,10 @@ const CAMERA_MOVES = [
     desc: '猛推到位后定住，配打击音效就是免费的情绪爆点。',
     prompt: '镜头快速推近到位后定住，snap zoom then hold, punch in, dramatic beat',
     sim: { type: 'dolly', dir: 'in', speed: 2.2, hold: 0.4 } },
+  { key: 'free',       name: '自由机位',   en: 'Free Camera',        cat: '特殊',
+    desc: '在场景搭建器里手动设计机位：方位角、距离、高度、视野全部自定义。',
+    prompt: '自定义机位拍摄，custom camera position, manual framing, art-directed shot',
+    sim: { type: 'free' } },
 ];
 
 /* 运镜分类 */
