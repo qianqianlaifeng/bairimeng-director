@@ -3,7 +3,7 @@
  * localStorage：设置 / 项目 / 成就
  * IndexedDB  ：镜头参考图（避免撑爆 localStorage）
  * ============================================================ */
-import { LEVELS, BADGES } from './data.js';
+import { LEVELS, BADGES, CAMERA_MOVES } from './data.js';
 
 const LS = {
   settings: 'bdm_settings_v1',
@@ -53,6 +53,8 @@ function newShot(partial = {}) {
     transition: 'cut',
     image: null,        // IndexedDB key（参考图）
     sketch: null,       // IndexedDB key（手绘分镜稿）
+    moveSpeed: 'std',   // 运镜速度 slow/std/fast
+    scene: null,        // 场景搭建 {objects:[], cam:}
     note: '',
     review: null,       // {score, checks:{...}, note}
     ...partial,
@@ -90,6 +92,7 @@ class Store {
       counts: { shots: 0, prompts: 0, dictViews: {}, breakdowns: 0, previews: 0 },
       checkinHistory: [],
     }, load(LS.achv, {}));
+    this.refs = load('bdm_refs_v1', []);
     this.activeId = this.settings.lastProjectId;
     if (!this.projects.find(p => p.id === this.activeId)) this.activeId = null;
     this.listeners = [];
@@ -278,7 +281,22 @@ class Store {
     this.persistAchv();
     const n = Object.keys(this.achv.counts.dictViews).length;
     if (n >= 10) this.unlock('dictLearner');
-    if (n >= 36) this.unlock('dictMaster');
+    if (n >= CAMERA_MOVES.length) this.unlock('dictMaster');
+  }
+
+  /* ---------- 资料文档库（审核标准 / 风格模板等，仅存本地） ---------- */
+  addRef(name, text) {
+    this.refs.push({ id: uid(), name: (name || '未命名文档').slice(0, 40), text: String(text).slice(0, 20000) });
+    if (this.refs.length > 12) this.refs.shift();
+    this.saveRefs();
+    this._notify('文档已加入资料库 📚');
+  }
+  delRef(id) { this.refs = this.refs.filter(r => r.id !== id); this.saveRefs(); }
+  saveRefs() { save('bdm_refs_v1', this.refs); }
+  selectedRefText() {
+    const sel = this.settings.refSel || [];
+    const NL = String.fromCharCode(10);
+    return this.refs.filter(r => sel.includes(r.id)).map(r => '【' + r.name + '】' + NL + r.text).join(NL + NL);
   }
 
   /* ---------- 设置 ---------- */
@@ -372,6 +390,27 @@ class Store {
     this.updateShot(shotId, { sketch: key });
     this.addXP(2, '手绘分镜');
     this._notify('手绘分镜稿已保存 🎨');
+  }
+  /* ---------- 审核用成片截图 ---------- */
+  async attachReviewImg(shotId, file) {
+    const blob = await compressImage(file, 1280);
+    const key = await this.putImage(blob);
+    if (!key) { this._notify('截图保存失败（存储空间不足）', 'warn'); return null; }
+    this.updateShot(shotId, { reviewImg: key });
+    return key;
+  }
+  async getReviewImgData(shotId) {
+    const p = this.active; if (!p) return null;
+    const s = p.shots.find(x => x.id === shotId);
+    if (!s?.reviewImg) return null;
+    const blob = await this.getImage(s.reviewImg);
+    if (!blob) return null;
+    return new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = () => res(null);
+      fr.readAsDataURL(blob);
+    });
   }
   async deleteSketch(shotId) {
     const p = this.active; if (!p) return;
