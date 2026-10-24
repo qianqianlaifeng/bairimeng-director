@@ -15,85 +15,153 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const easeInOut = t => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 const easeOut = t => 1 - Math.pow(1 - t, 3);
 
-/* ---------- 盒体几何 ---------- */
-function makeBox(cx, cy, cz, w, h, d, opt = {}) {
-  return { c: [cx, cy, cz], s: [w, h, d], ...opt }; // opt: pivot, rotX, shade, skipFaces
+/* ---------- 变换工具 ---------- */
+function rotXpt(pt, pivot, ang) {
+  if (!ang) return pt;
+  const dy = pt[1] - pivot[1], dz = pt[2] - pivot[2];
+  const c = Math.cos(ang), s = Math.sin(ang);
+  return [pt[0], pivot[1] + dy * c - dz * s, pivot[2] + dy * s + dz * c];
 }
-function boxCorners(b) {
-  const px = b.pivot ? b.pivot[0] : 0, py = b.pivot ? b.pivot[1] : 0, pz = b.pivot ? b.pivot[2] : 0;
-  const cx = b.c[0] - px, cy = b.c[1] - py, cz = b.c[2] - pz;
-  const hx = b.s[0] / 2, hy = b.s[1] / 2, hz = b.s[2] / 2;
-  const out = [];
-  for (const dz of [-1, 1]) for (const dy of [-1, 1]) for (const dx of [-1, 1])
-    out.push([cx + dx * hx, cy + dy * hy, cz + dz * hz]);
-  return out;
+function rotYpt(pt, pivot, ang) {
+  if (!ang) return pt;
+  const dx = pt[0] - pivot[0], dz = pt[2] - pivot[2];
+  const c = Math.cos(ang), s = Math.sin(ang);
+  return [pivot[0] + dx * c + dz * s, pt[1], pivot[2] - dx * s + dz * c];
 }
-/* 8 角标号：
- * 0(-,-,-) 1(+,-,-) 2(-,+,-) 3(+,+,-) 4(-,-,+) 5(+,-,+) 6(-,+,+) 7(+,+,+)
- * 六个面（外向为准，仅用于光照法线，剔除交给画家算法） */
-const BOX_FACES = [
-  [4, 5, 7, 6], // +z
-  [1, 0, 2, 3], // -z
-  [5, 1, 3, 7], // +x
-  [0, 4, 6, 2], // -x
-  [6, 7, 3, 2], // +y
-  [0, 1, 5, 4], // -y
-];
-const FACE_NORMALS = [
-  [0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0],
-];
 
-/* ---------- 演员（人形白模） ---------- */
+/* ---------- 几何图元（返回 {pts, n, shade} 多边形列表，中性演员局部坐标） ---------- */
+function boxPolys(cx, cy, cz, w, h, d, shade = 0.9) {
+  const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2, z0 = cz - d / 2, z1 = cz + d / 2;
+  const q = (a, b, c2, d2, n) => ({ pts: [a, b, c2, d2], n, shade });
+  return [
+    q([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0, 0, 1]),
+    q([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [0, 0, -1]),
+    q([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [1, 0, 0]),
+    q([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [-1, 0, 0]),
+    q([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], [0, 1, 0]),
+    q([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [0, -1, 0]),
+  ];
+}
+/* 棱台（圆截面柱/锥台）：躯干、四肢 */
+function frustumPolys(cx, cy, cz, r1, r2, h, sides = 8, shade = 0.94) {
+  const polys = [], bot = [], top = [];
+  for (let i = 0; i < sides; i++) {
+    const a = (i / sides) * Math.PI * 2;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    bot.push([cx + ca * r1, cy, cz + sa * r1]);
+    top.push([cx + ca * r2, cy + h, cz + sa * r2]);
+  }
+  for (let i = 0; i < sides; i++) {
+    const j = (i + 1) % sides;
+    const mx = (bot[i][0] + bot[j][0] + top[i][0] + top[j][0]) / 4 - cx;
+    const mz = (bot[i][2] + bot[j][2] + top[i][2] + top[j][2]) / 4 - cz;
+    const l = Math.hypot(mx, mz) || 1;
+    polys.push({ pts: [bot[i], bot[j], top[j], top[i]], n: [mx / l, 0, mz / l], shade });
+  }
+  polys.push({ pts: top.slice().reverse(), n: [0, 1, 0], shade: Math.min(1.04, shade + 0.06) });
+  polys.push({ pts: bot, n: [0, -1, 0], shade: shade - 0.12 });
+  return polys;
+}
+/* 低多边形球：头、手 */
+function spherePolys(cx, cy, cz, r, stacks = 4, sectors = 8, shade = 0.97) {
+  const polys = [];
+  const pt = (i, j) => {
+    const th = (i / stacks) * Math.PI, ph = (j / sectors) * Math.PI * 2;
+    return [cx + r * Math.sin(th) * Math.cos(ph), cy + r * Math.cos(th), cz + r * Math.sin(th) * Math.sin(ph)];
+  };
+  for (let i = 0; i < stacks; i++) for (let j = 0; j < sectors; j++) {
+    const j2 = (j + 1) % sectors;
+    const a = pt(i, j), b = pt(i, j2), c2 = pt(i + 1, j2), d = pt(i + 1, j);
+    let n = [(a[0] + b[0] + c2[0] + d[0]) / 4 - cx, (a[1] + b[1] + c2[1] + d[1]) / 4 - cy, (a[2] + b[2] + c2[2] + d[2]) / 4 - cz];
+    const l = Math.hypot(n[0], n[1], n[2]) || 1;
+    polys.push({ pts: [a, b, c2, d], n: [n[0] / l, n[1] / l, n[2] / l], shade });
+  }
+  return polys;
+}
+
+/* ---------- 演员白模（关节链接的小人：肩/肘/髋/膝 正向动力学） ----------
+ * parts: [{ polys, joints }]，joints 从近端到远端排列，渲染时按远端优先依次施加旋转 */
 function buildActor(pose) {
-  // pose: {phase, walk(0~1 强度), sit, lean}
-  const swing = Math.sin(pose.phase) * pose.walk;
+  const p = pose.phase, wk = pose.walk;
   const parts = [];
-  const P = (x, y, z) => [x, y, z];
+  const add = (polys, joints) => parts.push({ polys, joints: joints || [] });
+
   if (pose.sit) {
-    // 坐姿：降低躯干，大腿前伸
-    parts.push(makeBox(0, 0.72, 0.02, 0.46, 0.6, 0.28, { shade: 0.98 }));            // 躯干(坐)
-    parts.push(makeBox(0, 1.14, 0.02, 0.26, 0.26, 0.24, { shade: 1.0 }));            // 头
-    parts.push(makeBox(0, 0.5, -0.32, 0.16, 0.14, 0.55, { shade: 0.9 }));            // 大腿前伸
-    parts.push(makeBox(0, 0.14, -0.34, 0.14, 0.5, 0.14, { shade: 0.88 }));           // 小腿垂直
-  } else {
-    parts.push(makeBox(0, 1.18, 0, 0.5, 0.66, 0.3, { shade: 0.98 }));                // 躯干
-    parts.push(makeBox(0, 1.60, 0, 0.27, 0.27, 0.25, { shade: 1.0 }));               // 头
-    // 腿：绕髋部 X 轴摆动
-    parts.push(makeBox(-0.13, 0.42, 0, 0.17, 0.8, 0.2, { pivot: P(-0.13, 0.83, 0), rotX: swing * 0.7, shade: 0.88 }));
-    parts.push(makeBox(0.13, 0.42, 0, 0.17, 0.8, 0.2, { pivot: P(0.13, 0.83, 0), rotX: -swing * 0.7, shade: 0.86 }));
-    // 手臂：绕肩部反相摆动
-    parts.push(makeBox(-0.34, 1.12, 0, 0.13, 0.58, 0.16, { pivot: P(-0.34, 1.38, 0), rotX: -swing * 0.55, shade: 0.94 }));
-    parts.push(makeBox(0.34, 1.12, 0, 0.13, 0.58, 0.16, { pivot: P(0.34, 1.38, 0), rotX: swing * 0.55, shade: 0.92 }));
+    add(boxPolys(0, 0.50, 0.02, 0.36, 0.17, 0.26, 0.96));                            // 骨盆
+    add(frustumPolys(0, 0.585, 0, 0.13, 0.165, 0.50));                               // 躯干
+    add(frustumPolys(0, 1.085, 0, 0.05, 0.05, 0.09));                                // 颈
+    add(spherePolys(0, 1.30, 0, 0.14));                                              // 头
+    for (const s of [-1, 1]) {
+      const hipJ = { pivot: [s * 0.09, 0.56, 0], angle: -1.42 };
+      const kneeJ = { pivot: [s * 0.09, 0.24, 0], angle: 1.36 };
+      add(frustumPolys(s * 0.09, 0.24, 0, 0.062, 0.05, 0.34), [hipJ]);               // 大腿
+      add(frustumPolys(s * 0.09, -0.08, 0, 0.05, 0.036, 0.32), [hipJ, kneeJ]);       // 小腿
+      add(boxPolys(s * 0.09, -0.25, 0.05, 0.09, 0.05, 0.18, 0.86), [hipJ, kneeJ]);   // 脚
+      const shJ = { pivot: [s * 0.20, 1.06, 0], angle: 0.4 };
+      const elJ = { pivot: [s * 0.20, 0.80, 0], angle: 0.55 };
+      add(frustumPolys(s * 0.20, 0.80, 0, 0.045, 0.037, 0.26), [shJ]);               // 上臂
+      add(frustumPolys(s * 0.20, 0.54, 0, 0.037, 0.03, 0.24), [shJ, elJ]);           // 前臂
+      add(spherePolys(s * 0.20, 0.505, 0, 0.04, 3, 6, 0.99), [shJ, elJ]);            // 手
+    }
+    return parts;
+  }
+
+  const thighA = Math.sin(p) * 0.55 * wk;
+  const thighB = -Math.sin(p) * 0.55 * wk;
+  const kneeA = Math.max(0, -Math.sin(p - 0.8)) * 0.85 * wk + 0.06;
+  const kneeB = Math.max(0, Math.sin(p - 0.8)) * 0.85 * wk + 0.06;
+  const armA = -Math.sin(p) * 0.5 * wk;
+  const armB = Math.sin(p) * 0.5 * wk;
+
+  add(boxPolys(0, 0.84, 0, 0.34, 0.16, 0.24, 0.96));                                 // 骨盆
+  add(frustumPolys(0, 0.92, 0, 0.135, 0.17, 0.50));                                  // 躯干
+  add(frustumPolys(0, 1.42, 0, 0.05, 0.05, 0.09));                                   // 颈
+  add(spherePolys(0, 1.655, 0, 0.145));                                              // 头
+  for (const s of [-1, 1]) {
+    const isA = s === -1;
+    const th = isA ? thighA : thighB;
+    const kn = isA ? kneeA : kneeB;
+    const hipJ = { pivot: [s * 0.09, 0.84, 0], angle: th };
+    const kneeJ = { pivot: [s * 0.09, 0.50, 0], angle: kn };
+    add(frustumPolys(s * 0.09, 0.50, 0, 0.065, 0.052, 0.34), [hipJ]);                // 大腿
+    add(frustumPolys(s * 0.09, 0.19, 0, 0.05, 0.037, 0.33), [hipJ, kneeJ]);          // 小腿
+    add(boxPolys(s * 0.09, 0.035, 0.05, 0.095, 0.06, 0.19, 0.86), [hipJ, kneeJ]);    // 脚
+    const shJ = { pivot: [s * 0.215, 1.36, 0], angle: isA ? armA : armB };
+    const elJ = { pivot: [s * 0.215, 1.10, 0], angle: 0.28 + Math.max(0, isA ? armA : armB) * 0.8 };
+    add(frustumPolys(s * 0.215, 1.10, 0, 0.048, 0.038, 0.26), [shJ]);                // 上臂
+    add(frustumPolys(s * 0.215, 0.84, 0, 0.038, 0.03, 0.24), [shJ, elJ]);            // 前臂
+    add(spherePolys(s * 0.215, 0.80, 0, 0.042, 3, 6, 0.99), [shJ, elJ]);             // 手
   }
   return parts;
 }
 
-/* ---------- 场景布景 ---------- */
-function buildScene(sceneKey, actorX, actorZ) {
-  const boxes = [];
+/* ---------- 场景布景（白模方块） ---------- */
+function buildScene(sceneKey) {
+  const parts = [];
+  const B = (...args) => parts.push({ polys: boxPolys(...args), joints: [] });
   if (sceneKey === 'street') {
     for (let i = -3; i <= 3; i++) {
       if (Math.abs(i) < 1) continue;
       const h = 3 + ((i * 7 + 5) % 4);
-      boxes.push(makeBox(i * 3.2, h / 2, -7, 2.4, h, 2.4, { shade: 0.8 }));
-      boxes.push(makeBox(i * 3.2, h / 2 - 0.6, 7.5, 2.4, h + 1, 2.4, { shade: 0.74 }));
+      B(i * 3.2, h / 2, -7, 2.4, h, 2.4, 0.8);
+      B(i * 3.2, h / 2 - 0.6, 7.5, 2.4, h + 1, 2.4, 0.74);
     }
-    boxes.push(makeBox(0, 0.02, 0, 24, 0.04, 5, { shade: 0.62 })); // 路面
+    B(0, 0.02, 0, 24, 0.04, 5, 0.62); // 路面
   } else if (sceneKey === 'room') {
-    boxes.push(makeBox(0, 2, -5.4, 12, 4, 0.3, { shade: 0.84 }));   // 后墙
-    boxes.push(makeBox(-5.8, 2, 0, 0.3, 4, 11, { shade: 0.78 }));   // 左墙
-    boxes.push(makeBox(5.8, 2, 0, 0.3, 4, 11, { shade: 0.78 }));    // 右墙
-    boxes.push(makeBox(-3.4, 0.5, -3.4, 2.4, 0.1, 1.4, { pivot: [-3.4, 1.0, -3.4], rotX: 0, shade: 0.9 })); // 桌板
-    boxes.push(makeBox(-3.4, 0.42, -3.4, 0.12, 0.85, 0.12, { shade: 0.7 }));
-    boxes.push(makeBox(-3.4, 0.42, -2.4, 0.12, 0.85, 0.12, { shade: 0.7 }));
-    boxes.push(makeBox(3.2, 0.55, -4.2, 1.4, 1.1, 0.5, { shade: 0.76 })); // 柜子
+    B(0, 2, -5.4, 12, 4, 0.3, 0.84);   // 后墙
+    B(-5.8, 2, 0, 0.3, 4, 11, 0.78);   // 左墙
+    B(5.8, 2, 0, 0.3, 4, 11, 0.78);    // 右墙
+    B(-3.4, 0.95, -3.4, 2.4, 0.1, 1.4, 0.9);  // 桌板
+    B(-3.4, 0.42, -3.4, 0.12, 0.85, 0.12, 0.7);
+    B(-3.4, 0.42, -2.4, 0.12, 0.85, 0.12, 0.7);
+    B(3.2, 0.55, -4.2, 1.4, 1.1, 0.5, 0.76);  // 柜子
   } else if (sceneKey === 'stage') {
-    boxes.push(makeBox(0, 0.3, 0, 6, 0.6, 5, { shade: 0.92 }));      // 台面
-    boxes.push(makeBox(-2.8, 1.8, -1.8, 0.5, 3.6, 0.5, { shade: 0.7 }));
-    boxes.push(makeBox(2.8, 1.8, -1.8, 0.5, 3.6, 0.5, { shade: 0.7 }));
-    boxes.push(makeBox(0, 4.6, -3.4, 10, 0.4, 1.2, { shade: 0.82 })); // 顶幕
+    B(0, 0.3, 0, 6, 0.6, 5, 0.92);     // 台面
+    B(-2.8, 1.8, -1.8, 0.5, 3.6, 0.5, 0.7);
+    B(2.8, 1.8, -1.8, 0.5, 3.6, 0.5, 0.7);
+    B(0, 4.6, -3.4, 10, 0.4, 1.2, 0.82); // 顶幕
   }
-  return boxes;
+  return parts;
 }
 
 /* ---------- 相机求解 ---------- */
@@ -359,41 +427,41 @@ class WhiteModelRenderer {
     const parts = (opts.hideActor || sim.type === 'pov') ? [] : buildActor({
       phase: actor.phase, walk: actor.walk, sit: actor.sit,
     });
-    const rotY = (p, yaw) => {
-      const c = Math.cos(yaw), s = Math.sin(yaw);
-      return [p[0] * c + p[2] * s, p[1], -p[0] * s + p[2] * c];
-    };
-    const toWorld = (local, part) => {
-      let p = local.slice();
-      if (part.rotX) { // 绕 pivot 的 X 轴旋转
-        const pv = part.pivot;
-        const dy = p[1], dz = p[2];
-        const c = Math.cos(part.rotX), s = Math.sin(part.rotX);
-        p = [p[0], dy * c - dz * s, dy * s + dz * c];
-        p = [p[0] + pv[0], p[1] + pv[1], p[2] + pv[2]];
-      } else {
-        p = [p[0] + part.c[0], p[1] + part.c[1], p[2] + part.c[2]];
-      }
-      p = rotY(p, actor.yaw);
-      return [p[0] + actor.x, p[1] + actor.y, p[2] + actor.z];
-    };
 
-    /* ---- 收集多边形 ---- */
+    /* ---- 收集多边形（场景 + 关节化演员） ---- */
     const polys = [];
-    const pushBox = (part, worldFn) => {
-      const corners = boxCorners(part).map(l => worldFn(l, part));
-      for (let f = 0; f < 6; f++) {
-        const idx = BOX_FACES[f];
-        const pts = idx.map(i => this.project(corners[i], cam, focal, cx, cyv));
-        if (pts.some(p => !p)) continue;
-        const n = rotY(FACE_NORMALS[f], actor.yaw);
-        polys.push({ pts, n, shade: part.shade || 0.85, d: (pts[0].d + pts[1].d + pts[2].d + pts[3].d) / 4 });
+    const collectPart = (part, ax, ay, az, ayaw) => {
+      for (const poly of part.polys) {
+        const pts3 = [];
+        let ok = true;
+        for (const pt of poly.pts) {
+          let w = pt;
+          for (let i = part.joints.length - 1; i >= 0; i--) {
+            const j = part.joints[i];
+            w = rotXpt(w, j.pivot, j.angle);
+          }
+          if (ayaw) w = rotYpt(w, [0, 0, 0], ayaw);
+          w = [w[0] + ax, w[1] + ay, w[2] + az];
+          pts3.push(w);
+        }
+        let n = poly.n;
+        for (let i = part.joints.length - 1; i >= 0; i--) {
+          const j = part.joints[i];
+          n = rotXpt(n, j.pivot, j.angle);
+        }
+        if (ayaw) n = rotYpt(n, [0, 0, 0], ayaw);
+        const pts2 = [];
+        for (const w of pts3) {
+          const pr = this.project(w, cam, focal, cx, cyv);
+          if (!pr) { ok = false; break; }
+          pts2.push(pr);
+        }
+        if (!ok) continue;
+        polys.push({ pts: pts2, n, shade: poly.shade, d: pts2.reduce((a, p2) => a + p2.d, 0) / pts2.length });
       }
     };
-    // 布景
-    for (const b of buildScene(this.scene)) pushBox(b, (l, part) => [l[0] + part.c[0], l[1] + part.c[1], l[2] + part.c[2]]);
-    // 演员
-    for (const part of parts) pushBox(part, toWorld);
+    for (const part of buildScene(this.scene)) collectPart(part, 0, 0, 0, 0);
+    for (const part of parts) collectPart(part, actor.x, actor.y, actor.z, actor.yaw);
 
     /* ---- 地面（填充面 + 网格） ---- */
     ctx.lineWidth = 1;
@@ -447,7 +515,7 @@ class WhiteModelRenderer {
       ctx.fillStyle = c;
       ctx.beginPath();
       ctx.moveTo(poly.pts[0].x, poly.pts[0].y);
-      for (let i = 1; i < 4; i++) ctx.lineTo(poly.pts[i].x, poly.pts[i].y);
+      for (let i = 1; i < poly.pts.length; i++) ctx.lineTo(poly.pts[i].x, poly.pts[i].y);
       ctx.closePath(); ctx.fill();
       if (poly.d < 14) { // 近处描边
         ctx.strokeStyle = 'rgba(255,255,255,0.10)';
