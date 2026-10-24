@@ -287,7 +287,8 @@ class WhiteModelRenderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.scene = 'plain';
-    this.theme = { bg1: '#182034', bg2: '#0e1322', ground: '#232837', line: 'rgba(150,168,208,.24)', fog: '#141a2b', ink: '#e8ecf6' };
+    this.theme = { bg1: '#eef1f5', bg2: '#e2e6ed', ground: '#d9dde5', line: 'rgba(96,106,134,.30)', fog: '#e9ecf1', ink: '#2a3040', hud: 'rgba(35,42,60,.38)' };
+    this._shadeLo = 150; this._shadeHi = 255;
     this._dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.resize();
   }
@@ -298,7 +299,22 @@ class WhiteModelRenderer {
     this.canvas.height = h * this._dpr;
     this.w = w; this.h = h;
   }
-  setTheme(t) { Object.assign(this.theme, t); }
+  setTheme(t) {
+    Object.assign(this.theme, t);
+    // 亮色场景自动改用「白模在浅灰舞台」的明暗区间
+    const hx = this.theme.bg1;
+    if (typeof hx === 'string' && /^#[0-9a-fA-F]{6}$/.test(hx)) {
+      const r = parseInt(hx.slice(1, 3), 16), g = parseInt(hx.slice(3, 5), 16), b = parseInt(hx.slice(5, 7), 16);
+      const lum = (r * 299 + g * 587 + b * 114) / 1000;
+      if (lum > 128) {
+        this._shadeLo = 178; this._shadeHi = 251;
+        if (!this.theme.hud) this.theme.hud = 'rgba(35,42,60,.38)';
+        if (!this.theme.ink) this.theme.ink = '#2a3040';
+      } else {
+        this._shadeLo = 150; this._shadeHi = 255;
+      }
+    }
+  }
 
   /* 投影单个点 → 屏幕坐标（返回 null 表示在近裁剪面后） */
   project(p, cam, focal, cx, cy) {
@@ -316,14 +332,20 @@ class WhiteModelRenderer {
     const ctx = this.ctx, W = this.w, H = this.h;
     ctx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
     const th = this.theme;
+    const isLight = this._shadeLo > 170;
     // 天空渐变
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, th.bg1); g.addColorStop(1, th.bg2);
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
     // 舞台顶光（柔光晕，制造摄影棚氛围）
     const glow = ctx.createRadialGradient(W / 2, H * 0.30, 0, W / 2, H * 0.30, Math.max(W, H) * 0.62);
-    glow.addColorStop(0, 'rgba(140,175,255,0.14)');
-    glow.addColorStop(0.55, 'rgba(120,150,230,0.05)');
+    if (isLight) {
+      glow.addColorStop(0, 'rgba(255,255,255,0.32)');
+      glow.addColorStop(0.55, 'rgba(232,238,250,0.10)');
+    } else {
+      glow.addColorStop(0, 'rgba(140,175,255,0.14)');
+      glow.addColorStop(0.55, 'rgba(120,150,230,0.05)');
+    }
     glow.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
 
@@ -396,7 +418,7 @@ class WhiteModelRenderer {
     for (const poly of polys) {
       const n = poly.n;
       const lit = clamp(n[0] * L[0] + n[1] * L[1] + n[2] * L[2], 0, 1);
-      const v = 150 + 105 * lit * (poly.shade || 0.9);
+      const v = this._shadeLo + (this._shadeHi - this._shadeLo) * lit * (poly.shade || 0.9);
       const fog = clamp(1 - poly.d / 30, 0.25, 1);
       const c = mixColor(th.fog, v, fog);
       ctx.fillStyle = c;
@@ -428,10 +450,10 @@ class WhiteModelRenderer {
       ctx.fillRect(0, 0, W, H);
     }
 
-    /* ---- 暗角（电影质感） ---- */
+    /* ---- 暗角（电影质感，浅色场景收敛强度） ---- */
     const vig = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.36, W / 2, H / 2, Math.max(W, H) * 0.75);
     vig.addColorStop(0, 'rgba(0,0,0,0)');
-    vig.addColorStop(1, 'rgba(0,0,0,0.34)');
+    vig.addColorStop(1, isLight ? 'rgba(40,48,70,0.14)' : 'rgba(0,0,0,0.34)');
     ctx.fillStyle = vig; ctx.fillRect(0, 0, W, H);
 
     /* ---- 电影黑边 + 标记 ---- */
@@ -442,7 +464,7 @@ class WhiteModelRenderer {
     }
     // 画面中心十字与 REC 角标（预演感）
     if (opts.hud) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+      ctx.strokeStyle = th.hud || 'rgba(255,255,255,0.16)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(cx - 8, cyv); ctx.lineTo(cx + 8, cyv);
@@ -452,7 +474,7 @@ class WhiteModelRenderer {
         ctx.fillStyle = '#ff5470';
         ctx.beginPath(); ctx.arc(18, 18, 5, 0, Math.PI * 2); ctx.fill();
       }
-      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillStyle = th.ink || 'rgba(255,255,255,0.75)';
       ctx.font = '10px system-ui';
       ctx.fillText('REC  ' + Math.round(t * 100) + '%', 30, 22);
     }
