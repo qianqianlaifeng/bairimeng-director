@@ -346,6 +346,16 @@ function solveCamera(sim, t, actor, opts = {}) {
       set([0, 1.7, 7], head);
   }
 
+  /* 景别：按景别缩放相机与主体的距离（远景远、特写近） */
+  const sizeF = { ELS: 2.3, LS: 1.65, MS: 1, MCU: 0.78, CU: 0.55, ECU: 0.35 }[opts.size || 'MS'] || 1;
+  if (sim.type !== 'free' && sizeF !== 1 && cam._tgt) {
+    const dx = cam.pos[0] - cam._tgt[0], dy = cam.pos[1] - cam._tgt[1], dz = cam.pos[2] - cam._tgt[2];
+    const cur = Math.hypot(dx, dy, dz) || 1;
+    const k = Math.max(0.95, cur * sizeF) / cur;
+    cam.pos = [cam._tgt[0] + dx * k, cam._tgt[1] + dy * k, cam._tgt[2] + dz * k];
+    Object.assign(cam, lookAt(cam.pos, cam._tgt));
+  }
+
   /* 角度叠加：在运镜机位基础上抬高/压低/偏移/转屏 */
   const ang = opts.angle || 'eye';
   if (sim.type !== 'free' && ang !== 'eye') {
@@ -463,7 +473,7 @@ class WhiteModelRenderer {
     // 运镜速度：快推提前走完并定住，慢推到结束时只走一部分
     const speedF = opts.moveSpeed === 'slow' ? 0.62 : opts.moveSpeed === 'fast' ? 1.55 : 1;
     // POV 模式不画演员（自己就是演员）
-    const cam = solveCamera(sim, clamp(t * speedF, 0, 1), actor, { angle: opts.angle, scene: opts.scene });
+    const cam = solveCamera(sim, clamp(t * speedF, 0, 1), actor, { angle: opts.angle, size: opts.size, scene: opts.scene });
     const focal = (H / 2) / Math.tan((cam.fov * DEG) / 2);
     const cx = W / 2, cyv = H / 2;
 
@@ -649,8 +659,8 @@ class MovePlayer {
     this.duration = 4;
     this.hud = true;
   }
-  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0, angle, moveSpeed } = {}) {
-    this.extra = { angle, moveSpeed };
+  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0, angle, moveSpeed, size } = {}) {
+    this.extra = { angle, moveSpeed, size };
     this.sim = sim; this.duration = duration;
     this.action = action; this.loop = loop;
     this.renderer.scene = scene;
@@ -660,10 +670,10 @@ class MovePlayer {
   }
   seek(sim, t, opts) {
     this.sim = sim; this.action = opts?.action || this.action || 'stand';
-    if (opts?.angle !== undefined) this.extra = { angle: opts.angle, moveSpeed: opts.moveSpeed };
+    if (opts?.angle !== undefined) this.extra = { angle: opts.angle, moveSpeed: opts.moveSpeed, size: opts.size };
     this.renderer.scene = opts?.scene || this.renderer.scene;
     this.duration = opts?.duration || this.duration;
-    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed });
+    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size });
   }
   stop() { this.playing = false; }
   destroy() { this.playing = false; if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
@@ -677,7 +687,7 @@ class MovePlayer {
         else { t = 1; this.playing = false; if (this.onEnd) this.onEnd(); }
       }
       this.t = t;
-      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed });
+      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size });
       if (this.onTick) this.onTick(t);
       this._raf = requestAnimationFrame(this._frame.bind(this));
     }
