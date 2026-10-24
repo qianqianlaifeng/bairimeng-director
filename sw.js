@@ -1,5 +1,5 @@
 /* 白日梦导演台 · Service Worker（离线可用） */
-const CACHE = 'bdm-v22';
+const CACHE = 'bdm-v24';
 const ASSETS = [
   './',
   './index.html',
@@ -32,19 +32,11 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (url.origin !== location.origin) return;
   if (e.request.method !== 'GET') return;
+  // 网络优先：在线永远拿最新代码，离线回落缓存
   e.respondWith(
-    caches.match(e.request).then(hit => {
-      if (hit) {
-        // 后台静默更新
-        fetch(e.request).then(res => {
-          if (res.ok) caches.open(CACHE).then(c => c.put(e.request, res.clone()));
-        }).catch(() => {});
-        return hit;
-      }
-      return fetch(e.request).then(res => {
-        if (res.ok) caches.open(CACHE).then(c => c.put(e.request, res.clone()));
-        return res;
-      });
-    })
+    fetch(e.request).then(res => {
+      if (res.ok) caches.open(CACHE).then(c => c.put(e.request, res.clone()));
+      return res;
+    }).catch(() => caches.match(e.request).then(hit => hit || caches.match('./index.html')))
   );
 });
