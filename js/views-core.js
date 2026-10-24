@@ -1213,6 +1213,7 @@ function openSceneBuilder(shot, onSaved) {
       renderProps();
       return;
     }
+    } catch (err) { console.warn('sb pointerup', err); }
   });
 
   m.body.querySelector('#sbAI').onclick = () => {
