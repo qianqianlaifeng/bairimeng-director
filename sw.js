@@ -1,5 +1,5 @@
 /* 白日梦导演台 · Service Worker（离线可用） */
-const CACHE = 'bdm-v20';
+const CACHE = 'bdm-v21';
 const ASSETS = [
   './',
   './index.html',
