@@ -1,8 +1,8 @@
 /* ============================================================
  * 白日梦导演台 · 运镜词典 + 运镜预演
  * ============================================================ */
-import { CAMERA_MOVES, MOVE_CATS, ACTOR_ACTIONS, STAGE_SCENES, ANGLES } from './data.js';
-import { MovePlayer } from './cameraSim.js';
+import { CAMERA_MOVES, MOVE_CATS, ACTOR_ACTIONS, STAGE_SCENES, ANGLES, SHOT_SIZES } from './data.js';
+import { MovePlayer, solveCamera, solveActor, clamp } from './cameraSim.js';
 import { moveByKey } from './breakdown.js';
 import { esc, el, modal, toast, copyText, opts } from './ui.js';
 
@@ -202,6 +202,10 @@ export function renderPreview(container, payload = {}) {
         </div>
       </div>
       <div class="preview-side">
+        <div class="card pv-map-card">
+          <div class="card-title">📷 机位俯视示意 <span class="dim">· 主体在中心，看镜头从哪来</span></div>
+          <canvas id="pvMap" width="252" height="252"></canvas>
+        </div>
         <div class="card">
           <div class="card-title">运镜</div>
           <div class="pv-move-list" id="pvMoves"></div>
@@ -210,6 +214,7 @@ export function renderPreview(container, payload = {}) {
           <div class="card-title">舞台设置</div>
           <div class="form-row"><label>人物动作</label><select id="pvAction" class="input">${opts(ACTOR_ACTIONS, 'stand')}</select></div>
           <div class="form-row"><label>布景</label><select id="pvScene" class="input">${opts(STAGE_SCENES, 'plain')}</select></div>
+          <div class="form-row"><label>景别（真实距离）</label><select id="pvSize" class="input">${opts(SHOT_SIZES, 'MS')}</select></div>
           <div class="form-row"><label>拍摄角度（直观可见）</label><select id="pvAngle" class="input">${opts(ANGLES, 'eye')}</select></div>
           <div class="form-row"><label>运镜速度</label><select id="pvMoveSpeed" class="input">
             <option value="std" selected>标准</option><option value="slow">慢 · 细腻</option><option value="fast">快 · 有力</option>
@@ -264,7 +269,8 @@ export function renderPreview(container, payload = {}) {
     const action = container.querySelector('#pvAction').value;
     const scene = container.querySelector('#pvScene').value;
     const dur = +container.querySelector('#pvDur').value;
-    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value });
+    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value, size: container.querySelector('#pvSize').value });
+    drawMap();
     playBtn.textContent = '⏸ 暂停';
     player.onEnd = () => { playBtn.textContent = '▶ 播放'; };
   };
@@ -281,6 +287,7 @@ export function renderPreview(container, payload = {}) {
   container.querySelector('#pvSpeed').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvAction').onchange = () => startPlay(0);
   container.querySelector('#pvAngle').onchange = () => startPlay(player.t || 0);
+  container.querySelector('#pvSize').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvMoveSpeed').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvScene').onchange = () => startPlay(0);
   const durInput = container.querySelector('#pvDur');
@@ -298,7 +305,9 @@ export function renderPreview(container, payload = {}) {
       duration: +durInput.value,
       angle: container.querySelector('#pvAngle').value,
       moveSpeed: container.querySelector('#pvMoveSpeed').value,
+      size: container.querySelector('#pvSize').value,
     });
+    drawMap();
     timeEl.textContent = `${(t * +durInput.value).toFixed(1)}s / ${durInput.value}s`;
   });
 
@@ -307,6 +316,68 @@ export function renderPreview(container, payload = {}) {
     const dur = +durInput.value;
     timeEl.textContent = `${(t * dur).toFixed(1)}s / ${dur.toFixed(1)}s`;
   };
+
+  /* ---- 机位俯视示意图 ---- */
+  const mapCv = container.querySelector('#pvMap');
+  const mapCtx = mapCv.getContext('2d');
+  const drawMap = () => {
+    const mv = moveByKey[curMove];
+    const angle = container.querySelector('#pvAngle').value;
+    const size = container.querySelector('#pvSize').value;
+    const action = container.querySelector('#pvAction').value;
+    const dur = +container.querySelector('#pvDur').value || 4;
+    const N = 48;
+    const pts = [];
+    for (let i = 0; i <= N; i++) {
+      const tt = i / N;
+      const actor = solveActor(action, tt, mv.sim, dur);
+      const c = solveCamera(mv.sim, tt, actor, { angle, size });
+      pts.push({ x: c.pos[0], z: c.pos[2], yaw: c.yaw, fov: c.fov });
+    }
+    const t = clamp(player.t || 0, 0, 1);
+    const actorCur = solveActor(action, t, mv.sim, dur);
+    const cur = solveCamera(mv.sim, t, actorCur, { angle, size });
+    const W2 = mapCv.width / 2, S = 13;
+    const m2p = (x, z) => [W2 + (x / S) * (W2 - 12), W2 + (z / S) * (W2 - 12)];
+    mapCtx.clearRect(0, 0, mapCv.width, mapCv.height);
+    mapCtx.fillStyle = '#0e1118';
+    mapCtx.fillRect(0, 0, mapCv.width, mapCv.height);
+    // 距离圈
+    mapCtx.strokeStyle = 'rgba(255,255,255,0.10)';
+    for (const r of [4, 8, 12]) {
+      mapCtx.beginPath();
+      mapCtx.arc(W2, W2, (r / S) * (W2 - 12), 0, Math.PI * 2);
+      mapCtx.stroke();
+    }
+    // 主体
+    const [sx, sz] = m2p(0, 0);
+    mapCtx.fillStyle = '#fb7299';
+    mapCtx.beginPath(); mapCtx.arc(sx, sz, 5, 0, Math.PI * 2); mapCtx.fill();
+    mapCtx.fillStyle = 'rgba(255,255,255,0.6)'; mapCtx.font = '10px sans-serif';
+    mapCtx.fillText('主体', sx + 8, sz + 4);
+    // 运动轨迹
+    mapCtx.strokeStyle = 'rgba(77,141,255,0.75)';
+    mapCtx.lineWidth = 2;
+    mapCtx.beginPath();
+    pts.forEach((p, i) => { const [x, y] = m2p(p.x, p.z); i ? mapCtx.lineTo(x, y) : mapCtx.moveTo(x, y); });
+    mapCtx.stroke();
+    // 当前相机 + 视野扇形
+    const fx = Math.sin(cur.yaw + Math.PI), fz = -Math.cos(cur.yaw + Math.PI);
+    const half = ((cur.fov || 55) * Math.PI / 180) / 2;
+    const base = Math.atan2(fz, fx);
+    const [cx2, cy2] = m2p(cur.pos[0], cur.pos[2]);
+    const len = 42;
+    mapCtx.fillStyle = 'rgba(255,200,87,0.18)';
+    mapCtx.beginPath();
+    mapCtx.moveTo(cx2, cy2);
+    mapCtx.arc(cx2, cy2, len, base - half, base + half);
+    mapCtx.closePath(); mapCtx.fill();
+    mapCtx.fillStyle = '#ffc857';
+    mapCtx.beginPath(); mapCtx.arc(cx2, cy2, 6, 0, Math.PI * 2); mapCtx.fill();
+    mapCtx.fillStyle = 'rgba(255,255,255,0.75)';
+    mapCtx.fillText('相机', cx2 + 8, cy2 - 6);
+  };
+  drawMap();
 
   const assignBtn = container.querySelector('#pvAssign');
   if (assignBtn) assignBtn.onclick = () => assignMove(curMove);
