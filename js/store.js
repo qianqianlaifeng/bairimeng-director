@@ -51,7 +51,8 @@ function newShot(partial = {}) {
     angle: 'eye',
     prompt: '',
     transition: 'cut',
-    image: null,        // IndexedDB key
+    image: null,        // IndexedDB key（参考图）
+    sketch: null,       // IndexedDB key（手绘分镜稿）
     note: '',
     review: null,       // {score, checks:{...}, note}
     ...partial,
@@ -362,6 +363,21 @@ class Store {
     if (!key) { this._notify('图片保存失败（浏览器不支持或空间不足）', 'warn'); return; }
     this.updateShot(shotId, { image: key });
     this._notify('参考图已挂到镜头上');
+  }
+
+  /* ---------- 手绘分镜稿 ---------- */
+  async attachSketch(shotId, blob) {
+    const key = await this.putImage(blob);
+    if (!key) { this._notify('手绘稿保存失败（浏览器不支持或空间不足）', 'warn'); return; }
+    this.updateShot(shotId, { sketch: key });
+    this.addXP(2, '手绘分镜');
+    this._notify('手绘分镜稿已保存 🎨');
+  }
+  async deleteSketch(shotId) {
+    const p = this.active; if (!p) return;
+    const s = p.shots.find(x => x.id === shotId);
+    if (s?.sketch) await this.deleteImage(s.sketch);
+    this.updateShot(shotId, { sketch: null });
   }
 }
 
