@@ -178,12 +178,12 @@ async function callAI(settings, messages, { temperature = 0.7, json = false } = 
   } finally { clearTimeout(timer); }
 }
 
-async function aiBreakdown(script, settings) {
+async function aiBreakdown(script, settings, refsText = '') {
+  const NL = String.fromCharCode(10);
   const raw = await callAI(settings, [
-    { role: 'system', content: AI_BREAKDOWN_SYS },
-    { role: 'user', content: `剧本：\n${script.slice(0, 8000)}` },
+    { role: 'system', content: AI_BREAKDOWN_SYS + (refsText ? NL + NL + '必须遵守以下参考资料中的规范：' + NL + refsText.slice(0, 6000) : '') },
+    { role: 'user', content: '剧本：' + NL + script.slice(0, 8000) },
   ], { temperature: 0.4 });
-  // 容错解析：截取第一个 [ 到最后一个 ]
   const m = raw.match(/\[[\s\S]*\]/);
   if (!m) throw new Error('AI 返回的内容不是分镜 JSON，请重试或换用本地拆分');
   let arr;
@@ -211,6 +211,31 @@ async function aiEnhancePrompt(desc, settings) {
   return out.trim();
 }
 
+/* AI 拉片审核：传入成片截图（dataURL），按资料文档标准打分 */
+async function aiReview(shot, imageDataURL, refsText, settings) {
+  const NL = String.fromCharCode(10);
+  const sys = '你是严格的影视拉片审核员。根据审核标准对这张画面打分并给出具体问题。' +
+    '严格输出 JSON：{"score":1到5的整数,"issues":["具体问题1","问题2"],"suggestion":"一句话修改建议"}，不要任何其他文字。' +
+    (refsText ? NL + NL + '审核标准（必须依据）：' + NL + refsText.slice(0, 6000) : NL + '无附加标准时按构图/运镜/光线/表演/信息量五维度常识审核。');
+  const user = {
+    role: 'user',
+    content: [
+      { type: 'text', text: '镜头画面描述：' + (shot.desc || '无') + NL +
+        '运镜：' + (shot.cameraMove || '') + '　景别：' + (shot.shotSize || '') + '　角度：' + (shot.angle || '') + NL +
+        '所用提示词：' + (shot.prompt || '无') + NL + NL + '请审核这张成片画面：' },
+      { type: 'image_url', image_url: { url: imageDataURL } },
+    ],
+  };
+  const raw = await callAI(settings, [
+    { role: 'system', content: sys },
+    user,
+  ], { temperature: 0.3, json: true });
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('AI 返回内容无法解析');
+  const j = JSON.parse(m[0]);
+  return { score: Math.min(5, Math.max(1, Math.round(+j.score || 3))), issues: (j.issues || []).slice(0, 6), suggestion: String(j.suggestion || '').slice(0, 300) };
+}
+
 /* 测试接口连通性 */
 async function testAPI(api) {
   if (!api.url || !api.model) throw new Error('请先填写接口地址和模型名');
@@ -227,4 +252,4 @@ async function testAPI(api) {
   return '连通正常';
 }
 
-export { localBreakdown, buildPrompt, aiBreakdown, aiEnhancePrompt, testAPI, callAI, moveByKey, sizeByKey, angleByKey };
+export { localBreakdown, buildPrompt, aiBreakdown, aiEnhancePrompt, aiReview, testAPI, callAI, moveByKey, sizeByKey, angleByKey };
