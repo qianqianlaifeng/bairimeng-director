@@ -12,6 +12,7 @@ import { initViewsTools, renderPrompts, renderReview, renderAchievements, render
 
 /* ---------- 初始化 ---------- */
 const store = new Store();
+window.__bdm = store; // 调试/高级用法钩子
 initViewsCore(store);
 initViewsStage(store);
 initViewsPlayer(store);
@@ -256,6 +257,11 @@ navigate(VIEWS[initial] ? initial : 'home');
 
 /* Service Worker（离线可用） */
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (sessionStorage.getItem('bdm_sw_r') === '1') return;
+      sessionStorage.setItem('bdm_sw_r', '1');
+      location.reload();
+    });
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });
