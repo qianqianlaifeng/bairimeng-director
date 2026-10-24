@@ -111,7 +111,7 @@ function propPart(o) {
   if (o.shape === 'box') polys = boxPolys(0, 0.4, 0, 0.8, 0.8, 0.8, 0.85);
   else if (o.shape === 'pillar') polys = frustumPolys(0, 0, 0, 0.16, 0.2, 2.4, 8, 0.88);
   else if (o.shape === 'table') polys = [...boxPolys(0, 0.72, 0, 1.3, 0.08, 0.85, 0.92), ...boxPolys(0, 0.36, 0, 0.18, 0.72, 0.7, 0.78)];
-  else if (o.shape === 'wall') polys = boxPolys(0, 1.2, 0, 3, 2.4, 0.24, 0.8);
+  else if (o.shape === 'wall') { const wh = o.h || 2.4; polys = boxPolys(0, wh / 2, 0, o.w || 3, wh, 0.24, 0.8); }
   else if (o.shape === 'door') polys = [...boxPolys(-0.55, 1.05, 0, 0.14, 2.1, 0.14, 0.82), ...boxPolys(0.55, 1.05, 0, 0.14, 2.1, 0.14, 0.82), ...boxPolys(0, 2.15, 0, 1.24, 0.14, 0.16, 0.82)];
   else if (o.shape === 'window') polys = [...boxPolys(-0.9, 1.2, 0, 0.6, 2.4, 0.2, 0.82), ...boxPolys(0.9, 1.2, 0, 0.6, 2.4, 0.2, 0.82), ...boxPolys(0, 2.05, 0, 1.2, 0.7, 0.2, 0.82), ...boxPolys(0, 0.75, 0, 1.2, 0.3, 0.26, 0.86)];
   else if (o.shape === 'sofa') polys = [...boxPolys(0, 0.3, 0.15, 1.6, 0.35, 0.85, 0.9), ...boxPolys(0, 0.68, -0.28, 1.6, 0.75, 0.24, 0.88), ...boxPolys(-0.72, 0.52, 0.08, 0.18, 0.6, 0.85, 0.86), ...boxPolys(0.72, 0.52, 0.08, 0.18, 0.6, 0.85, 0.86)];
