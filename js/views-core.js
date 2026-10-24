@@ -748,6 +748,11 @@ function openSceneBuilder(shot, onSaved) {
           <div class="sb-tip" id="sbTip">点击地面放置「人物」 · 点击已有对象可选中挪动</div>
         </div>
         <div class="sb-side">
+          <div class="card-title">视图</div>
+          <div class="sb-palette">
+            <button class="chip chip-on" data-v="3d">🎮 3D 预览</button>
+            <button class="chip" data-v="2d">📐 2D 画空间</button>
+          </div>
           <div class="card-title">底景</div>
           <div class="sb-palette" id="sbBase">
             <button class="chip ${(scene.base || 'plain') === 'plain' ? 'chip-on' : ''}" data-b="plain">空舞台</button>
@@ -790,6 +795,7 @@ function openSceneBuilder(shot, onSaved) {
         </div>
       </div>
       <div class="modal-actions">
+        <button class="btn btn-magic btn-sm" id="sbAI">🤖 AI 搭建</button>
         <button class="btn btn-ghost btn-sm" id="sbClear">🗑 清空场景</button>
         <div class="spacer"></div>
         <button class="btn btn-ghost" id="sbMax">⛶ 放大搭建</button>
@@ -804,6 +810,7 @@ function openSceneBuilder(shot, onSaved) {
   const t0 = performance.now();
   const loop = (now) => {
     if (!document.body.contains(cv)) return;
+    if (sbView === '2d') { draw2D(); raf = requestAnimationFrame(loop); return; }
     renderer.render(sim, ((now - t0) / 4000) % 1, 'stand', { duration: 4, hud: false, letterbox: true, scene });
     // 轨迹叠加层
     const tctx = cv.getContext('2d');
@@ -910,68 +917,248 @@ function openSceneBuilder(shot, onSaved) {
     scene.base = b.dataset.b;
     m.body.querySelectorAll('#sbBase .chip').forEach(x => x.classList.toggle('chip-on', x === b));
   });
-
-  let drag = null; // {sx, az, moved}
-  cv.addEventListener('pointermove', e => {
-    if (!drag) return;
-    const dx = e.clientX - drag.sx;
-    if (Math.abs(dx) > 5) drag.moved = true;
-    if (drag.moved) {
-      scene.cam.az = ((drag.az - dx * 0.45) % 360 + 360) % 360;
-      m.body.querySelector('#sbAz').value = scene.cam.az;
-      m.body.querySelector('#sbAzV').textContent = Math.round(scene.cam.az) + '°';
-    }
+  m.body.querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
+    sbView = b.dataset.v;
+    m.body.querySelectorAll('[data-v]').forEach(x => x.classList.toggle('chip-on', x === b));
+    cv.style.display = sbView === '2d' ? 'block' : 'none';
+    m.body.querySelector('#sbTip').textContent = sbView === '2d'
+      ? '2D 画空间：拖拽画房间（自动生成四面墙）· 点对象选中/挪动 · 右键删除 · 滚轮无效'
+      : '点击地面放置「' + TYPE_NAME[placeType] + '」 · 拖拽旋转机位 · 右键删除 · 滚轮缩放';
   });
-  cv.addEventListener('pointerup', () => { setTimeout(() => { drag = null; }, 0); });
 
-  cv.addEventListener('pointerdown', e => {
-    drag = { sx: e.clientX, az: scene.cam.az || 0, moved: false };
+  let drag = null; // 指针交互状态
+  let sbView = '3d', roomDrag = null;
+  const W2 = () => cv.clientWidth / 2;
+  const S2 = 13;
+  const w2p = (x, z) => [W2() + (x / S2) * (W2() - 14), cv.clientHeight / 2 + (z / S2) * (cv.clientHeight / 2 - 14)];
+  const p2w = (sx, sy) => [((sx - W2()) / (W2() - 14)) * S2, ((sy - cv.clientHeight / 2) / (cv.clientHeight / 2 - 14)) * S2];
+  const PROP_SIZE = { box: [0.8, 0.8], pillar: [0.4, 0.4], table: [1.3, 0.85], wall: [3, 0.24], door: [1.24, 0.14], window: [2.4, 0.2], sofa: [1.6, 0.85], tree: [1.2, 1.2] };
+  const draw2D = () => {
+    const ctx2 = cv.getContext('2d');
+    const cw = cv.clientWidth, ch = cv.clientHeight;
+    ctx2.setTransform(1, 0, 0, 1, 0, 0);
+    ctx2.clearRect(0, 0, cw, ch);
+    ctx2.fillStyle = '#f2f3f0'; ctx2.fillRect(0, 0, cw, ch);
+    ctx2.strokeStyle = 'rgba(60,70,90,0.12)'; ctx2.lineWidth = 1;
+    for (let gx = -12; gx <= 12; gx += 1) { const a = w2p(gx, -12), b = w2p(gx, 12); ctx2.beginPath(); ctx2.moveTo(a[0], a[1]); ctx2.lineTo(b[0], b[1]); ctx2.stroke(); }
+    for (let gz = -12; gz <= 12; gz += 1) { const a = w2p(-12, gz), b = w2p(12, gz); ctx2.beginPath(); ctx2.moveTo(a[0], a[1]); ctx2.lineTo(b[0], b[1]); ctx2.stroke(); }
+    for (let i = 0; i < scene.objects.length; i++) {
+      const o = scene.objects[i];
+      const sel = i === selIdx;
+      if (o.type === 'prop' && o.shape === 'wall') {
+        const half = (o.w || 3) / 2;
+        const rr = (o.rot || 0) * Math.PI / 180;
+        const ax = o.x - Math.cos(rr) * half, az2 = o.z - Math.sin(rr) * half;
+        const bx = o.x + Math.cos(rr) * half, bz2 = o.z + Math.sin(rr) * half;
+        const a = w2p(ax, az2), b = w2p(bx, bz2);
+        ctx2.strokeStyle = sel ? '#e0485a' : '#2a2f3a'; ctx2.lineWidth = 5;
+        ctx2.beginPath(); ctx2.moveTo(a[0], a[1]); ctx2.lineTo(b[0], b[1]); ctx2.stroke();
+        continue;
+      }
+      const [px, py] = w2p(o.x, o.z);
+      if (o.type === 'actor') {
+        ctx2.fillStyle = sel ? '#e0485a' : '#4d8dff';
+        ctx2.beginPath(); ctx2.arc(px, py, 9, 0, Math.PI * 2); ctx2.fill();
+        const rr = ((o.rot || 0) - (scene.cam?.az || 0)) * Math.PI / 180;
+        ctx2.strokeStyle = sel ? '#e0485a' : '#4d8dff'; ctx2.lineWidth = 2.5;
+        ctx2.beginPath(); ctx2.moveTo(px, py); ctx2.lineTo(px + Math.sin(rr) * 15, py + Math.cos(rr) * 15); ctx2.stroke();
+      } else {
+        const sz = PROP_SIZE[o.shape] || [0.8, 0.8];
+        const w = (sz[0] * (o.scale || 1)) / S2 * (W2() - 14), h2 = (sz[1] * (o.scale || 1)) / S2 * (cv.clientHeight / 2 - 14);
+        ctx2.save(); ctx2.translate(px, py); ctx2.rotate((o.rot || 0) * Math.PI / 180);
+        ctx2.fillStyle = sel ? 'rgba(224,72,90,0.35)' : 'rgba(58,64,82,0.30)';
+        ctx2.strokeStyle = sel ? '#e0485a' : '#3a4052'; ctx2.lineWidth = 1.5;
+        ctx2.fillRect(-w / 2, -h2 / 2, w, h2); ctx2.strokeRect(-w / 2, -h2 / 2, w, h2);
+        ctx2.restore();
+      }
+    }
+    const tgtObj = (selIdx >= 0 && scene.objects[selIdx]) || pathTarget;
+    if (tgtObj && tgtObj.path && tgtObj.path.length) {
+      ctx2.strokeStyle = '#ff5470'; ctx2.lineWidth = 2; ctx2.setLineDash([5, 4]);
+      ctx2.beginPath();
+      tgtObj.path.forEach((wp, i) => { const [x, y] = w2p(wp.x, wp.z); i ? ctx2.lineTo(x, y) : ctx2.moveTo(x, y); });
+      ctx2.stroke(); ctx2.setLineDash([]);
+      for (const wp of tgtObj.path) { const [x, y] = w2p(wp.x, wp.z); ctx2.fillStyle = '#ff5470'; ctx2.beginPath(); ctx2.arc(x, y, 4, 0, Math.PI * 2); ctx2.fill(); }
+    }
+    if (roomDrag && roomDrag.moved) {
+      const [ax, ay] = w2p(roomDrag.x1, roomDrag.z1), [bx, by] = w2p(roomDrag.x2, roomDrag.z2);
+      ctx2.strokeStyle = '#e0485a'; ctx2.lineWidth = 4;
+      ctx2.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+    }
+    const [cxp, cyp] = w2p(Math.sin((scene.cam?.az || 0) * Math.PI / 180) * (scene.cam?.dist || 7), Math.cos((scene.cam?.az || 0) * Math.PI / 180) * (scene.cam?.dist || 7));
+    ctx2.fillStyle = '#ffc857'; ctx2.beginPath(); ctx2.arc(cxp, cyp, 6, 0, Math.PI * 2); ctx2.fill();
+    ctx2.fillStyle = 'rgba(255,255,255,0.75)'; ctx2.font = '10px sans-serif';
+    ctx2.fillText('相机', cxp + 8, cyp - 6);
+  };
+  cv.addEventListener('contextmenu', e => {
+    e.preventDefault();
     const r = cv.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
-    const cam = solveCamera(sim, 0.35, { x: 0, y: 0, z: 0 }, { angle: 'eye', scene });
-    const focal = (renderer.h / 2) / Math.tan((cam.fov * DEG2) / 2);
-    let best = -1, bd = 30;
-    scene.objects.forEach((o, i) => {
-      const pr = renderer.project([o.x, 0.6 * (o.scale || 1), o.z], cam, focal, renderer.w / 2, renderer.h / 2);
-      if (pr) {
-        const dist = Math.hypot(pr.x - sx, pr.y - sy);
-        if (dist < bd) { bd = dist; best = i; }
+    let hit = -1;
+    if (sbView === '2d') {
+      const [wx, wz] = p2w(sx, sy);
+      let bd = 0.6;
+      scene.objects.forEach((o, i) => { const dd = Math.hypot(o.x - wx, o.z - wz); if (dd < bd) { bd = dd; hit = i; } });
+    } else {
+      const cam0 = solveCamera(sim, 0.35, { x: 0, y: 0, z: 0 }, { angle: 'eye', scene });
+      const fc0 = (renderer.h / 2) / Math.tan(((scene.cam?.fov || 55) * DEG2) / 2);
+      let bd = 30;
+      scene.objects.forEach((o, i) => {
+        const pr = renderer.project([o.x, 0.6 * (o.scale || 1), o.z], cam0, fc0, renderer.w / 2, renderer.h / 2);
+        if (pr) { const dd = Math.hypot(pr.x - sx, pr.y - sy); if (dd < bd) { bd = dd; hit = i; } }
+      });
+    }
+    if (hit >= 0) { scene.objects.splice(hit, 1); if (selIdx === hit) selIdx = -1; renderProps(); toast('已删除'); }
+  });
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    scene.cam.dist = Math.max(3, Math.min(12, (scene.cam.dist || 7) + (e.deltaY > 0 ? 0.5 : -0.5)));
+    m.body.querySelector('#sbDist').value = scene.cam.dist;
+    m.body.querySelector('#sbDistV').textContent = scene.cam.dist;
+  }, { passive: false });
+  cv.addEventListener('pointerdown', e => {
+    if (e.button === 2) return;
+    const rr0 = cv.getBoundingClientRect();
+    if (sbView === '2d') {
+      const [wx, wz] = p2w(e.clientX - rr0.left, e.clientY - rr0.top);
+      drag = { sx: e.clientX, sy: e.clientY, az: scene.cam.az || 0, h: scene.cam.h || 1.8, moved: false, x1: Math.max(-11, Math.min(11, +wx.toFixed(2))), z1: Math.max(-11, Math.min(11, +wz.toFixed(2))) };
+      return;
+    }
+    drag = { sx: e.clientX, sy: e.clientY, az: scene.cam.az || 0, h: scene.cam.h || 1.8, moved: false };
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) drag.moved = true;
+    if (!drag.moved) return;
+    if (sbView === '2d') {
+      const rect = cv.getBoundingClientRect();
+      const [wx, wz] = p2w(e.clientX - rect.left, e.clientY - rect.top);
+      roomDrag = { x1: drag.x1, z1: drag.z1, x2: Math.max(-11, Math.min(11, +wx.toFixed(2))), z2: Math.max(-11, Math.min(11, +wz.toFixed(2))), moved: true };
+      draw2D();
+      return;
+    }
+    scene.cam.az = ((drag.az - dx * 0.45) % 360 + 360) % 360;
+    scene.cam.h = Math.max(0.4, Math.min(9, drag.h + dy * 0.02));
+    m.body.querySelector('#sbAz').value = scene.cam.az;
+    m.body.querySelector('#sbAzV').textContent = Math.round(scene.cam.az) + '°';
+    m.body.querySelector('#sbH').value = scene.cam.h;
+    m.body.querySelector('#sbHV').textContent = (+scene.cam.h).toFixed(1);
+  });
+  cv.addEventListener('pointerup', e => {
+    const wasDrag = drag && drag.moved;
+    const upInfo = drag ? { sx: drag.sx, sy: drag.sy } : null;
+    setTimeout(() => { drag = null; }, 0);
+    if (sbView === '2d' && wasDrag && roomDrag && roomDrag.moved) {
+      const x1 = Math.min(roomDrag.x1, roomDrag.x2), x2 = Math.max(roomDrag.x1, roomDrag.x2);
+      const z1 = Math.min(roomDrag.z1, roomDrag.z2), z2 = Math.max(roomDrag.z1, roomDrag.z2);
+      if (x2 - x1 > 0.8 && z2 - z1 > 0.8) {
+        scene.objects.push(
+          { type: 'prop', shape: 'wall', x: +((x1 + x2) / 2).toFixed(2), z: z1, rot: 0, scale: 1, w: +(x2 - x1 + 0.24).toFixed(2), h: 2.4 },
+          { type: 'prop', shape: 'wall', x: +((x1 + x2) / 2).toFixed(2), z: z2, rot: 0, scale: 1, w: +(x2 - x1 + 0.24).toFixed(2), h: 2.4 },
+          { type: 'prop', shape: 'wall', x: x1, z: +((z1 + z2) / 2).toFixed(2), rot: 90, scale: 1, w: +(z2 - z1 + 0.24).toFixed(2), h: 2.4 },
+          { type: 'prop', shape: 'wall', x: x2, z: +((z1 + z2) / 2).toFixed(2), rot: 90, scale: 1, w: +(z2 - z1 + 0.24).toFixed(2), h: 2.4 },
+        );
+        toast('房间已生成（四面墙）🏠 可用门框/窗墙开门开窗', 'ok');
+        store.addXP(2, '画房间');
       }
-    });
-    const place = () => {
+      roomDrag = null;
+      draw2D();
+      renderProps();
+      return;
+    }
+    if (sbView === '2d' && !wasDrag && upInfo) {
+      const rect = cv.getBoundingClientRect();
+      const sx = upInfo.sx - rect.left, sy = upInfo.sy - rect.top;
+      const [wx, wz] = p2w(sx, sy);
+      let hit2 = -1, bd2 = 0.55;
+      scene.objects.forEach((o, i) => { const dd = Math.hypot(o.x - wx, o.z - wz); if (dd < bd2) { bd2 = dd; hit2 = i; } });
+      if (hit2 >= 0) { selIdx = hit2; renderProps(); return; }
+      if (pathDraw && pathTarget && selIdx >= 0 && scene.objects[selIdx] === pathTarget) { pathTarget.path.push({ x: +wx.toFixed(2), z: +wz.toFixed(2) }); renderProps(); return; }
+      const base2 = { type: placeType === 'actor' ? 'actor' : 'prop', x: +wx.toFixed(2), z: +wz.toFixed(2), rot: 205, scale: 1 };
+      if (placeType === 'actor') { base2.action = 'stand'; base2.seed = Math.round(Math.random() * 90); }
+      else base2.shape = placeType;
+      scene.objects.push(base2);
+      selIdx = scene.objects.length - 1;
+      renderProps();
+      draw2D();
+      return;
+    }
+    if (sbView !== '2d' && !wasDrag && upInfo) {
+      const rect = cv.getBoundingClientRect();
+      const sx = upInfo.sx - rect.left, sy = upInfo.sy - rect.top;
+      const cam0 = solveCamera(sim, 0.35, { x: 0, y: 0, z: 0 }, { angle: 'eye', scene });
+      const fc0 = (renderer.h / 2) / Math.tan(((scene.cam?.fov || 55) * DEG2) / 2);
+      let best = -1, bd = 30;
+      scene.objects.forEach((o, i) => {
+        const pr = renderer.project([o.x, 0.6 * (o.scale || 1), o.z], cam0, fc0, renderer.w / 2, renderer.h / 2);
+        if (pr) { const dd = Math.hypot(pr.x - sx, pr.y - sy); if (dd < bd) { bd = dd; best = i; } }
+      });
+      if (best >= 0) { selIdx = best; renderProps(); return; }
       if (pathDraw && pathTarget && selIdx >= 0 && scene.objects[selIdx] === pathTarget) {
-        const g2 = unprojectGround(sx, sy, cam, focal, renderer.w, renderer.h);
-        if (g2) { pathTarget.path = pathTarget.path || []; pathTarget.path.push({ x: +g2[0].toFixed(2), z: +g2[1].toFixed(2) }); }
+        const g3 = unprojectGround(sx, sy, cam0, fc0, renderer.w, renderer.h);
+        if (g3) { pathTarget.path = pathTarget.path || []; pathTarget.path.push({ x: +g3[0].toFixed(2), z: +g3[1].toFixed(2) }); }
         renderProps();
         return;
       }
-      if (best >= 0) { selIdx = best; renderProps(); return; }
-      const g = unprojectGround(sx, sy, cam, focal, renderer.w, renderer.h);
+      const g = unprojectGround(sx, sy, cam0, fc0, renderer.w, renderer.h);
       if (!g) return;
       const gx = Math.max(-11, Math.min(11, +g[0].toFixed(2))), gz = Math.max(-11, Math.min(11, +g[1].toFixed(2)));
-      if (selIdx >= 0 && scene.objects[selIdx]) {
-        scene.objects[selIdx].x = gx; scene.objects[selIdx].z = gz;
-        renderProps();
-        return;
-      }
+      if (selIdx >= 0 && scene.objects[selIdx]) { scene.objects[selIdx].x = gx; scene.objects[selIdx].z = gz; renderProps(); return; }
       const base = { type: placeType === 'actor' ? 'actor' : 'prop', x: gx, z: gz, rot: 205, scale: 1 };
       if (placeType === 'actor') { base.action = 'stand'; base.seed = Math.round(Math.random() * 90); }
       else base.shape = placeType;
       scene.objects.push(base);
       selIdx = scene.objects.length - 1;
       renderProps();
-    };
-    // 拖拽=旋转机位；点按=放置/选中（延迟到 pointerup 判定）
-    const wait = () => {
-      if (drag && drag.moved) return;          // 拖拽中：不放置
-      setTimeout(() => {
-        if (drag && drag.moved) return;
-        place();
-      }, 120);
-    };
-    wait();
+      return;
+    }
   });
 
+  m.body.querySelector('#sbAI').onclick = () => {
+    const am = modal({
+      title: '🤖 AI 搭建 · 让 AI 搭，你来拍',
+      body: '<div class="dim" style="font-size:12px;line-height:1.8;margin-bottom:10px">把场景描述交给 AI 生成搭建 JSON，或直接粘贴他人分享的 JSON 导入。</div>' +
+        '<div class="form-row"><label>场景描述</label><input id="sbAiDesc" class="input" placeholder="例：两室一厅客厅，沙发朝电视，一个人从门口走到沙发坐下"></div>' +
+        '<div class="modal-actions"><button class="btn btn-magic btn-sm" id="sbAiGen">🤖 生成 JSON</button><span class="dim" id="sbAiStatus"></span></div>' +
+        '<div class="form-row"><label>搭建 JSON</label><textarea id="sbAiJson" class="input mono" rows="9" placeholder=\'{"base":"room","objects":[…],"light":{…},"cam":{…}}\'></textarea></div>' +
+        '<div class="modal-actions"><button class="btn btn-ghost" data-act="c">取消</button><button class="btn btn-primary" data-act="imp">📥 导入并搭建</button></div>',
+    });
+    am.body.querySelector('[data-act="c"]').onclick = () => am.close();
+    am.body.querySelector('#sbAiGen').onclick = async () => {
+      const desc = am.body.querySelector('#sbAiDesc').value.trim();
+      if (!desc) { toast('先描述一下场景', 'warn'); return; }
+      if (!store.settings.api) { toast('先到 设置 → AI接口 配置接口', 'warn'); return; }
+      const st = am.body.querySelector('#sbAiStatus');
+      st.textContent = '🤖 AI 搭建中…';
+      try {
+        const sys = '你是三维场景搭建助手。只输出 JSON，不要解释。格式：' + NL +
+          '{"base":"plain|street|room|stage","objects":[{"type":"actor","x":数,"z":数,"rot":0-360,"scale":1,"action":"stand|walk|run|sit","path":[{"x":数,"z":数}]},或{"type":"prop","shape":"box|pillar|table|wall|door|window|sofa|tree","x":数,"z":数,"rot":0-360,"scale":1,"w":数,"h":数}],"light":{"az":0-360,"el":5-85,"int":0.3-1.3},"cam":{"az":0-360,"dist":3-12,"h":0.4-9,"fov":25-90}}' + NL +
+          '坐标 x,z 在 -11 到 11。按描述安排底景、墙体、道具、人物与走位轨迹；wall 用 w/h 定宽高。';
+        const { callAI } = await import('./breakdown.js');
+        const out = await callAI(store.settings, [{ role: 'user', content: sys + NL + NL + '用户描述：' + desc }], { temperature: 0.4, json: true });
+        const mm = out.match(/\{[\s\S]*\}/);
+        if (!mm) throw new Error('AI 未返回 JSON');
+        am.body.querySelector('#sbAiJson').value = JSON.stringify(JSON.parse(mm[0]), null, 2);
+        st.textContent = '✅ 已生成，点「导入并搭建」';
+      } catch (e) { st.textContent = '❌ ' + e.message; }
+    };
+    am.body.querySelector('[data-act="imp"]').onclick = () => {
+      try {
+        const j = JSON.parse(am.body.querySelector('#sbAiJson').value);
+        if (j.base) scene.base = j.base;
+        if (Array.isArray(j.objects)) scene.objects = j.objects;
+        if (j.light) scene.light = j.light;
+        if (j.cam) scene.cam = j.cam;
+        selIdx = -1; pathDraw = false; pathTarget = null;
+        renderProps();
+        m.body.querySelectorAll('#sbBase .chip').forEach(x => x.classList.toggle('chip-on', x.dataset.b === scene.base));
+        am.close();
+        toast('场景已导入 🏗', 'ok');
+        store.addXP(3, 'AI 搭建');
+      } catch (e) { toast('JSON 解析失败：' + e.message, 'warn'); }
+    };
+  };
   m.body.querySelector('#sbClear').onclick = () => { scene.objects = []; selIdx = -1; renderProps(); };
   m.body.querySelector('#sbCancel').onclick = () => m.close();
   m.body.querySelector('#sbMax').onclick = () => {
