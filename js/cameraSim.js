@@ -375,14 +375,21 @@ function solveCamera(sim, t, actor, opts = {}) {
       set([0, 1.7, 7], head);
   }
 
-  /* 景别：按景别缩放相机与主体的距离（远景远、特写近） */
-  const sizeF = { ELS: 2.3, LS: 1.65, MS: 1, MCU: 0.78, CU: 0.55, ECU: 0.35 }[opts.size || 'MS'] || 1;
-  if (sim.type !== 'free' && sizeF !== 1 && cam._tgt) {
+  /* 景别：按标准取景重定位 —— 保留运镜的相对运动，把距离重映射到该景别的目标距离
+   * 大远景=人物极小 · 远景=全身带环境 · 中景=膝盖以上 · 中近景=胸上 · 近景=上半身 · 特写=脸充满画面 */
+  const SIZE_CFG = { ELS: { d: 6.7, fov: 55, aim: 1.0 }, LS: { d: 3.1, fov: 45, aim: 1.05 }, MS: { d: 2.2, fov: 34, aim: 1.15 }, MCU: { d: 2.0, fov: 30, aim: 1.26 }, CU: { d: 1.9, fov: 26, aim: 1.36 }, ECU: { d: 1.28, fov: 20, aim: 1.6 } };
+  if (sim.type !== 'free' && opts.size && SIZE_CFG[opts.size] && cam._tgt) {
+    const cfg = SIZE_CFG[opts.size];
+    const mid = solveCamera(sim, 0.5, actor, { scene: opts.scene });
+    const mt = mid._tgt || [0, 1.2, 0];
+    const D0 = Math.hypot(mid.pos[0] - mt[0], mid.pos[1] - mt[1], mid.pos[2] - mt[2]) || 1;
+    const k = Math.max(0.95, cfg.d) / D0;
     const dx = cam.pos[0] - cam._tgt[0], dy = cam.pos[1] - cam._tgt[1], dz = cam.pos[2] - cam._tgt[2];
-    const cur = Math.hypot(dx, dy, dz) || 1;
-    const k = Math.max(0.95, cur * sizeF) / cur;
     cam.pos = [cam._tgt[0] + dx * k, cam._tgt[1] + dy * k, cam._tgt[2] + dz * k];
-    Object.assign(cam, lookAt(cam.pos, cam._tgt));
+    const aimY = cfg.aim ?? cam._tgt[1];
+    Object.assign(cam, lookAt(cam.pos, [cam._tgt[0], aimY, cam._tgt[2]]));
+    cam._tgt = [cam._tgt[0], aimY, cam._tgt[2]];
+    if (cfg.fov) cam.fov = cfg.fov;
   }
 
   /* 角度叠加：在运镜机位基础上抬高/压低/偏移/转屏 */
