@@ -5,7 +5,7 @@
 import { Store } from './store.js';
 import { TUTORIAL } from './data.js';
 import { el, modal, toast } from './ui.js';
-import { initViewsCore, renderHome, renderScript, renderStoryboard } from './views-core.js';
+import { initViewsCore, renderHome, renderScript, renderStoryboard, openProjectRename } from './views-core.js';
 import { initViewsStage, renderDict, renderPreview } from './views-stage.js';
 import { initViewsPlayer, renderAnimatic, renderEditor } from './views-player.js';
 import { initViewsTools, renderPrompts, renderReview, renderAchievements, renderSettings, openProjectExport } from './views-tools.js';
@@ -63,6 +63,7 @@ const appEl = el(`<div class="app">
     <header class="topbar">
       <div class="topbar-project" id="topProject"></div>
       <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="btnRename" title="重命名当前项目">✏️ 重命名</button>
       <button class="btn btn-ghost btn-sm" id="btnExport">📦 导出项目</button>
       <button class="btn btn-ghost btn-sm" id="btnCheckin">📅 签到</button>
     </header>
@@ -179,6 +180,10 @@ window.addEventListener('bdm-nav', e => navigate(e.detail.view, e.detail.payload
 window.addEventListener('bdm-tutorial', () => openTutorial());
 
 /* ---------- 顶部按钮 ---------- */
+appEl.querySelector('#btnRename').onclick = () => openProjectRename(store.activeId, () => {
+  renderTopbar();
+  if (currentView === 'home') navigate('home');
+});
 appEl.querySelector('#btnExport').onclick = () => openProjectExport();
 appEl.querySelector('#btnCheckin').onclick = () => { store.checkIn(); renderXPMini(); };
 appEl.querySelector('#btnTutorial').onclick = () => openTutorial();
