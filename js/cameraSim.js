@@ -287,7 +287,7 @@ class WhiteModelRenderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.scene = 'plain';
-    this.theme = { bg1: '#101319', bg2: '#1a1e28', ground: '#232837', line: 'rgba(150,162,190,.24)', fog: '#12151d', ink: '#e8ecf6' };
+    this.theme = { bg1: '#182034', bg2: '#0e1322', ground: '#232837', line: 'rgba(150,168,208,.24)', fog: '#141a2b', ink: '#e8ecf6' };
     this._dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.resize();
   }
@@ -320,6 +320,12 @@ class WhiteModelRenderer {
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, th.bg1); g.addColorStop(1, th.bg2);
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // 舞台顶光（柔光晕，制造摄影棚氛围）
+    const glow = ctx.createRadialGradient(W / 2, H * 0.30, 0, W / 2, H * 0.30, Math.max(W, H) * 0.62);
+    glow.addColorStop(0, 'rgba(140,175,255,0.14)');
+    glow.addColorStop(0.55, 'rgba(120,150,230,0.05)');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
 
     const actor = solveActor(action, t, sim, opts.duration || 4);
     // POV 模式不画演员（自己就是演员）
@@ -422,6 +428,12 @@ class WhiteModelRenderer {
       ctx.fillRect(0, 0, W, H);
     }
 
+    /* ---- 暗角（电影质感） ---- */
+    const vig = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.36, W / 2, H / 2, Math.max(W, H) * 0.75);
+    vig.addColorStop(0, 'rgba(0,0,0,0)');
+    vig.addColorStop(1, 'rgba(0,0,0,0.34)');
+    ctx.fillStyle = vig; ctx.fillRect(0, 0, W, H);
+
     /* ---- 电影黑边 + 标记 ---- */
     if (opts.letterbox) {
       const bar = Math.round(H * 0.055);
@@ -449,7 +461,8 @@ class WhiteModelRenderer {
 
 function mixColor(fogHex, v, mix) {
   const r = parseInt(fogHex.slice(1, 3), 16), g = parseInt(fogHex.slice(3, 5), 16), b = parseInt(fogHex.slice(5, 7), 16);
-  const rr = Math.round(lerp(r, v, mix)), gg = Math.round(lerp(g, v, mix)), bb = Math.round(lerp(b, v, mix));
+  // 高光带一点冷蓝（摄影棚白光质感）
+  const rr = Math.round(lerp(r, v * 0.94, mix)), gg = Math.round(lerp(g, v * 0.97, mix)), bb = Math.round(lerp(b, Math.min(255, v * 1.08), mix));
   return `rgb(${rr},${gg},${bb})`;
 }
 
