@@ -144,7 +144,7 @@ export function renderAnimatic(container) {
     } else {
       canvas.style.display = '';
       imgEl.style.display = 'none';
-      renderer.render(mv.sim, t, 'stand', { duration: s.duration, hud: false, letterbox: true });
+      renderer.render(mv.sim, t, 'stand', { duration: s.duration, hud: false, letterbox: true, angle: s.angle, moveSpeed: s.moveSpeed, scene: s.scene });
     }
     /* 转场淡入 */
     if (transitionAlpha > 0.001) {
