@@ -357,7 +357,7 @@ body.theme-obsidian .modal, body.theme-gilt .modal { box-shadow: 0 30px 80px rgb
 .confirm-msg { font-size: 13.5px; line-height: 1.8; }
 @keyframes fadeIn { from { opacity: 0; } }
 @keyframes fadeOut { to { opacity: 0; } }
-@keyframes popIn { from { opacity: 0; transform: scale(0.95) translateY(10px); } }
+@keyframes popIn { from { opacity: 0; } }
 
 /* ============================================================
  * 通知 / XP / 升级
