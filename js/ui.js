@@ -19,6 +19,9 @@ function modal({ title = '', body = '', wide = false, onClose = null } = {}) {
       <div class="modal-body">${body}</div>
     </div></div>`);
   document.body.appendChild(ov);
+  const __mdl = ov.querySelector('.modal');
+  __mdl.addEventListener('animationend', function h() { __mdl.style.transform = 'none'; __mdl.removeEventListener('animationend', h); });
+  setTimeout(() => { __mdl.style.transform = 'none'; }, 400);
   const close = (result) => {
     ov.classList.add('closing');
     setTimeout(() => ov.remove(), 180);
