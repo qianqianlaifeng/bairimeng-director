@@ -146,7 +146,11 @@ export function openSceneBuilder(shot, onSaved) {
   function draw2D() {
     const c = cv.getContext('2d');
     const cw = cv.clientWidth, ch = cv.clientHeight;
-    c.setTransform(1, 0, 0, 1, 0, 0);
+    // 位图尺寸对齐 CSS 尺寸（否则绘制被拉伸，鼠标与网格错位）
+    const dpr = window.devicePixelRatio || 1;
+    const bw = Math.round(cw * dpr), bh = Math.round(ch * dpr);
+    if (cv.width !== bw || cv.height !== bh) { cv.width = bw; cv.height = bh; }
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.clearRect(0, 0, cw, ch);
     c.fillStyle = '#f2f3f0'; c.fillRect(0, 0, cw, ch);
     if (showGrid) {
