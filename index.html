@@ -8,6 +8,8 @@
   <link rel="icon" type="image/svg+xml" href="icon.svg">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="css/style.css">
+  <!-- 场景搭建 · 喵咛导演台（B 站玩具 MiorningDYT 原生重制，自包含主题） -->
+  <link rel="stylesheet" href="css/miaoning.css">
 </head>
 <body class="theme-porcelain bgm-aurora">
   <noscript>
@@ -25,6 +27,11 @@
       window.__bootErrors.push('REJECT: ' + ((e.reason && e.reason.message) || e.reason));
     });
   </script>
+  <!-- 场景搭建 · 喵咛导演台（经典脚本，先于 ES module 执行；挂 window.MN/MN3D/MN3/MN_ICONS） -->
+  <script src="js/mn-icons.js"></script>
+  <script src="js/miaoning.js"></script>
+  <script src="js/miaoning3d.js"></script>
+  <script src="js/miaoning_m3.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

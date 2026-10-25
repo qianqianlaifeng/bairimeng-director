@@ -1,9 +1,10 @@
 /* 白日梦导演台 · Service Worker（离线可用） */
-const CACHE = 'bdm-v29';
+const CACHE = 'bdm-v30';
 const ASSETS = [
   './',
   './index.html',
   './css/style.css',
+  './css/miaoning.css',
   './js/app.js',
   './js/data.js',
   './js/store.js',
@@ -15,6 +16,10 @@ const ASSETS = [
   './js/views-player.js',
   './js/views-tools.js',
   './js/builder.js',
+  './js/mn-icons.js',
+  './js/miaoning.js',
+  './js/miaoning3d.js',
+  './js/miaoning_m3.js',
   './manifest.webmanifest',
   './icon.svg',
 ];

@@ -1,0 +1,6 @@
+.DS_Store
+Thumbs.db
+*.log
+
+# 本地测试脚本与截图（不入库）
+_tmp_test/

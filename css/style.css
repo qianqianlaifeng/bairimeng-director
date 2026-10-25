@@ -1060,3 +1060,29 @@ body.theme-obsidian .bk-bottombar, body.theme-gilt .bk-bottombar { background: r
 .sb-list-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .sb-list-group { font-size: 10.5px; color: var(--dim); padding: 4px 2px 2px; font-weight: 700; letter-spacing: 1px; }
 .sb-list-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; font-weight: 700; }
+
+/* ============================================================
+ * 场景搭建 · 喵咛导演台浮层（v4 · 2026-10-25）
+ * 全屏承载 js/miaoning.js 构建的导演台（css/miaoning.css 自包含主题）
+ * ============================================================ */
+body.sb-mn-open { overflow: hidden; }
+.sb-mn-overlay {
+  position: fixed; inset: 0; z-index: 400;
+  display: none; flex-direction: column;
+  background: #fcfaf6;
+}
+.sb-mn-overlay.open { display: flex; }
+.sb-mn-overlay .mn-root { flex: 1; min-height: 0; }
+.sb-mn-dock {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  z-index: 20; display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  box-shadow: 0 8px 30px rgba(20, 14, 6, 0.18);
+  backdrop-filter: blur(6px);
+}
+.sb-mn-dock-tip { font-size: 12px; color: #76716b; white-space: nowrap; }
+@media (max-width: 900px) {
+  .sb-mn-dock-tip { display: none; }
+}
