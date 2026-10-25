@@ -1,9 +1,8 @@
 /* ============================================================
- * 场景搭建器 v2 · 对齐原版「画空间」工作流
- * 左侧工具栏 → 中央 2D 网格编辑 → 右栏 物体/光影/地面
- * 立起来切 3D（俯视/斜视/正视）· 镜头册存机位
+ * 场景搭建器 v3 · 全屏工作台（对标原版画空间）
+ * 画布内悬浮工具栏 · 物体库点选即放 · 立起来切 3D · 场景清单
  * ============================================================ */
-import { WhiteModelRenderer, solveCamera, propPart, rotXpt, rotYpt } from './cameraSim.js';
+import { WhiteModelRenderer, solveCamera } from './cameraSim.js';
 import { modal, toast } from './ui.js';
 
 const DEG = Math.PI / 180;
@@ -12,6 +11,37 @@ const ICON = { actor: '👤', box: '📦', pillar: '🏛', table: '🪑', wall: 
 const TNAME = { actor: '人物', box: '木箱', pillar: '立柱', table: '桌子', wall: '墙', door: '门框', window: '窗墙', sofa: '沙发', tree: '树', lamp: '灯' };
 const PSIZE = { box: [0.8, 0.8], pillar: [0.4, 0.4], table: [1.3, 0.85], door: [1.24, 0.14], window: [2.4, 0.2], sofa: [1.6, 0.85], tree: [1.2, 1.2], lamp: [0.4, 0.4] };
 const FLOORS = [['', '默认'], ['#c9a877', '木色'], ['#8fa3ad', '青灰'], ['#e8e2d5', '暖白'], ['#565d6b', '深灰']];
+const TPL = {
+  living: { name: '客厅', data: { base: 'room', objects: [
+    { type: 'prop', shape: 'wall', x: 0, z: -5, rot: 0, scale: 1, w: 10, h: 2.4 },
+    { type: 'prop', shape: 'wall', x: -5, z: 0, rot: 90, scale: 1, w: 10, h: 2.4 },
+    { type: 'prop', shape: 'wall', x: 5, z: 0, rot: 90, scale: 1, w: 10, h: 2.4 },
+    { type: 'prop', shape: 'sofa', x: -1.5, z: 2.5, rot: 0, scale: 1.2 },
+    { type: 'prop', shape: 'table', x: -1.5, z: 0.8, rot: 0, scale: 1 },
+    { type: 'prop', shape: 'window', x: 0, z: -4.9, rot: 0, scale: 1 },
+    { type: 'actor', x: 0.5, z: 1.5, rot: 190, scale: 1, action: 'stand' } ],
+    light: { az: 140, el: 32, int: 1.05 }, cam: { az: 15, dist: 6.5, h: 1.7, fov: 50 } } },
+  bedroom: { name: '卧室', data: { base: 'room', objects: [
+    { type: 'prop', shape: 'wall', x: 0, z: -4.5, rot: 0, scale: 1, w: 8, h: 2.4 },
+    { type: 'prop', shape: 'wall', x: -4, z: 0, rot: 90, scale: 1, w: 9, h: 2.4 },
+    { type: 'prop', shape: 'wall', x: 4, z: 0, rot: 90, scale: 1, w: 9, h: 2.4 },
+    { type: 'prop', shape: 'door', x: 3.4, z: -4.4, rot: 0, scale: 1 },
+    { type: 'prop', shape: 'table', x: -2.5, z: -3.4, rot: 0, scale: 1 },
+    { type: 'actor', x: 1, z: 1, rot: 200, scale: 1, action: 'sit' } ],
+    light: { az: 60, el: 25, int: 0.9 }, cam: { az: 5, dist: 5.5, h: 1.5, fov: 46 } } },
+  street: { name: '夜晚街道', data: { base: 'street', objects: [
+    { type: 'actor', x: -1, z: 0.5, rot: 175, scale: 1, action: 'stand' },
+    { type: 'actor', x: 2.5, z: -1.5, rot: 320, scale: 0.95, action: 'stand' },
+    { type: 'prop', shape: 'pillar', x: -4, z: -2, rot: 0, scale: 1 },
+    { type: 'prop', shape: 'pillar', x: 4, z: -2, rot: 0, scale: 1 } ],
+    light: { az: 200, el: 22, int: 1.2 }, cam: { az: 190, dist: 5.5, h: 1.6, fov: 48 } } },
+  lift: { name: '电梯间', data: { base: 'room', objects: [
+    { type: 'prop', shape: 'wall', x: -1.6, z: 0, rot: 90, scale: 1, w: 3.6, h: 2.4 },
+    { type: 'prop', shape: 'wall', x: 1.6, z: 0, rot: 90, scale: 1, w: 3.6, h: 2.4 },
+    { type: 'prop', shape: 'wall', x: 0, z: -1.9, rot: 0, scale: 1, w: 3.44, h: 2.4 },
+    { type: 'actor', x: 0, z: 0.8, rot: 180, scale: 1, action: 'stand' } ],
+    light: { az: 0, el: 70, int: 1.15 }, cam: { az: 0, dist: 4.5, h: 1.6, fov: 44 } } },
+};
 
 function pathPosAt(obj, t) {
   const pts = obj.path;
@@ -35,7 +65,7 @@ function pathPosAt(obj, t) {
 export function openSceneBuilder(shot, onSaved) {
   if (window.__sbOpen) { try { window.__sbOpen.close(); } catch {} window.__sbOpen = null; }
 
-  // ---- 场景数据（清洗） ----
+  // ---- 场景数据清洗 ----
   const scene = shot.scene ? JSON.parse(JSON.stringify(shot.scene)) : {};
   if (!scene.cam || typeof scene.cam !== 'object') scene.cam = { az: 25, dist: 7, h: 1.8, fov: 55 };
   scene.cam = { az: +scene.cam.az || 0, dist: Math.min(12, Math.max(3, +scene.cam.dist || 7)), h: Math.min(9, Math.max(0.4, +scene.cam.h || 1.8)), fov: Math.min(90, Math.max(25, +scene.cam.fov || 55)) };
@@ -46,29 +76,29 @@ export function openSceneBuilder(shot, onSaved) {
   scene.objects = (Array.isArray(scene.objects) ? scene.objects : []).filter(o => o && typeof o === 'object')
     .map(o => ({ ...o, x: +o.x || 0, z: +o.z || 0, rot: +o.rot || 0, scale: Math.min(3, Math.max(0.3, +o.scale || 1)) }))
     .filter(o => isFinite(o.x) && isFinite(o.z));
-  if (!scene.cams || !Array.isArray(scene.cams)) scene.cams = [];
+  if (!Array.isArray(scene.cams)) scene.cams = [];
 
   // ---- 状态 ----
-  let tool = 'select';            // select | room | wall | obj | person
-  let placeShape = 'box';
+  let tool = 'select';       // select | room | wall | place | person
+  let placeShape = 'sofa';
   let selIdx = -1;
-  let view = '2d';                // 2d | 3d
-  let v3d = 'oblique';            // top | oblique | front
+  let view = '2d';           // 2d | 3d
+  let v3d = 'oblique';
   let showGrid = true;
   let pathDraw = false, pathTarget = null;
   let drag = null, roomDrag = null;
+  let curTab = 'obj';
 
-  // ---- 弹窗骨架（对齐原版布局） ----
+  // ---- 骨架 ----
   const m = modal({
     title: '🏗 场景搭建 · ' + (shot.desc || '未命名镜头').slice(0, 14),
-    wide: true,
     onClose: () => { if (raf) cancelAnimationFrame(raf); window.__sbOpen = null; },
     body: `
       <div class="bk-layout">
-        <div class="bk-rail" id="bkRail"></div>
         <div class="bk-center">
-          <div class="bk-badge" id="bkBadge">2D 空间草图</div>
           <canvas id="bkCanvas"></canvas>
+          <div class="bk-rail" id="bkRail"></div>
+          <div class="bk-badge" id="bkBadge">2D 空间草图</div>
           <div class="bk-tip" id="bkTip"></div>
           <div class="bk-bottombar" id="bkBottom"></div>
         </div>
@@ -79,18 +109,11 @@ export function openSceneBuilder(shot, onSaved) {
             <button class="bk-tab" data-tab="ground">地面</button>
           </div>
           <div class="bk-panel" id="bkPanel"></div>
-          <div class="bk-lens">
-            <div class="bk-lens-title">镜头设置</div>
-            <div class="form-row"><label>镜头尺寸</label><select class="input input-sm" disabled><option>16:9</option></select></div>
-            <label class="bk-check"><input type="checkbox" id="bkVF" ${scene.vf ? 'checked' : ''}> 显示取景框</label>
-            <label class="bk-check"><input type="checkbox" id="bkCut" ${scene.cutaway ? 'checked' : ''}> 剖开前方外墙</label>
-          </div>
-          <div class="sb-list-head" id="sbListHead"><span id="sbCount">📋 场景清单 0</span><input id="sbSearch" class="input input-sm" placeholder="搜索" style="width:86px;margin-left:6px;padding:2px 6px;font-size:11px"><button class="chip" id="sbHideA" style="padding:1px 8px;font-size:10.5px">人物</button><button class="chip" id="sbHideP" style="padding:1px 8px;font-size:10.5px">道具</button></div>
-          <div id="sbList" class="sb-list"></div>
         </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-magic btn-sm" id="bkAI">🤖 AI 搭建</button>
+        <button class="btn btn-ghost btn-sm" id="bkTpl">🏘 场景模板</button>
         <button class="btn btn-ghost btn-sm" id="bkClear">🗑 清空</button>
         <div class="spacer"></div>
         <button class="btn btn-ghost" id="bkCancel">取消</button>
@@ -98,16 +121,21 @@ export function openSceneBuilder(shot, onSaved) {
       </div>`,
   });
   window.__sbOpen = m;
+  m.root.querySelector('.modal').classList.add('modal-super');
   const cv = m.body.querySelector('#bkCanvas');
   const badge = m.body.querySelector('#bkBadge');
+  const tip = m.body.querySelector('#bkTip');
+  const bottom = m.body.querySelector('#bkBottom');
+  const panel = m.body.querySelector('#bkPanel');
 
-  // ---- 渲染器与循环 ----
   const renderer = new WhiteModelRenderer(cv);
   const sim = { type: 'free' };
+  const V3D = { top: { az: 0, h: 9.5, dist: 6, fov: 45 }, oblique: { az: 30, h: 4.5, dist: 8, fov: 50 }, front: { az: 0, h: 1.6, dist: 8, fov: 50 } };
   let raf = null, t0 = performance.now(), frame = 0;
 
-  const V3D = { top: { az: 0, h: 9.5, dist: 6, fov: 45 }, oblique: { az: 30, h: 4.5, dist: 8, fov: 50 }, front: { az: 0, h: 1.6, dist: 8, fov: 50 } };
+  const setTip = (t) => { tip.textContent = t; };
 
+  // ---- 主循环 ----
   const loop = (now) => {
     if (!document.body.contains(cv)) return;
     frame++;
@@ -146,19 +174,16 @@ export function openSceneBuilder(shot, onSaved) {
   function draw2D() {
     const c = cv.getContext('2d');
     const cw = cv.clientWidth, ch = cv.clientHeight;
-    // 位图尺寸对齐 CSS 尺寸（否则绘制被拉伸，鼠标与网格错位）
     const dpr = window.devicePixelRatio || 1;
     const bw = Math.round(cw * dpr), bh = Math.round(ch * dpr);
     if (cv.width !== bw || cv.height !== bh) { cv.width = bw; cv.height = bh; }
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
-    c.clearRect(0, 0, cw, ch);
     c.fillStyle = '#f2f3f0'; c.fillRect(0, 0, cw, ch);
     if (showGrid) {
       c.strokeStyle = 'rgba(60,70,90,0.12)'; c.lineWidth = 1;
       for (let gx = -12; gx <= 12; gx++) { const a = w2p(gx, -12), b = w2p(gx, 12); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); }
       for (let gz = -12; gz <= 12; gz++) { const a = w2p(-12, gz), b = w2p(12, gz); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); }
     }
-    // 对象
     scene.objects.forEach((o, i) => {
       const sel = i === selIdx;
       if (o.type === 'prop' && o.shape === 'wall') {
@@ -186,7 +211,6 @@ export function openSceneBuilder(shot, onSaved) {
         c.restore();
       }
     });
-    // 轨迹
     const tgt = (selIdx >= 0 && scene.objects[selIdx]) || pathTarget;
     if (tgt && tgt.path && tgt.path.length) {
       c.strokeStyle = '#ff5470'; c.lineWidth = 2; c.setLineDash([5, 4]);
@@ -195,121 +219,71 @@ export function openSceneBuilder(shot, onSaved) {
       c.stroke(); c.setLineDash([]);
       for (const wp of tgt.path) { const [x, y] = w2p(wp.x, wp.z); c.fillStyle = '#ff5470'; c.beginPath(); c.arc(x, y, 4, 0, Math.PI * 2); c.fill(); }
     }
-    // 房间拖画预览
     if (roomDrag && roomDrag.moved) {
       const [ax, ay] = w2p(roomDrag.x1, roomDrag.z1), [bx, by] = w2p(roomDrag.x2, roomDrag.z2);
       c.strokeStyle = '#e0485a'; c.lineWidth = 4;
-      c.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+      if (roomDrag.line) { c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke(); }
+      else c.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
     }
-    // 相机
     const [cxp, cyp] = w2p(Math.sin((scene.cam?.az || 0) * DEG) * (scene.cam?.dist || 7), Math.cos((scene.cam?.az || 0) * DEG) * (scene.cam?.dist || 7));
     c.fillStyle = '#ffc857'; c.beginPath(); c.arc(cxp, cyp, 6, 0, Math.PI * 2); c.fill();
     c.fillStyle = 'rgba(255,255,255,0.75)'; c.font = '10px sans-serif';
     c.fillText('相机', cxp + 8, cyp - 6);
   }
 
-  // ---- 工具栏（左） ----
-  const TOOLS = [
+  // ---- 工具栏（画布内悬浮，图标式，对齐原版） ----
+  const RAIL = [
     { k: 'select', icon: '↖', name: '选择' },
     { k: 'room', icon: '▭', name: '画房间' },
     { k: 'wall', icon: '─', name: '画一面墙' },
-    { k: 'obj', icon: '◇', name: '造物' },
+    { k: 'place', icon: '◇', name: '造物' },
     { k: 'person', icon: '👤', name: '人物' },
   ];
   const rail = m.body.querySelector('#bkRail');
-  TOOLS.forEach(t => {
-    const b = document.createElement('button');
-    b.className = 'bk-tool' + (t.k === tool ? ' on' : '');
-    b.innerHTML = '<span>' + t.icon + '</span><i>' + t.name + '</i>';
-    b.onclick = () => {
-      tool = t.k;
-      pathDraw = false; pathTarget = null;
-      rail.querySelectorAll('.bk-tool').forEach(x => x.classList.toggle('on', x === b));
-      updateTip();
-      if (t.k === 'obj') renderPanel();
-    };
-    rail.appendChild(b);
-  });
-
-  function updateTip() {
-    badge.textContent = view === '2d' ? '2D 空间草图' : '3D 预览';
-    const tips = {
-      select: '选择：点对象选中/挪动 · 右键删除 · 空白处拖拽转机位（3D）',
-      room: '画房间：在网格上按住拖一个矩形，松手生成四面墙',
-      wall: '画一面墙：按住拖一条线（任意方向）',
-      obj: '造物：点网格放置「' + TNAME[placeShape] + '」',
-      person: '人物：点网格放置，选中后可画行走轨迹',
-    };
-    m.body.querySelector('#bkTip').textContent = view === '2d' ? tips[tool] : '3D 预览：拖拽旋转机位 · 滚轮缩放 · 右键删除';
+  const TOOL_TIP = { select: '选择：点对象选中/挪动 · 右键删除', room: '画房间：按住拖矩形，松手生成四面墙', wall: '画一面墙：按住拖线条（任意方向）', place: '造物：先在右侧「物体」选形状，点网格放置', person: '人物：点网格放置，选中后可画行走轨迹' };
+  function renderRail() {
+    rail.innerHTML = '';
+    RAIL.forEach(t => {
+      const b = document.createElement('button');
+      b.className = 'bk-tool' + (tool === t.k ? ' on' : '');
+      b.innerHTML = '<span>' + t.icon + '</span>';
+      b.title = t.name;
+      b.onclick = () => { tool = t.k; pathDraw = false; renderRail(); renderPanel(); setTip(TOOL_TIP[tool]); };
+      rail.appendChild(b);
+    });
   }
 
-  // ---- 底栏（视图切换） ----
-  const bottom = m.body.querySelector('#bkBottom');
+  // ---- 底栏 ----
   function renderBottom() {
-    bottom.innerHTML = `
-      <button class="chip ${view === '2d' ? 'chip-on' : ''}" data-v="2d">2D 草图</button>
-      <button class="chip ${view === '3d' ? 'chip-on' : ''}" data-v="3d">🎮 3D 预览</button>
-      ${view === '3d' ? `<button class="chip" data-v3="top">俯视</button><button class="chip" data-v3="oblique">斜视</button><button class="chip" data-v3="front">正视</button>` : ''}
-      <button class="chip ${showGrid ? 'chip-on' : ''}" id="bkGrid">隐藏网格</button>`;
-    bottom.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { view = b.dataset.v; setView(); renderBottom(); });
+    bottom.innerHTML = (view === '3d'
+      ? `<button class="chip" data-v="2d">📐 返回 2D</button><button class="chip ${v3d === 'top' ? 'chip-on' : ''}" data-v3="top">俯视</button><button class="chip ${v3d === 'oblique' ? 'chip-on' : ''}" data-v3="oblique">斜视</button><button class="chip ${v3d === 'front' ? 'chip-on' : ''}" data-v3="front">正视</button>`
+      : `<button class="chip chip-on" data-v="3d">🎮 立起来 (3D)</button><button class="chip ${showGrid ? 'chip-on' : ''}" id="bkGridCh">隐藏网格</button>`);
+    bottom.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { view = b.dataset.v; setView(); renderBottom(); setTip(TOOL_TIP[tool]); });
     bottom.querySelectorAll('[data-v3]').forEach(b => b.onclick = () => { v3d = b.dataset.v3; });
-    const g = bottom.querySelector('#bkGrid');
+    const g = bottom.querySelector('#bkGridCh');
     if (g) g.onclick = () => { showGrid = !showGrid; renderBottom(); };
   }
-  function setView() {
-    badge.textContent = view === '2d' ? '2D 空间草图' : '3D 预览';
-    cv.style.display = 'block';
-    renderer.resize();
-    updateTip();
-  }
 
-  // ---- 右栏 tabs ----
-  const panel = m.body.querySelector('#bkPanel');
-  let curTab = 'obj';
+  // ---- 右栏 ----
   m.body.querySelectorAll('.bk-tab').forEach(b => b.onclick = () => {
     curTab = b.dataset.tab;
     m.body.querySelectorAll('.bk-tab').forEach(x => x.classList.toggle('on', x === b));
     renderPanel();
   });
 
-  const renderList = () => {
-    const lb = m.body.querySelector('#sbList');
-    if (!lb) return;
-    const q = (m.body.querySelector('#sbSearch')?.value || '').trim();
-    const hideA = m.body.querySelector('#sbHideA')?.classList.contains('chip-on');
-    const hideP = m.body.querySelector('#sbHideP')?.classList.contains('chip-on');
-    const groups = { actor: [], prop: [] };
-    scene.objects.forEach((o, i) => {
-      const typeKey = o.type === 'actor' ? 'actor' : 'prop';
-      if (typeKey === 'actor' && hideA) return;
-      if (typeKey === 'prop' && hideP) return;
-      const label = (ICON[o.shape || o.type] || '') + (o.type === 'actor' ? '人物' : (TNAME[o.shape] || '物件'));
-      if (q && !label.includes(q)) return;
-      groups[typeKey].push([o, i]);
-    });
-    const row = (o, i) => '<div class="sb-list-row' + (i === selIdx ? ' on' : '') + '" data-i="' + i + '"><span>' + (ICON[o.shape || o.type] || '▪') + '</span><span class="sb-list-name">' + (o.type === 'actor' ? '人物' : (TNAME[o.shape] || '物件')) + '</span><span class="dim">' + (+o.x).toFixed(1) + ',' + (+o.z).toFixed(1) + '</span><button class="icon-btn" data-del="' + i + '">✕</button></div>';
-    lb.innerHTML = (groups.actor.length ? '<div class="sb-list-group">人物 ' + groups.actor.length + '</div>' + groups.actor.map(([o, i]) => row(o, i)).join('') : '') +
-      (groups.prop.length ? '<div class="sb-list-group">道具 ' + groups.prop.length + '</div>' + groups.prop.map(([o, i]) => row(o, i)).join('') : '') +
-      (scene.objects.length ? '' : '<div class="dim" style="padding:6px 2px">还没有对象</div>');
-    lb.querySelectorAll('.sb-list-row').forEach(r2 => r2.onclick = e => {
-      if (e.target.dataset.del !== undefined) { scene.objects.splice(+e.target.dataset.del, 1); if (selIdx === +e.target.dataset.del) selIdx = -1; renderPanel(); return; }
-      selIdx = +r2.dataset.i; renderPanel();
-    });
-    m.body.querySelector('#sbCount').textContent = '📋 场景清单 ' + scene.objects.length;
-  };
   function renderPanel() {
-    renderList();
-    if (curTab === 'obj') return renderObjTab();
+    renderObjListRows();
     if (curTab === 'light') return renderLightTab();
-    return renderGroundTab();
+    if (curTab === 'ground') return renderGroundTab();
+    return renderObjTab();
   }
 
   function renderObjTab() {
     const sel = selIdx >= 0 ? scene.objects[selIdx] : null;
     let html = '';
-    if (tool === 'obj' || tool === 'person') {
+    if (tool === 'place') {
       html += `<div class="card-title">造物形状</div><div class="sb-palette">` +
-        ['box', 'pillar', 'table', 'wall', 'door', 'window', 'sofa', 'tree', 'lamp'].map(sh =>
+        ['box', 'pillar', 'table', 'sofa', 'tree', 'lamp', 'wall', 'door', 'window'].map(sh =>
           `<button class="chip ${placeShape === sh ? 'chip-on' : ''}" data-sh="${sh}">${ICON[sh]} ${TNAME[sh]}</button>`).join('') + `</div>`;
     }
     if (sel) {
@@ -319,7 +293,7 @@ export function openSceneBuilder(shot, onSaved) {
         html += `<div class="form-row"><label>朝向快捷</label><div class="sb-palette">
           <button class="chip" data-f="0">正对</button><button class="chip" data-f="180">背对</button>
           <button class="chip" data-f="90">左侧</button><button class="chip" data-f="-90">右侧</button></div></div>`;
-        html += `<div class="form-row"><label>运动轨迹 <span class="dim">(${sel.path?.length >= 2 ? '已设 ' + sel.path.length + ' 点' : '未设置'})</span></label>
+        html += `<div class="form-row"><label>运动轨迹 <span class="dim">(${sel.path?.length >= 2 ? '已设 ' + sel.path.length + ' 点，自动面向行进方向' : '未设置'})</span></label>
           <div class="sb-palette"><button class="btn btn-ghost btn-sm" id="bkPathDraw">${pathDraw && pathTarget === sel ? '✅ 完成绘制' : '🎯 绘制轨迹'}</button>
           ${sel.path?.length ? '<button class="btn btn-ghost btn-sm" id="bkPathClear">🗑 清除</button>' : ''}</div>
           ${sel.path?.length >= 2 ? `<div class="form-row"><label>行走速度 <span id="bkSpdV">${(sel.speed || 1.2).toFixed(1)}</span></label><input type="range" id="bkSpd" class="scrub" min="0.4" max="2.5" step="0.1" value="${sel.speed || 1.2}"></div>` : ''}</div>`;
@@ -329,14 +303,16 @@ export function openSceneBuilder(shot, onSaved) {
       if (sel.shape === 'lamp') html += `<div class="form-row"><label>灯强度 <span id="bkLintV">${(sel.lint ?? 0.55).toFixed(2)}</span></label><input type="range" id="bkLint" class="scrub" min="0.1" max="1" step="0.05" value="${sel.lint ?? 0.55}"></div>`;
       html += `<button class="btn btn-danger btn-sm" id="bkDel">🗑 删除此对象</button>`;
     } else {
-      html += `<div class="dim" style="padding:4px 2px">未选中对象。左侧选工具，在${view === '2d' ? '网格' : '场景'}中点击操作。</div>`;
+      html += `<div class="dim" style="padding:4px 2px">未选中对象。${tool === 'place' ? '点网格放置「' + TNAME[placeShape] + '」' : '左侧选工具，在网格上操作'}。</div>`;
     }
-    // 镜头册
-    html += `<div class="card-title" style="margin-top:14px">📷 镜头册 <span class="dim">${scene.cams.length}</span></div>
-      <div class="sb-palette"><button class="btn btn-ghost btn-sm" id="bkCamSave">📷 保存当前机位</button></div>
-      <div id="bkCamList" class="sb-list">${scene.cams.map((cm, i) => `
-        <div class="sb-list-row${scene.cam === cm ? ' on' : ''}" data-i="${i}"><span>🎥</span><span class="sb-list-name">机位 ${i + 1}</span><span class="dim">${Math.round(cm.az)}°/${cm.dist}/${cm.h}</span><button class="icon-btn" data-load="${i}">载入</button><button class="icon-btn" data-cdel="${i}">✕</button></div>`).join('') || '<div class="dim" style="padding:4px 2px">还没有保存的机位</div>'}</div>
-      <div class="dim" style="font-size:11px;padding:4px 2px">保存场景后，动态分镜按「自由机位」播放当前机位；多个机位可轮流载入微调。</div>`;
+    // 场景清单
+    html += `<div class="card-title" style="margin-top:12px">📋 场景清单 <span class="dim">${scene.objects.length}</span></div>
+      <input id="bkSearch" class="input input-sm" placeholder="搜索物件" style="margin-bottom:6px">
+      <div id="bkList" class="sb-list"></div>`;
+    // 镜头设置
+    html += `<div class="card-title" style="margin-top:12px">镜头设置</div>
+      <label class="bk-check"><input type="checkbox" id="bkVF" ${scene.vf ? 'checked' : ''}> 显示取景框</label>
+      <label class="bk-check"><input type="checkbox" id="bkCut" ${scene.cutaway ? 'checked' : ''}> 剖开前方外墙</label>`;
     panel.innerHTML = html;
     wireObjTab();
   }
@@ -365,26 +341,37 @@ export function openSceneBuilder(shot, onSaved) {
       if (pathDraw && pathTarget === o) { pathDraw = false; pathTarget = null; }
       else { pathDraw = true; pathTarget = o; if (!o.path) o.path = []; }
       renderObjTab();
-      const tp = m.body.querySelector('#bkTip'); if (tp) tp.textContent = pathDraw ? '轨迹绘制中：在 2D 网格上依次点途经点' : '轨迹完成';
-      if (view === '3d') { view = '2d'; setView(); renderBottom(); }
+      setTip(pathDraw ? '轨迹绘制中：在 2D 网格依次点途经点' : '轨迹完成');
+      if (pathDraw && view === '3d') { view = '2d'; setView(); renderBottom(); }
     };
     const pc = panel.querySelector('#bkPathClear');
     if (pc) pc.onclick = () => { if (pathTarget) pathTarget.path = null; pathDraw = false; renderObjTab(); };
     const del = panel.querySelector('#bkDel');
     if (del) del.onclick = () => { if (selIdx >= 0) { scene.objects.splice(selIdx, 1); selIdx = -1; renderObjTab(); } };
-    const cs = panel.querySelector('#bkCamSave');
-    if (cs) cs.onclick = () => {
-      scene.cams.push({ ...scene.cam });
-      renderObjTab();
-      toast('机位已存入镜头册 📷', 'ok');
-    };
-    panel.querySelectorAll('[data-load]').forEach(b => b.onclick = () => {
-      Object.assign(scene.cam, scene.cams[+b.dataset.load]);
-      syncCamSliders();
-      toast('机位已载入', 'ok');
+    const vf = panel.querySelector('#bkVF');
+    if (vf) vf.onchange = () => { scene.vf = vf.checked; };
+    const cut = panel.querySelector('#bkCut');
+    if (cut) cut.onchange = () => { scene.cutaway = cut.checked; };
+    const se = panel.querySelector('#bkSearch');
+    if (se) se.oninput = () => renderObjListRows();
+    renderObjListRows();
+  }
+
+  function renderObjListRows() {
+    const lb = panel.querySelector('#bkList');
+    if (!lb) return;
+    const q = (panel.querySelector('#bkSearch')?.value || '').trim();
+    const rows = scene.objects.map((o, i) => ({ o, i })).filter(({ o }) => {
+      const label = (ICON[o.shape || o.type] || '') + (TNAME[o.shape || o.type] || '物件');
+      return !q || label.includes(q);
     });
-    panel.querySelectorAll('[data-cdel]').forEach(b => b.onclick = () => {
-      scene.cams.splice(+b.dataset.cdel, 1); renderObjTab();
+    lb.innerHTML = rows.map(({ o, i }) =>
+      `<div class="sb-list-row${i === selIdx ? ' on' : ''}" data-i="${i}"><span>${ICON[o.shape || o.type] || '▪'}</span><span class="sb-list-name">${TNAME[o.shape || o.type] || '物件'}${o.path?.length >= 2 ? ' 🎯' : ''}</span><span class="dim">${(+o.x).toFixed(1)},${(+o.z).toFixed(1)}</span><button class="icon-btn" data-del="${i}">✕</button></div>`).join('') ||
+      (scene.objects.length ? '' : '<div class="dim" style="padding:4px 2px">还没有对象</div>');
+    lb.querySelectorAll('.sb-list-row').forEach(r2 => r2.onclick = e => {
+      const i = +r2.dataset.i;
+      if (e.target.dataset.del !== undefined) { scene.objects.splice(i, 1); if (selIdx === i) selIdx = -1; renderObjTab(); return; }
+      selIdx = i; renderObjTab();
     });
   }
 
@@ -399,7 +386,7 @@ export function openSceneBuilder(shot, onSaved) {
       <div class="form-row"><label>光方位 <span id="bkLAzV">${scene.light.az}°</span><span class="dim">（0°=顺光/180°=逆光）</span></label><input type="range" id="bkLAz" class="scrub" min="0" max="360" value="${scene.light.az}"></div>
       <div class="form-row"><label>光高度 <span id="bkLElV">${scene.light.el}°</span></label><input type="range" id="bkLEl" class="scrub" min="5" max="85" value="${scene.light.el}"></div>
       <div class="form-row"><label>光强度 <span id="bkLIntV">${scene.light.int}</span></label><input type="range" id="bkLInt" class="scrub" min="0.3" max="1.3" step="0.05" value="${scene.light.int}"></div>
-      <div class="dim" style="font-size:11px">额外光源：用左侧「造物」放 💡 灯，选中后调强度。</div>`;
+      <div class="dim" style="font-size:11px">额外光源：工具栏「◇ 造物」放 💡 灯，选中后调强度。</div>`;
     const PRE = { key: [0, 35, 1], side: [90, 30, 1.05], rim: [140, 28, 1.1], back: [180, 30, 1.15], top: [0, 78, 1.05], flat: [0, 18, 0.45] };
     panel.querySelectorAll('#bkLP .chip').forEach(b => b.onclick = () => {
       const [az, el, int] = PRE[b.dataset.l];
@@ -421,16 +408,18 @@ export function openSceneBuilder(shot, onSaved) {
       </div>
       <div class="card-title" style="margin-top:14px">网格</div>
       <label class="bk-check"><input type="checkbox" id="bkGridCh" ${showGrid ? 'checked' : ''}> 显示网格</label>`;
-    panel.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
-      scene.floor = b.dataset.c;
-      renderGroundTab();
-    });
+    panel.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { scene.floor = b.dataset.c; renderGroundTab(); });
     const g = panel.querySelector('#bkGridCh');
     if (g) g.onchange = () => { showGrid = g.checked; };
   }
 
   // ---- 指针交互 ----
-  // (drag 声明在状态区)
+  const hitTest2D = (wx, wz) => {
+    let hit = -1, bd = 0.55;
+    scene.objects.forEach((o, i) => { const dd = Math.hypot(o.x - wx, o.z - wz); if (dd < bd) { bd = dd; hit = i; } });
+    return hit;
+  };
+
   cv.addEventListener('contextmenu', e => {
     e.preventDefault();
     const r = cv.getBoundingClientRect();
@@ -438,8 +427,7 @@ export function openSceneBuilder(shot, onSaved) {
     let hit = -1;
     if (view === '2d') {
       const [wx, wz] = p2w(sx, sy);
-      let bd = 0.6;
-      scene.objects.forEach((o, i) => { const dd = Math.hypot(o.x - wx, o.z - wz); if (dd < bd) { bd = dd; hit = i; } });
+      hit = hitTest2D(wx, wz);
     } else {
       const cam0 = solveCamera(sim, 0.35, { x: 0, y: 0, z: 0 }, { scene });
       const fc0 = (renderer.h / 2) / Math.tan(((scene.cam?.fov || 55) * DEG) / 2);
@@ -455,7 +443,6 @@ export function openSceneBuilder(shot, onSaved) {
   cv.addEventListener('wheel', e => {
     e.preventDefault();
     scene.cam.dist = Math.max(3, Math.min(12, (scene.cam.dist || 7) + (e.deltaY > 0 ? 0.5 : -0.5)));
-    syncCamSliders();
   }, { passive: false });
 
   cv.addEventListener('pointerdown', e => {
@@ -467,7 +454,6 @@ export function openSceneBuilder(shot, onSaved) {
       const [wx, wz] = p2w(sx, sy);
       drag.x1 = Math.max(-11, Math.min(11, +wx.toFixed(2)));
       drag.z1 = Math.max(-11, Math.min(11, +wz.toFixed(2)));
-      drag.wx = wx; drag.wz = wz;
     }
   });
 
@@ -486,12 +472,11 @@ export function openSceneBuilder(shot, onSaved) {
     const cx = Math.max(-11, Math.min(11, +wx.toFixed(2))), cz = Math.max(-11, Math.min(11, +wz.toFixed(2)));
     if (tool === 'room') roomDrag = { x1: drag.x1, z1: drag.z1, x2: cx, z2: cz, moved: true };
     else if (tool === 'wall') roomDrag = { x1: drag.x1, z1: drag.z1, x2: cx, z2: cz, moved: true, line: true };
-    else if (drag.moveIdx >= 0 && scene.objects[drag.moveIdx]) { scene.objects[drag.moveIdx].x = cx; scene.objects[drag.moveIdx].z = cz; }
+    else if (tool === 'select' && drag.moveIdx >= 0 && scene.objects[drag.moveIdx]) { scene.objects[drag.moveIdx].x = cx; scene.objects[drag.moveIdx].z = cz; }
   });
 
   cv.addEventListener('pointerup', e => {
     const wasDrag = drag && drag.moved;
-    const up = drag ? { sx: drag.sx, sy: drag.sy, x1: drag.x1, z1: drag.z1, moveIdx: drag.moveIdx } : null;
     setTimeout(() => { drag = null; }, 0);
     const r = cv.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
@@ -525,22 +510,21 @@ export function openSceneBuilder(shot, onSaved) {
         roomDrag = null; renderPanel();
         return;
       }
-      // 命中检测（选择/挪动）
-      let hit = -1, bd = 0.55;
-      scene.objects.forEach((o, i) => { const dd = Math.hypot(o.x - wx, o.z - wz); if (dd < bd) { bd = dd; hit = i; } });
+      // 命中检测
+      const hit = hitTest2D(wx, wz);
       if (tool === 'select') {
-        if (hit >= 0) { selIdx = hit; renderPanel(); return; }
-        if (pathDraw && pathTarget && selIdx >= 0 && scene.objects[selIdx] === pathTarget) { pathTarget.path.push({ x: cx, z: cz }); renderPanel(); return; }
-        selIdx = -1; renderPanel(); return;
+        if (hit >= 0) { selIdx = hit; drag.moveIdx = hit; renderObjTab(); return; }
+        if (pathDraw && pathTarget && selIdx >= 0 && scene.objects[selIdx] === pathTarget) { pathTarget.path.push({ x: cx, z: cz }); renderObjTab(); return; }
+        selIdx = -1; renderObjTab(); return;
       }
-      if (tool === 'person' || tool === 'obj') {
-        if (hit >= 0) { selIdx = hit; renderPanel(); return; }
+      if (tool === 'place' || tool === 'person') {
+        if (hit >= 0) { selIdx = hit; renderObjTab(); return; }
         const o = tool === 'person'
           ? { type: 'actor', x: cx, z: cz, rot: 205, scale: 1, action: 'stand', seed: Math.round(Math.random() * 90) }
           : { type: 'prop', shape: placeShape, x: cx, z: cz, rot: 0, scale: 1 };
         scene.objects.push(o);
         selIdx = scene.objects.length - 1;
-        renderPanel(); toast(TNAME[o.shape || o.type] + '已放置', 'ok');
+        renderObjTab(); toast(TNAME[o.shape || o.type] + '已放置', 'ok');
         return;
       }
       return;
@@ -555,39 +539,25 @@ export function openSceneBuilder(shot, onSaved) {
       if (pr) { const dd = Math.hypot(pr.x - sx, pr.y - sy); if (dd < bd) { bd = dd; best = i; } }
     });
     if (best >= 0) { selIdx = best; renderPanel(); return; }
-    if (tool === 'person' || tool === 'obj') {
-      const g = unproject3D(sx, sy, cam0, fc0, renderer.w, renderer.h);
-      if (!g) return;
+    if ((tool === 'place' || tool === 'person') && !wasDrag) {
+      const A = (sx - renderer.w / 2) / fc0, B = (renderer.h / 2 - sy) / fc0;
+      const cp = Math.cos(cam0.pitch), sp = Math.sin(cam0.pitch);
+      const denom = B * cp + sp;
+      if (Math.abs(denom) < 0.02) return;
+      const d = -cam0.pos[1] / denom;
+      if (d <= 0.15 || d > 60) return;
+      const x2 = A * d, z2 = B * d * sp - d * cp;
+      const cy_ = Math.cos(cam0.yaw), sy_ = Math.sin(cam0.yaw);
+      const wx = Math.max(-11, Math.min(11, +(cam0.pos[0] + x2 * cy_ - z2 * sy_).toFixed(2)));
+      const wz = Math.max(-11, Math.min(11, +(cam0.pos[2] + x2 * sy_ + z2 * cy_).toFixed(2)));
       const o = tool === 'person'
-        ? { type: 'actor', x: g[0], z: g[1], rot: 205, scale: 1, action: 'stand', seed: Math.round(Math.random() * 90) }
-        : { type: 'prop', shape: placeShape, x: g[0], z: g[1], rot: 0, scale: 1 };
+        ? { type: 'actor', x: wx, z: wz, rot: 205, scale: 1, action: 'stand', seed: Math.round(Math.random() * 90) }
+        : { type: 'prop', shape: placeShape, x: wx, z: wz, rot: 0, scale: 1 };
       scene.objects.push(o);
       selIdx = scene.objects.length - 1;
       renderPanel(); toast('已放置', 'ok');
     }
   });
-
-  function unproject3D(sx, sy, cam, focal, W, H) {
-    const A = (sx - W / 2) / focal, B = (H / 2 - sy) / focal;
-    const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
-    const denom = B * cp + sp;
-    if (Math.abs(denom) < 0.02) return null;
-    const d = -cam.pos[1] / denom;
-    if (d <= 0.15 || d > 60) return null;
-    const x2 = A * d, z2 = B * d * sp - d * cp;
-    const cy_ = Math.cos(cam.yaw), sy_ = Math.sin(cam.yaw);
-    const wx = cam.pos[0] + x2 * cy_ - z2 * sy_;
-    const wz = cam.pos[2] + x2 * sy_ + z2 * cy_;
-    return [Math.max(-11, Math.min(11, +wx.toFixed(2))), Math.max(-11, Math.min(11, +wz.toFixed(2)))];
-  }
-
-  m.body.querySelector('#sbSearch').oninput = () => renderList();
-  m.body.querySelector('#sbHideA').onclick = () => { m.body.querySelector('#sbHideA').classList.toggle('chip-on'); renderList(); };
-  m.body.querySelector('#sbHideP').onclick = () => { m.body.querySelector('#sbHideP').classList.toggle('chip-on'); renderList(); };
-  function syncCamSliders() {
-    const az = panel.querySelector('#bkCamAz');
-    if (az) { az.value = scene.cam.az; }
-  }
 
   // ---- AI 搭建 ----
   m.body.querySelector('#bkAI').onclick = () => {
@@ -625,9 +595,7 @@ export function openSceneBuilder(shot, onSaved) {
         if (Array.isArray(j.objects)) scene.objects = j.objects;
         if (j.light) scene.light = j.light;
         if (j.cam) scene.cam = j.cam;
-        if (Array.isArray(j.cams)) scene.cams = j.cams;
         selIdx = -1; renderPanel();
-        m.body.querySelector('#bkTip').textContent = 'JSON 场景已导入';
         am.close();
         toast('场景已导入 🏗', 'ok');
         window.__bdm.addXP(3, 'AI 搭建');
@@ -635,11 +603,28 @@ export function openSceneBuilder(shot, onSaved) {
     };
   };
 
+  // ---- 模板 ----
+  m.body.querySelector('#bkTpl').onclick = () => {
+    const tm = modal({
+      title: '🏘 场景模板',
+      body: '<div class="export-opts">' + Object.entries(TPL).map(([k, t]) => '<button class="btn btn-ghost" data-k="' + k + '">' + t.name + '</button>').join('') + '</div>',
+    });
+    tm.body.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
+      const t = TPL[b.dataset.k];
+      scene.base = t.data.base; scene.objects = JSON.parse(JSON.stringify(t.data.objects));
+      scene.light = { ...t.data.light }; scene.cam = { ...t.data.cam };
+      selIdx = -1; renderPanel();
+      tm.close();
+      toast('模板「' + t.name + '」已载入', 'ok');
+      window.__bdm.addXP(1, '场景模板');
+    });
+  };
+
   // ---- 保存/清空/取消 ----
   m.body.querySelector('#bkSave').onclick = () => {
     pathDraw = false; pathTarget = null;
     window.__bdm.updateShot(shot.id, {
-      scene: scene.objects.length || scene.cams.length ? scene : null,
+      scene: scene.objects.length ? scene : null,
       ...(scene.objects.length ? { cameraMove: 'free' } : {}),
     });
     window.__bdm.addXP(3, '搭建场景');
@@ -647,18 +632,17 @@ export function openSceneBuilder(shot, onSaved) {
     toast('场景已保存 🏗', 'ok');
     if (onSaved) onSaved();
   };
-  m.body.querySelector('#bkClear').onclick = () => { scene.objects = []; scene.cams = []; selIdx = -1; renderPanel(); };
+  m.body.querySelector('#bkClear').onclick = () => { scene.objects = []; selIdx = -1; renderPanel(); };
   m.body.querySelector('#bkCancel').onclick = () => m.close();
   const __oc = m.close;
   m.close = (r) => { window.__sbOpen = null; __oc(r); };
   m.root.querySelector('.modal-x').onclick = () => m.close(null);
 
   // ---- 启动 ----
-  m.body.classList.add('modal-super-body');
   m.root.querySelector('.modal').classList.add('modal-super');
-  setView();
+  renderRail();
   renderBottom();
   renderPanel();
-  updateTip();
+  setTip(TOOL_TIP[tool]);
   raf = requestAnimationFrame(loop);
 }
