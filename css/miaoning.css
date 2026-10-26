@@ -551,3 +551,71 @@
 .mn-sb-tools>*{flex:0 0 auto}
 .mn-sb-tools .mn-sb-spacer{flex:1 1 12px;min-width:12px}
 .mn-sb-tools{row-gap:6px;overflow-x:auto}
+
+/* ================================================================
+ * 2026-10-26 · 右键菜单 / 多选 / 物件库 / 镜头册单删
+ * ================================================================ */
+
+/* ---- 右键菜单 ---- */
+.mn-ctx{position:fixed;z-index:80;min-width:186px;padding:5px;border-radius:9px;
+  background:var(--paper);border:1px solid var(--line);box-shadow:0 12px 34px rgba(20,14,6,.20);
+  animation:mnCtxIn .12s ease-out}
+@keyframes mnCtxIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.mn-ctx-item{display:flex;align-items:center;gap:9px;width:100%;height:32px;padding:0 9px;border-radius:6px;
+  font-size:12.5px;color:var(--ink);text-align:left}
+.mn-ctx-item .mn-svg{color:var(--muted)}
+.mn-ctx-item span{flex:1;white-space:nowrap}
+.mn-ctx-item kbd{font:11px/1 ui-monospace,Menlo,monospace;color:var(--muted);opacity:.8}
+.mn-ctx-item:hover{background:var(--soft)}
+.mn-ctx-item:hover .mn-svg{color:var(--ink)}
+.mn-ctx-item.danger{color:var(--accent)}
+.mn-ctx-item.danger .mn-svg{color:var(--accent)}
+.mn-ctx-item.danger:hover{background:var(--accent-soft)}
+.mn-ctx-item.disabled{opacity:.45;cursor:not-allowed}
+.mn-ctx-sep{height:1px;margin:4px 6px;background:var(--line)}
+
+/* ---- 物件库 ---- */
+.mn-lib-head{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
+.mn-lib-head strong{font-size:13.5px;font-weight:650}
+.mn-lib-head span{font-size:11.5px;color:var(--muted)}
+.mn-lib-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.mn-lib-item{display:flex;align-items:center;gap:7px;height:38px;padding:0 9px;border-radius:7px;
+  border:1px solid var(--line);background:var(--paper);text-align:left}
+.mn-lib-item i{width:15px;height:15px;border-radius:4px;flex:0 0 auto;border:1px solid rgba(0,0,0,.08)}
+.mn-lib-item span{font-size:12.5px}
+.mn-lib-item small{margin-left:auto;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.mn-lib-item:hover{border-color:var(--accent);color:var(--accent)}
+.mn-lib-item.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.mn-lib-row{display:flex;gap:6px;margin-top:8px}
+.mn-lib-pending{margin-bottom:9px;padding:7px 9px;border-radius:7px;background:var(--accent-soft);
+  color:var(--accent);font-size:11.5px;line-height:1.5}
+.mn-linkbtn{color:var(--accent);text-decoration:underline;font-size:11.5px}
+
+/* ---- 镜头册：单个删除 ---- */
+.mn-shot-cell{position:relative;flex:0 0 auto;text-align:center}
+.mn-shot-del{position:absolute;top:-5px;right:-5px;width:19px;height:19px;border-radius:50%;
+  background:var(--paper);border:1px solid var(--line);color:var(--muted);font-size:11px;line-height:1;
+  display:none;place-items:center;z-index:2}
+.mn-shot-cell:hover .mn-shot-del{display:grid}
+.mn-shot-del:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* ---- 搭建工具：两列紧凑网格 ----
+   十张卡原来竖排占 ~470px，把「场景清单」直接挤出可视区（用户得滚半天才找到物体）。
+   改成两列图标网格，高度砍一半，清单能露出来。 */
+.mn-tool-list{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.mn-tool-card{flex-direction:row;align-items:center;gap:7px;padding:6px 8px;position:relative;min-height:40px}
+.mn-tool-icon{width:26px;height:26px;border-radius:6px}
+.mn-tool-icon .mn-svg{width:15px;height:15px}
+.mn-tool-copy strong{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mn-tool-copy small{display:none}
+.mn-tool-card kbd{display:none}
+
+/* 画布左上角的「2D 空间草图」标签是纯展示的，别让它吃掉画布上的点击
+   （实测：左上角那片区域画不出房间，因为点在了标签上） */
+.mn-stage-label{pointer-events:none}
+
+/* ---- 快捷键弹窗：静态编辑快捷键表 ---- */
+.mn-key-static{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin-bottom:4px}
+.mn-key-static-row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.mn-key-static-row kbd{flex:0 0 auto;font:11px/1 ui-monospace,Menlo,monospace;padding:4px 6px;border-radius:4px;
+  border:1px solid var(--line);background:var(--soft);color:var(--ink)}

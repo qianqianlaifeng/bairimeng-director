@@ -55,6 +55,7 @@ function newShot(partial = {}) {
     sketch: null,       // IndexedDB key（手绘分镜稿）
     moveSpeed: 'std',   // 运镜速度 slow/std/fast
     scene: null,        // 场景搭建 {objects:[], cam:}
+    mnState: null,      // 导演台原生场景快照（房间/墙/道具，重开时无损还原）
     note: '',
     review: null,       // {score, checks:{...}, note}
     ...partial,

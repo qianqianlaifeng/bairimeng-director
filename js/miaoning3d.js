@@ -26,10 +26,12 @@
     const z = norm(sub(eye, ctr));
     let x = cross(up, z); if (Math.hypot(x[0], x[1], x[2]) < 1e-5) x = [1, 0, 0]; x = norm(x);
     const y = cross(z, x);
-    // ⚠️ 列主序：每个基向量占一列（x/y/z 各 3 个分量 + 0），平移量在最后一列。
-    // 2026-10-25 修复：原先按 [x0,y0,z0, 0, x1,y1,z1, 0, ...] 行式摆放，上传的
-    // 是转置矩阵，平移量落进 col0~2 的 w 槽 → 所有顶点被远平面裁掉，3D 全白。
-    return [x[0], x[1], x[2], 0, y[0], y[1], y[2], 0, z[0], z[1], z[2], 0,
+    /* ⚠️ 2026-10-26 真·修复：视图矩阵必须是 [R | t] 的「列」摆放 ——
+       col0=(x0,y0,z0,0)、col1=(x1,y1,z1,0)、col2=(x2,y2,z2,0)。
+       之前写成 col0=(x0,x1,x2,0)… 存的是 R 的转置，旋转对了但 z_view 全错，
+       结果是：镜头永远歪在画面角落、墙看不见、只剩一块斜着的地板。
+       验证方法：把相机目标点 (tx,ty,tz) 投进去，NDC 必须是 (0,0)。 */
+    return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0,
       -dot(x, eye), -dot(y, eye), -dot(z, eye), 1];
   }
   function mMul(a, b) { // a,b 均为列主序
@@ -128,19 +130,21 @@
       for (const k of [0, 1, 2, 0, 2, 3]) { const p = wp[k]; g.pos.push(p[0], p[1], p[2]); g.nrm.push(wn[0], wn[1], wn[2]); g.col.push(col[0], col[1], col[2]); }
     }
   }
-  function pushFloor(g, x0, z0, x1, z1, col) {
-    const y = 0.02, p = [[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]], n = [0, 1, 0];
+  function pushFloor(g, x0, z0, x1, z1, col, y) {
+    y = (y == null ? 0.02 : y);
+    const p = [[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]], n = [0, 1, 0];
     for (const k of [0, 1, 2, 0, 2, 3]) { const q = p[k]; g.pos.push(q[0], q[1], q[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]); }
   }
   function buildGeo(state) {
     const g = { pos: [], nrm: [], col: [] };
     const sc = state.scene, material = (state.view && state.view.material) || 'original', dark = isDark();
     let vi = 0;
-    pushFloor(g, bounds.minX - 2, bounds.minZ - 2, bounds.maxX + 2, bounds.maxZ + 2, hex2rgb(dark ? '#26241f' : '#e9e3d8'));
+    /* 三层高度错开，避免共面 z-fighting（原来地面和房间地板都在 y=0.02，会闪条纹） */
+    pushFloor(g, bounds.minX - 2, bounds.minZ - 2, bounds.maxX + 2, bounds.maxZ + 2, hex2rgb(dark ? '#26241f' : '#e9e3d8'), 0.0);
     for (const r of sc.rooms) {
       if (r.hidden) continue;
       const col = material === 'random' ? hashColor(vi++) : (r.color ? hex2rgb(r.color) : (dark ? [0.16, 0.15, 0.13] : [0.93, 0.91, 0.86]));
-      pushFloor(g, r.x, r.y, r.x + r.w, r.y + r.d, col);
+      pushFloor(g, r.x, r.y, r.x + r.w, r.y + r.d, col, 0.03);
     }
     const wallCol = dark ? [0.40, 0.38, 0.34] : [0.78, 0.74, 0.66];
     for (const w of sc.walls) {
@@ -169,7 +173,7 @@
     return g;
   }
   function buildLines() {
-    const lp = [], y = 0.015;
+    const lp = [], y = 0.06;
     const x0 = Math.floor(bounds.minX) - 2, x1 = Math.ceil(bounds.maxX) + 2, z0 = Math.floor(bounds.minZ) - 2, z1 = Math.ceil(bounds.maxZ) + 2;
     for (let x = x0; x <= x1; x++) lp.push(x, y, z0, x, y, z1);
     for (let z = z0; z <= z1; z++) lp.push(x0, y, z, x1, y, z);
@@ -224,7 +228,7 @@
     const sdir = [Math.cos(al) * Math.sin(az), Math.sin(al), Math.cos(al) * Math.cos(az)];
     gl.uniform3fv(gl.getUniformLocation(prog, 'uSunDir'), new Float32Array(sdir));
     gl.uniform3fv(gl.getUniformLocation(prog, 'uSunCol'), new Float32Array([0.95, 0.88, 0.72]));
-    gl.uniform1f(gl.getUniformLocation(prog, 'uAmb'), 0.42);
+    gl.uniform1f(gl.getUniformLocation(prog, 'uAmb'), 0.55);
     const lights = (state.scene.lights || []).filter(l => !l.hidden);
     const ptPos = new Float32Array(12), ptCol = new Float32Array(12), ptInt = new Float32Array(4);
     const n = Math.min(lights.length, 4);

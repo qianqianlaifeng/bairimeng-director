@@ -1089,3 +1089,8 @@ body.sb-mn-open { overflow: hidden; }
   .sb-mn-dock-tip { display: none; }
   .sb-mn-dock { padding: 7px 8px; }
 }
+
+/* 场景搭建浮层：底部操作条挪到「视图控制条上方」——
+   原来 bottom:152px 正好压在 俯视/斜视/正视 那一行上（截图里「隐藏」被盖住） */
+.sb-mn-overlay .sb-mn-dock { bottom: 196px; right: 18px; }
+.sb-mn-overlay .mn-view-controls { padding-right: 4px; }

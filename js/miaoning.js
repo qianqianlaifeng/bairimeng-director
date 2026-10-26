@@ -1,4 +1,5 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.11.0（2026-10-26）：右键菜单 / 右键平移 / 框选多选 / 物件库 / 对齐参考线 / 撤销粒度修复。
    v1.10.28：仿 B 站玩具页 MiorningDYT（v0.6.17）原生重制 —— M1 里程碑：
    应用外壳 + 2D 户型编辑器（画房间/画墙/造物/打洞/放人）+ 场景清单 +
    IndexedDB 八画布 + 导入导出 + 暗色主题 + 帮助/快捷键/AI规则/模板弹窗。
@@ -74,7 +75,11 @@ const MN = {
   canvasId: '01',
   state: null,            // 当前画布完整状态
   tool: 'select',         // select|room|wall|prop|hole|person|pan
-  sel: null,              // {kind, id}
+  sel: null,              // {kind, id}  主选中（最后点的那一个）
+  selList: [],            // 多选：框选 / Shift 点选累积 [{kind,id}]
+  pending: null,          // 物体库待放置：{kind:'prop'|'person', preset:{...}}
+  guide: null,            // 拖动时的对齐参考线 {v:[x],h:[y]}
+  ctxOpen: false,         // 右键菜单是否打开
   view: { x: 0, y: 0, k: 1 },
   grid: true,
   immersive: false,
@@ -147,7 +152,7 @@ async function loadCanvas(id) {
     try { await dbPut('canvas:' + id, st); } catch (e) { /* 存储失败不打断，内存里照样能用 */ }
   }
   MN.state = st;
-  MN.sel = null; MN.undo = []; MN.redo = [];
+  MN.sel = null; MN.selList = []; MN.pending = null; MN.undo = []; MN.redo = [];
   MN.view = { x: 0, y: 0, k: st.view && st.view.zoom || 1 };
   MN.grid = !!(st.view && st.view.grid !== false);
   fitView();
@@ -174,8 +179,8 @@ async function saveNow(id, st) {
     }
   } catch (e) { /* 存储失败不打断操作 */ }
 }
-function pushUndo() {
-  MN.undo.push(JSON.stringify(MN.state));
+function pushUndo(snapStr) {
+  MN.undo.push(snapStr || JSON.stringify(MN.state));
   if (MN.undo.length > 60) MN.undo.shift();
   MN.redo = [];
 }
@@ -283,7 +288,28 @@ function bindShell() {
   cv.addEventListener('pointerup', onPtrUp);
   cv.addEventListener('pointercancel', onPtrUp);
   cv.addEventListener('wheel', onWheel, { passive: false });
-  cv.addEventListener('contextmenu', e => { e.preventDefault(); if (MN.wallDraft) { MN.wallDraft = null; paint(); } });
+  cv.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    /* 右键拖动 = 平移画布，松手不该弹菜单 */
+    if (MN.drag && MN.drag.kind === 'rpan' && MN.drag.moved) return;
+    if (MN._ctxDrag && Date.now() - MN._ctxDrag.t < 400 && MN._ctxDrag.moved) return;
+    const r = cv.getBoundingClientRect();
+    const w = s2w(e.clientX - r.left, e.clientY - r.top);
+    if (MN.wallDraft) { MN.wallDraft = null; paint(); return; }   // 画墙画到一半，右键先取消
+    const hit = hitTest(w.x, w.y);
+    if (hit) {
+      if (!inSel(hit.kind, hit.id)) { selectOnly(hit.kind, hit.id); refreshSel(); }
+    } else if (selList().length) { clearSel(); refreshSel(); }
+    openCtx(e.clientX, e.clientY, hit);
+  });
+  /* 双击物体 = 直接改名（不用先去右侧面板翻） */
+  cv.addEventListener('dblclick', e => {
+    const r = cv.getBoundingClientRect();
+    const w = s2w(e.clientX - r.left, e.clientY - r.top);
+    const hit = hitTest(w.x, w.y);
+    if (!hit) return;
+    selectOnly(hit.kind, hit.id); refreshSel(); renameSel();
+  });
   const cv3 = $('#mn3d'); if (cv3) { cv3.style.display = 'none'; if (window.MN3D) { try { MN3D.ensure(cv3); } catch (e) { } } }
 }
 
@@ -357,14 +383,14 @@ function renderLeft() {
       </div>
       <button class="mn-ai-entry" id="mnAiRules">${icon('file-braces', 's14')}<strong>AI 规则</strong><span>让 AI 帮你搭</span><span class="mn-ai-entry-r">${icon('download', 's12')}</span></button>
     </section>
+    <section class="mn-section" id="mnTreeSec"></section>
     <section class="mn-section">
       <div class="mn-sec-head"><span>搭建工具</span><span class="mn-sec-note">够用就行</span></div>
       <div class="mn-tool-list" id="mnToolList"></div>
     </section>
     <section class="mn-section">
       <button class="mn-tree-toggle" id="mnTplHead" style="width:100%">${icon('chevron-down')}<span>场景模板</span><span class="mn-tree-count">${tplCount}</span></button>
-    </section>
-    <section class="mn-section" id="mnTreeSec"></section>`;
+    </section>`;
   $('#mnCanvasSel').value = MN.canvasId;
   $('#mnCanvasSel').onchange = e => loadCanvas(e.target.value);
   $('#mnProjTitle').oninput = e => { st.scene.title = e.target.value; saveSoon(); };
@@ -399,9 +425,9 @@ function setTool(id) {
   if (id === 'genie') { if (window.MN3) MN3.openGenie(); return; }
   if (id === 'motion') { if (window.MN3) MN3.openMotion(); return; }
   if (id === 'cut') { if (window.MN3) MN3.openCut(); return; }
-  MN.tool = id; MN.wallDraft = null;
+  MN.tool = id; MN.wallDraft = null; MN.pending = null;
   renderToolList(); buildFloatTools(); paint();
-  const hints = { select: '点一下，改一点。想改谁，就点谁。', room: '按住拖矩形 · 松手就是一间 · 接着画', wall: '点两下连线 · 斜着也行 · Esc 取消', prop: '拖一个矩形 · 块方的，里面空的', hole: '点一下墙 · 开出个门洞', person: '点一下 · 放个小人', pan: '拖着看 · 松手停' };
+  const hints = { select: '点选 · 拖动移动 · 右键删除 · 空白拖动框选', room: '按住拖矩形 · 松手就是一间 · 接着画', wall: '点两下连线 · 斜着也行 · Esc 取消', prop: '拖一个矩形 · 块方的，里面空的', hole: '点一下墙 · 开出个门洞', person: '点一下 · 放个小人', pan: '拖着看 · 松手停' };
   $('#mnHint').innerHTML = `${icon('mouse-pointer-2', 's14')}<span>${hints[id] || ''}</span>`;
 }
 
@@ -506,7 +532,14 @@ function renderTree() {
   html += `</div>`;
   sec.innerHTML = html;
 
-  $('#mnTreeSearch').oninput = e => { treeQuery = e.target.value; renderTree(); $('#mnTreeSearch').focus(); };
+  $('#mnTreeSearch').oninput = e => {
+    /* 保留光标位置：整块重绘后 focus() 会把光标甩到末尾，中文输入中间改字很难受 */
+    const pos = e.target.selectionStart;
+    treeQuery = e.target.value;
+    renderTree();
+    const s2 = $('#mnTreeSearch');
+    if (s2) { s2.focus(); try { s2.setSelectionRange(pos, pos); } catch (err) { } }
+  };
   $('#mnTreeAll').onclick = () => { treeOpen.all = !treeOpen.all; renderTree(); };
   $('#mnTreeAdd').onclick = () => toast('🚧 自定义分组建设中');
   $$('[data-folder]', sec).forEach(b => b.onclick = () => { treeOpen[b.dataset.folder] = !(treeOpen[b.dataset.folder] !== false); renderTree(); });
@@ -516,10 +549,11 @@ function renderTree() {
   $$('[data-obj]', sec).forEach(r => r.onclick = e => {
     if (e.target.closest('[data-eye]') || e.target.closest('[data-del]')) return;
     const [kind, id] = r.dataset.obj.split(':');
-    MN.sel = { kind, id }; renderTree(); renderRight(); paint();
+    if (e.shiftKey) toggleSel(kind, id); else selectOnly(kind, id);
+    renderTree(); renderRight(); paint();
   });
   $$('[data-eye]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const [kind, id] = b.dataset.eye.split(':'); const o = findObj(kind, id); if (o) { o.hidden = !o.hidden; renderTree(); paint(); saveSoon(); } });
-  $$('[data-del]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const [kind, id] = b.dataset.del.split(':'); pushUndo(); delObj(kind, id); renderAll(); saveSoon(); });
+  $$('[data-del]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const [kind, id] = b.dataset.del.split(':'); pushUndo(); delObj(kind, id); MN.selList = selList().filter(s => !(s.kind === kind && s.id === id)); if (MN.sel && MN.sel.id === id) MN.sel = MN.selList[MN.selList.length - 1] || null; renderAll(); saveSoon(); });
 }
 
 function toggleGroupVis(key) {
@@ -680,12 +714,26 @@ function renderRight() {
   $('#mnCamCeil').onchange = e => { cam.ceil = e.target.checked; saveSoon(); };
   $('#mnCamFov').oninput = e => { cam.fov = +e.target.value; e.target.previousElementSibling.querySelector('strong').textContent = cam.fov + '°'; saveSoon(); };
   bindObjPanel(body);
+  bindLibrary();
 }
+
+/* 物件库预设：点一下 → 画布点一下落地（尺寸单位 = 1 格，颜色对齐原版暖纸色） */
+const PRESETS = [
+  { name: '桌子', w: 1.4, d: 0.8, h: 0.75, color: '#d9b382' },
+  { name: '椅子', w: 0.6, d: 0.6, h: 0.9, color: '#c98d6b' },
+  { name: '沙发', w: 2.2, d: 0.9, h: 0.8, color: '#8a9b8e' },
+  { name: '床', w: 2, d: 3, h: 0.6, color: '#b8b0a4' },
+  { name: '柜子', w: 1.2, d: 0.6, h: 2, color: '#a3b8c9' },
+  { name: '箱子', w: 0.8, d: 0.8, h: 0.8, color: '#d9b382' },
+  { name: '柱子', w: 0.4, d: 0.4, h: 2.6, color: '#b0aaa1' },
+  { name: '门', w: 1, d: 0.2, h: 2.1, color: '#c98d6b' },
+  { name: '窗', w: 1.6, d: 0.2, h: 1.4, color: '#cfe4ff' },
+  { name: '树', w: 1.2, d: 1.2, h: 2.8, color: '#7d8c63' },
+];
 
 function renderObjPanel() {
   const sel = MN.sel && findObj(MN.sel.kind, MN.sel.id) ? MN.sel : null;
-  if (!sel) return `<section class="mn-prop"><div class="mn-empty-prop">
-      ${icon('mouse-pointer-2')}<h3>点一下，改一点。</h3><p>墙、屋顶、造物、人物、灯。<br />想改谁，就点谁。</p></div></section>`;
+  if (!sel) return renderLibrary();
   const o = findObj(sel.kind, sel.id);
   const head = `<div class="mn-prop-head"><strong>${esc(o.name || '未命名')}</strong>
     <button class="mn-ghost" data-act="hide">${icon('eye-off', 's12')}隐藏</button>
@@ -752,6 +800,45 @@ function renderObjPanel() {
   </section>`;
 }
 
+/* 没选中东西时显示物件库（原来这里只有一句「点一下，改一点」，白瞎一块面板） */
+function renderLibrary() {
+  const pend = MN.pending;
+  const pendName = pend ? (pend.preset && pend.preset.name) || (pend.kind === 'person' ? '人物' : '光源') : '';
+  const n = selList().length;
+  return `<section class="mn-prop">
+    <div class="mn-lib-head"><strong>物件库</strong><span>点一下 → 画布上点一下落地</span></div>
+    ${pend ? `<div class="mn-lib-pending">正在放 <b>${esc(pendName)}</b> · 连着点就连续放 · <button class="mn-linkbtn" data-libcancel>退出</button></div>` : ''}
+    ${n > 1 ? `<div class="mn-lib-pending">已选 <b>${n}</b> 个 · Del 一起删 · 方向键一起挪</div>` : ''}
+    <div class="mn-lib-grid">
+      ${PRESETS.map((p, i) => `<button class="mn-lib-item ${pend && pend.preset && pend.preset.name === p.name ? 'active' : ''}" data-preset="${i}">
+        <i style="background:${p.color}"></i><span>${p.name}</span><small>${p.w}×${p.d}</small></button>`).join('')}
+    </div>
+    <div class="mn-lib-row">
+      <button class="mn-chip" data-preset-kind="person">${icon('user-round', 's12')}人物</button>
+      <button class="mn-chip" data-preset-kind="light">${icon('lightbulb', 's12')}光源</button>
+    </div>
+    <p class="mn-help-para" style="margin-top:10px">选中后：<b>右键</b>删除 / 复制 / 改名 · 拖动移动 · 方向键微调（Shift 更细）· 空白处拖动框选</p>
+  </section>`;
+}
+function bindLibrary() {
+  const root = $('#mnRight'); if (!root) return;
+  $$('[data-preset]', root).forEach(b => b.onclick = () => {
+    const p = PRESETS[+b.dataset.preset];
+    MN.pending = { kind: 'prop', preset: p };
+    MN.tool = 'select'; renderToolList(); buildFloatTools();
+    renderRight(); paint();
+    toast('点画布放「' + p.name + '」· 连续点连续放 · Esc 退出');
+  });
+  $$('[data-preset-kind]', root).forEach(b => b.onclick = () => {
+    const kind = b.dataset.presetKind;
+    MN.pending = { kind, preset: { name: kind === 'person' ? '人物' : '光源', w: 0.9, d: 0.9, color: '' } };
+    MN.tool = 'select'; renderToolList(); buildFloatTools();
+    renderRight(); paint();
+    toast('点画布放一个' + (kind === 'person' ? '人物' : '光源') + ' · Esc 退出');
+  });
+  const c = $('[data-libcancel]', root); if (c) c.onclick = () => { MN.pending = null; renderRight(); paint(); };
+}
+
 function bindObjPanel() {
   const box = $('#mnRight'); if (!box || !MN.sel) return;
   const o = findObj(MN.sel.kind, MN.sel.id); if (!o) return;
@@ -772,10 +859,10 @@ function bindObjPanel() {
   });
   $$('[data-act]', box).forEach(b => b.onclick = () => {
     const a = b.dataset.act;
-    if (a === 'del') { pushUndo(); delObj(MN.sel.kind, MN.sel.id); renderAll(); saveSoon(); }
-    else if (a === 'hide') { o.hidden = true; renderTree(); paint(); saveSoon(); }
-    else if (a === 'copy') { MN.clipboard = JSON.parse(JSON.stringify(o)); toast('已复制，点「粘贴」放下一个'); }
-    else if (a === 'paste' && MN.clipboard) { pushUndo(); const c = JSON.parse(JSON.stringify(MN.clipboard)); c.id = uid(); c.x += 1; c.y += 1; MN.state.scene.persons.push(c); renderAll(); saveSoon(); }
+    if (a === 'del') { delSel(); }
+    else if (a === 'hide') { hideSel(); }
+    else if (a === 'copy') { copySel(); }
+    else if (a === 'paste') { pasteClip(1, 1); }
     else if (a === 'addhole') { pushUndo(); (o.holes = o.holes || []).push({ t: 0.5, w: 1 }); renderRight(); paint(); saveSoon(); }
     else if (['move', 'rotate', 'scale'].includes(a)) { $$('[data-act]', box).forEach(x => x.classList.remove('active')); b.classList.add('active'); toast('变换模式：' + a + '（3D 视图生效）'); }
   });
@@ -821,9 +908,9 @@ function renderShots() {
     <div class="mn-shot-list">
       <button class="mn-shot-add" id="mnShotAdd"><span class="mn-plus">${icon('plus', 's14')}</span>立起来，再找镜头</button>
       ${shots.length ? '' : `<div class="mn-shot-empty"><b>还没拍。问题不大。</b>记住机位 · 导出无界面图片</div>`}
-      ${shots.map((s, i) => `<div style="flex:0 0 auto;text-align:center">${s.image
+      ${shots.map((s, i) => `<div class="mn-shot-cell">${s.image
       ? `<img class="mn-shot-img" data-shot="${i}" src="${s.image}" style="height:88px;border-radius:8px;border:1px solid var(--line);display:block;cursor:pointer" title="${esc(s.name)}（点击：3D 回到该机位 / 看大图）" />`
-      : `<div class="mn-shot-img mn-shot-ph" data-shot="${i}" title="${esc(s.name)}（AI 给的机位，点击回该机位）">${icon('camera', 's18')}<b>${i + 1}</b></div>`}<small style="font-size:11px;color:var(--muted)">${i + 1}. ${esc(s.name)}</small></div>`).join('')}
+      : `<div class="mn-shot-img mn-shot-ph" data-shot="${i}" title="${esc(s.name)}（AI 给的机位，点击回该机位）">${icon('camera', 's18')}<b>${i + 1}</b></div>`}<button class="mn-shot-del" data-shotdel="${i}" title="删掉这个镜头">✕</button><small style="font-size:11px;color:var(--muted)">${i + 1}. ${esc(s.name)}</small></div>`).join('')}
     </div>`;
   $('#mnShotAdd').onclick = () => {
     if (!window.MN3D || !MN3D.ok) { toast('3D 引擎不可用，先在 3D 里看一眼'); return; }
@@ -836,6 +923,14 @@ function renderShots() {
     toast('已存一个镜头到镜头册');
   };
   $$('.mn-shot-img', box).forEach(img => img.onclick = () => { const s = (MN.state.directorShots || [])[+img.dataset.shot]; if (s) onShotClick(s); });
+  $$('[data-shotdel]', box).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const i = +b.dataset.shotdel;
+    pushUndo();
+    MN.state.directorShots.splice(i, 1);
+    renderShots(); saveSoon();
+    toast('删了这个镜头');
+  });
   $('#mnShotDown').onclick = () => shots.length ? downloadShots() : toast('镜头册还是空的');
   $('#mnShotUndo').onclick = undo;
   $('#mnShotRedo').onclick = redo;
@@ -932,6 +1027,8 @@ function doPaint() {
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len, uy = dy / len;
     const holes = (wl.holes || []).slice().sort((m, n) => m.t - n.t);
+    /* 门洞宽度换算：holes[].w 是「米」（1 = 1 格），先转成沿墙的比例 t */
+    const wallLen = Math.hypot(wl.x2 - wl.x1, wl.y2 - wl.y1) || 1;
     let cur = 0;
     ctx.strokeStyle = PAL.ink; ctx.lineWidth = Math.max(3, (wl.th || 0.2) * C);
     const seg = (t0, t1) => {
@@ -941,8 +1038,9 @@ function doPaint() {
       ctx.stroke();
     };
     for (const hp of holes) {
-      const t0 = Math.max(cur, hp.t - (hp.w || 1) * 0.5 * (44 / len) * k * 0.5);
-      const t1 = Math.min(1, hp.t + (hp.w || 1) * 0.5 * (44 / len) * k * 0.5);
+      const half = ((hp.w || 1) * 0.5) / wallLen;
+      const t0 = Math.max(cur, hp.t - half);
+      const t1 = Math.min(1, hp.t + half);
       if (t0 > cur) seg(cur, t0);
       cur = Math.max(cur, t1);
     }
@@ -1006,19 +1104,52 @@ function doPaint() {
     ctx.fillText('取景框 ' + cam.size, W / 2, (H - fh) / 2 - 8);
   }
 
-  /* 拖拽预览 / 画墙预览 */
+  /* 拖拽预览 / 画墙预览 / 框选 */
   const d = MN.drag;
   if (d && d.ghost) {
-    ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]);
     const a = w2s(d.x0, d.y0), b = w2s(d.x1, d.y1);
-    if (d.kind === 'line') { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
-    else ctx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+    if (d.kind === 'line') {
+      ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    } else if (d.kind === 'marquee') {
+      ctx.fillStyle = 'rgba(225,69,62,.08)';
+      ctx.fillRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
+      ctx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+    } else {
+      ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]);
+      ctx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(225,69,62,.06)';
+      ctx.fillRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+    }
     ctx.setLineDash([]);
   }
   if (MN.wallDraft) {
     const a = w2s(MN.wallDraft.x, MN.wallDraft.y);
     ctx.fillStyle = PAL.accent;
     ctx.beginPath(); ctx.arc(a.x, a.y, 5, 0, 7); ctx.fill();
+  }
+
+  /* 对齐参考线（拖动时出现，帮你对齐别人的边） */
+  if (MN.guide) {
+    ctx.save();
+    ctx.strokeStyle = '#2f8fff'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    MN.guide.v.forEach(x => { const p = w2s(x, 0); ctx.beginPath(); ctx.moveTo(p.x, 0); ctx.lineTo(p.x, H); ctx.stroke(); });
+    MN.guide.h.forEach(y => { const p = w2s(0, y); ctx.beginPath(); ctx.moveTo(0, p.y); ctx.lineTo(W, p.y); ctx.stroke(); });
+    ctx.restore();
+  }
+
+  /* 物体库待放置：跟着鼠标画个虚影 */
+  if (MN.pending && MN.mouse) {
+    const pr = MN.pending.preset || { w: 1, d: 1 };
+    const q = w2s(MN.mouse.x - pr.w / 2, MN.mouse.y - pr.d / 2);
+    ctx.save();
+    ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+    ctx.strokeRect(q.x, q.y, pr.w * C, pr.d * C);
+    ctx.fillStyle = 'rgba(225,69,62,.10)';
+    ctx.fillRect(q.x, q.y, pr.w * C, pr.d * C);
+    ctx.restore();
   }
 
   /* 空场景提示 */
@@ -1035,16 +1166,18 @@ function selRect(x, y, w, h) {
   ctx.fillStyle = PAL.accent;
   [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].forEach(p => ctx.fillRect(p[0] - 3, p[1] - 3, 6, 6));
 }
-function isSel(kind, id) { return MN.sel && MN.sel.kind === kind && MN.sel.id === id; }
+function isSel(kind, id) { return inSel(kind, id); }
 
-/* ---------- 命中测试 ---------- */
+/* ---------- 命中测试 ----------
+   优先级（2026-10-26 修复）：灯 → 人 → 造物 → 墙 → 房间。
+   ⚠️ 房间必须放最后：房间是「地板面」，面积最大；以前排在墙前面，
+   点在房间里的隔断墙上永远先命中房间 —— 结果就是「想删墙，删掉的是整个房间」。 */
 function hitTest(wx, wy) {
   const sc = MN.state.scene;
   const near = (a, b, t) => Math.abs(a - b) <= t;
   for (const l of sc.lights) if (!l.hidden && near(l.x, wx, 0.5) && near(l.y, wy, 0.5)) return { kind: 'light', id: l.id };
   for (const p of sc.persons) if (!p.hidden && near(p.x, wx, 0.5) && near(p.y, wy, 0.5)) return { kind: 'person', id: p.id };
   for (const p of sc.props) if (!p.hidden && wx >= p.x && wx <= p.x + p.w && wy >= p.y && wy <= p.y + p.d) return { kind: 'prop', id: p.id };
-  for (const r of sc.rooms) if (!r.hidden && wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.d) return { kind: 'room', id: r.id };
   for (const wl of sc.walls) {
     if (wl.hidden) continue;
     const dx = wl.x2 - wl.x1, dy = wl.y2 - wl.y1;
@@ -1053,47 +1186,145 @@ function hitTest(wx, wy) {
     t = clamp(t, 0, 1);
     if (Math.hypot(wx - (wl.x1 + dx * t), wy - (wl.y1 + dy * t)) <= 0.45) return { kind: 'wall', id: wl.id, t };
   }
+  for (const r of sc.rooms) if (!r.hidden && wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.d) return { kind: 'room', id: r.id };
   return null;
 }
 
+/* ---------- 选中集 ---------- */
+function selList() { return (MN.selList && MN.selList.length) ? MN.selList : (MN.sel ? [MN.sel] : []); }
+function selectOnly(kind, id) { MN.sel = { kind, id }; MN.selList = [{ kind, id }]; }
+function clearSel() { MN.sel = null; MN.selList = []; }
+function inSel(kind, id) { return selList().some(s => s.kind === kind && s.id === id); }
+function toggleSel(kind, id) {
+  const has = inSel(kind, id);
+  if (has) {
+    MN.selList = selList().filter(s => !(s.kind === kind && s.id === id));
+    if (!MN.selList.length) MN.sel = null;
+    else if (MN.sel && MN.sel.kind === kind && MN.sel.id === id) MN.sel = MN.selList[MN.selList.length - 1];
+  } else {
+    MN.selList = selList().concat([{ kind, id }]);
+    MN.sel = { kind, id };
+  }
+}
+/* 选中后刷新三处（清单 / 属性面板 / 画布） */
+function refreshSel() { renderTree(); renderRight(); paint(); }
+
 /* ---------- 画布交互 ---------- */
+/* ---------- 画布交互（2026-10-26 重做）
+   新增：右键菜单（删除/复制/隐藏/改名/置顶/旋转/打洞）、右键拖动平移、
+        框选多选、Shift 加选、拖动对齐参考线、物体库连续放置。
+   撤销粒度修复：单击选中不再入撤销栈，只有真正改动才入栈。 */
+function snapshotSel() {
+  return selList().map(s => {
+    const o = findObj(s.kind, s.id); if (!o) return null;
+    if (s.kind === 'wall') return { kind: s.kind, obj: o, x1: o.x1, y1: o.y1, x2: o.x2, y2: o.y2 };
+    return { kind: s.kind, obj: o, x: o.x, y: o.y };
+  }).filter(Boolean);
+}
+function moveBy(it, dx, dy) {
+  if (it.kind === 'wall') { it.obj.x1 = it.x1 + dx; it.obj.y1 = it.y1 + dy; it.obj.x2 = it.x2 + dx; it.obj.y2 = it.y2 + dy; }
+  else { it.obj.x = it.x + dx; it.obj.y = it.y + dy; }
+}
+/* 对齐参考线：拖动时把选中物体的边与其他物体的边对齐，并画出参考线 */
+function calcGuides(moving) {
+  const sc = MN.state.scene;
+  const skip = new Set(moving.map(m => m.obj.id));
+  const tv = [], th = [];
+  const add = (arr, v) => { if (arr.every(x => Math.abs(x - v) > 0.01)) arr.push(v); };
+  sc.rooms.forEach(o => { if (o.hidden || skip.has(o.id)) return; add(tv, o.x); add(tv, o.x + o.w); add(th, o.y); add(th, o.y + o.d); });
+  sc.props.forEach(o => { if (o.hidden || skip.has(o.id)) return; add(tv, o.x); add(tv, o.x + o.w); add(th, o.y); add(th, o.y + o.d); });
+  sc.walls.forEach(o => {
+    if (o.hidden || skip.has(o.id)) return;
+    if (Math.abs(o.x1 - o.x2) < 0.01) add(tv, o.x1); else if (Math.abs(o.y1 - o.y2) < 0.01) add(th, o.y1);
+  });
+  const v = [], h = [];
+  moving.forEach(m => {
+    if (m.kind === 'wall') return;
+    const o = m.obj, w = o.w || 0, d = o.d || 0;
+    [o.x, o.x + w].forEach(x => tv.forEach(t => { if (Math.abs(x - t) < 0.06) add(v, t); }));
+    [o.y, o.y + d].forEach(y => th.forEach(t => { if (Math.abs(y - t) < 0.06) add(h, t); }));
+  });
+  return (v.length || h.length) ? { v, h } : null;
+}
+/* 框选命中：造物/人物/光源按包含，墙按包围盒相交，房间要求整间被框住（否则框内永远先选中房间） */
+function objectsInRect(x0, y0, x1, y1) {
+  const sc = MN.state.scene, out = [];
+  const inter = (ax, ay, aw, ah) => ax < x1 && ax + aw > x0 && ay < y1 && ay + ah > y0;
+  const inside = (ax, ay) => ax >= x0 && ax <= x1 && ay >= y0 && ay <= y1;
+  sc.rooms.forEach(o => { if (!o.hidden && o.x >= x0 && o.y >= y0 && o.x + o.w <= x1 && o.y + o.d <= y1) out.push({ kind: 'room', id: o.id }); });
+  sc.props.forEach(o => { if (!o.hidden && inter(o.x, o.y, o.w, o.d)) out.push({ kind: 'prop', id: o.id }); });
+  sc.walls.forEach(o => { if (!o.hidden && inter(Math.min(o.x1, o.x2), Math.min(o.y1, o.y2), Math.abs(o.x2 - o.x1), Math.abs(o.y2 - o.y1))) out.push({ kind: 'wall', id: o.id }); });
+  sc.persons.forEach(o => { if (!o.hidden && inside(o.x, o.y)) out.push({ kind: 'person', id: o.id }); });
+  sc.lights.forEach(o => { if (!o.hidden && inside(o.x, o.y)) out.push({ kind: 'light', id: o.id }); });
+  return out;
+}
+
+/* ---------- 物体库：点一下落地（连续放置，Esc 退出） ---------- */
+function placePending(wx, wy) {
+  const p = MN.pending; if (!p) return;
+  pushUndo();
+  if (p.kind === 'person') {
+    const o = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: snap(wx), y: snap(wy), rot: 0, color: p.preset.color || '#e1453e', pose: '站立', face: 1, faceDir: 0, jump: 0 };
+    MN.state.scene.persons.push(o); selectOnly('person', o.id);
+  } else if (p.kind === 'light') {
+    const o = { id: uid(), name: '光源 ' + (MN.state.scene.lights.length + 1), x: snap(wx), y: snap(wy), color: '#ffe9b0', intensity: 1, h: 2.5 };
+    MN.state.scene.lights.push(o); selectOnly('light', o.id);
+  } else {
+    const pr = p.preset;
+    const o = { id: uid(), name: pr.name, x: snap(wx - pr.w / 2), y: snap(wy - pr.d / 2), w: pr.w, d: pr.d, h: pr.h, color: pr.color || '' };
+    MN.state.scene.props.push(o); selectOnly('prop', o.id);
+  }
+  renderAll(); saveSoon();
+}
+
 function onPtrDown(e) {
-  if (e.button === 2) return;
-  try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 个别嵌入式 webview 不支持捕获，不耽误拖拽 */ }
+  closeCtx();
+  if (!MN.state) return;
   const r = cv.getBoundingClientRect();
   const sx = e.clientX - r.left, sy = e.clientY - r.top;
   const w = s2w(sx, sy);
-  const panning = MN.spaceDown || e.button === 1 || MN.tool === 'pan';
-  if (panning) { MN.drag = { kind: 'pan', sx, sy, vx: MN.view.x, vy: MN.view.y }; cv.style.cursor = 'grabbing'; return; }
+  try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 个别嵌入式 webview 不支持捕获，不耽误拖拽 */ }
+
+  /* 右键：起手先记位置 —— 拖动超过 4px 算平移，没动才算「点右键弹菜单」 */
+  if (e.button === 2) { MN.drag = { kind: 'rpan', sx, sy, vx: MN.view.x, vy: MN.view.y, moved: false }; return; }
+  if (e.button === 1 || MN.spaceDown || MN.tool === 'pan') {
+    MN.drag = { kind: 'pan', sx, sy, vx: MN.view.x, vy: MN.view.y }; cv.style.cursor = 'grabbing'; return;
+  }
+  /* 物体库待放置：点一下落地（按住 Shift 连续放，Esc 退出） */
+  if (MN.pending) { placePending(w.x, w.y); return; }
+
   const tool = MN.tool;
   if (tool === 'select') {
     const hit = hitTest(w.x, w.y);
     if (hit) {
-      MN.sel = { kind: hit.kind, id: hit.id };
-      const o = findObj(hit.kind, hit.id);
-      MN.drag = { kind: 'move', obj: o, ox: o.x != null ? o.x : o.x1, oy: o.y != null ? o.y : o.y1, wx: w.x, wy: w.y, moved: false, wallT: hit.t };
-      if (hit.kind === 'wall') MN.drag = { kind: 'wallmove', obj: o, ox1: o.x1, oy1: o.y1, ox2: o.x2, oy2: o.y2, wx: w.x, wy: w.y, moved: false };
-      pushUndo();
-      renderTree(); renderRight();
-    } else { MN.sel = null; renderTree(); renderRight(); }
-    paint(); return;
+      if (e.shiftKey) { toggleSel(hit.kind, hit.id); refreshSel(); return; }
+      if (!inSel(hit.kind, hit.id)) selectOnly(hit.kind, hit.id);
+      else MN.sel = { kind: hit.kind, id: hit.id };
+      MN.drag = { kind: 'move', items: snapshotSel(), wx: w.x, wy: w.y, moved: false, snap: JSON.stringify(MN.state.scene) };
+      refreshSel();
+      return;
+    }
+    /* 空白：框选（Shift = 追加） */
+    if (!e.shiftKey) clearSel();
+    MN.drag = { kind: 'marquee', x0: snap(w.x), y0: snap(w.y), x1: snap(w.x), y1: snap(w.y), ghost: true, base: e.shiftKey ? selList().slice() : [] };
+    refreshSel();
+    return;
   }
   if (tool === 'room' || tool === 'prop') {
-    pushUndo();
-    MN.drag = { kind: 'new', what: tool, x0: snap(w.x), y0: snap(w.y), x1: snap(w.x), y1: snap(w.y), ghost: true };
+    MN.drag = { kind: 'new', what: tool, x0: snap(w.x), y0: snap(w.y), x1: snap(w.x), y1: snap(w.y), ghost: true, snap: JSON.stringify(MN.state.scene) };
     paint(); return;
   }
   if (tool === 'wall') {
     const p = { x: snap(w.x), y: snap(w.y) };
     if (!MN.wallDraft) { MN.wallDraft = p; }
     else {
-      pushUndo();
       const wl = { id: uid(), name: '墙面 ' + (MN.state.scene.walls.length + 1), x1: MN.wallDraft.x, y1: MN.wallDraft.y, x2: p.x, y2: p.y, h: 2.6, th: 0.2, holes: [] };
-      if (Math.hypot(wl.x2 - wl.x1, wl.y2 - wl.y1) < 0.5) { MN.undo.pop(); MN.wallDraft = null; return toast('墙太短了'); }
+      if (Math.hypot(wl.x2 - wl.x1, wl.y2 - wl.y1) < 0.5) { MN.wallDraft = null; paint(); return toast('墙太短了'); }
+      pushUndo();
       MN.state.scene.walls.push(wl);
       MN.wallDraft = null;
-      MN.sel = { kind: 'wall', id: wl.id };
-      renderTree(); renderRight(); saveSoon();
+      selectOnly('wall', wl.id);
+      refreshSel(); saveSoon();
     }
     paint(); return;
   }
@@ -1103,8 +1334,8 @@ function onPtrDown(e) {
       const wl = findObj('wall', hit.id);
       pushUndo();
       (wl.holes = wl.holes || []).push({ t: +hit.t.toFixed(3), w: 1 });
-      MN.sel = { kind: 'wall', id: wl.id };
-      renderTree(); renderRight(); saveSoon(); paint();
+      selectOnly('wall', wl.id);
+      refreshSel(); saveSoon(); paint();
       toast('开了个门洞');
     } else toast('点墙连线才能打洞');
     return;
@@ -1113,8 +1344,8 @@ function onPtrDown(e) {
     pushUndo();
     const p = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: snap(w.x), y: snap(w.y), rot: 0, color: '#e1453e', pose: '站立', face: 1, faceDir: 0, jump: 0 };
     MN.state.scene.persons.push(p);
-    MN.sel = { kind: 'person', id: p.id };
-    renderTree(); renderRight(); saveSoon(); paint();
+    selectOnly('person', p.id);
+    refreshSel(); saveSoon(); paint();
     return;
   }
 }
@@ -1123,41 +1354,233 @@ function onPtrMove(e) {
   const sx = e.clientX - r.left, sy = e.clientY - r.top;
   const w = s2w(sx, sy);
   const d = MN.drag;
+  MN.mouse = { x: w.x, y: w.y };
   if (!d) {
-    cv.style.cursor = MN.tool === 'select' ? (hitTest(w.x, w.y) ? 'pointer' : 'default') : 'crosshair';
+    cv.style.cursor = MN.pending ? 'copy' : MN.tool === 'select' ? (hitTest(w.x, w.y) ? 'pointer' : 'default') : 'crosshair';
+    if (MN.pending) paint();
     return;
   }
-  if (d.kind === 'pan') { MN.view.x = d.vx + (sx - d.sx); MN.view.y = d.vy + (sy - d.sy); paint(); return; }
-  if (d.kind === 'move' || d.kind === 'wallmove') {
-    d.moved = true;
+  if (d.kind === 'rpan' || d.kind === 'pan') {
+    const dx = sx - d.sx, dy = sy - d.sy;
+    if (d.kind === 'rpan' && !d.moved) {
+      if (Math.hypot(dx, dy) < 4) return;
+      d.moved = true; cv.style.cursor = 'grabbing';
+    }
+    MN.view.x = d.vx + dx; MN.view.y = d.vy + dy; paint(); return;
+  }
+  if (d.kind === 'move') {
+    if (!d.moved) { d.moved = true; pushUndo(d.snap); }
     const dx = snap(w.x - d.wx), dy = snap(w.y - d.wy);
-    if (d.kind === 'move') { d.obj.x = d.ox + dx; d.obj.y = d.oy + dy; }
-    else { d.obj.x1 = d.ox1 + dx; d.obj.y1 = d.oy1 + dy; d.obj.x2 = d.ox2 + dx; d.obj.y2 = d.oy2 + dy; }
+    d.items.forEach(it => moveBy(it, dx, dy));
+    MN.guide = calcGuides(d.items);
     paint(); return;
   }
-  if (d.kind === 'new') { d.x1 = snap(w.x); d.y1 = snap(w.y); paint(); return; }
+  if (d.kind === 'new' || d.kind === 'marquee') { d.x1 = snap(w.x); d.y1 = snap(w.y); paint(); return; }
 }
 function onPtrUp(e) {
   const d = MN.drag; if (!d) return;
-  MN.drag = null; cv.style.cursor = 'default';
+  MN.drag = null; MN.guide = null; cv.style.cursor = 'default';
+  if (d.kind === 'rpan') {
+    /* 记住这一下是不是「拖动」—— contextmenu 事件紧跟其后，拖过就不弹菜单 */
+    MN._ctxDrag = { moved: d.moved, t: Date.now() };
+    paint(); return;
+  }
+  if (d.kind === 'pan') { paint(); return; }
+  if (d.kind === 'move') {
+    if (d.moved) { renderTree(); renderRight(); saveSoon(); }
+    paint(); return;
+  }
+  if (d.kind === 'marquee') {
+    const x0 = Math.min(d.x0, d.x1), y0 = Math.min(d.y0, d.y1), x1 = Math.max(d.x0, d.x1), y1 = Math.max(d.y0, d.y1);
+    if (x1 - x0 > 0.3 || y1 - y0 > 0.3) {
+      const merged = (d.base || []).slice();
+      objectsInRect(x0, y0, x1, y1).forEach(p => { if (!merged.some(m => m.kind === p.kind && m.id === p.id)) merged.push(p); });
+      MN.selList = merged; MN.sel = merged[merged.length - 1] || null;
+      refreshSel();
+      if (merged.length) toast('选中 ' + merged.length + ' 个（Del 删除 · 方向键微调）');
+    } else {
+      refreshSel();
+    }
+    paint(); return;
+  }
   if (d.kind === 'new') {
     const x = Math.min(d.x0, d.x1), y = Math.min(d.y0, d.y1);
     const w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
-    if (w < 0.5 || h < 0.5) { MN.undo.pop(); paint(); return toast('太小了，重新拖一个'); }
+    if (w < 0.5 || h < 0.5) { paint(); return toast('太小了，重新拖一个'); }
+    pushUndo(d.snap);
     if (d.what === 'room') {
       const r = { id: uid(), name: '房间 ' + (MN.state.scene.rooms.length + 1), x, y, w, d: h, h: 4, color: '' };
-      MN.state.scene.rooms.push(r); MN.sel = { kind: 'room', id: r.id };
+      MN.state.scene.rooms.push(r); selectOnly('room', r.id);
     } else {
       const p = { id: uid(), name: '造物 ' + (MN.state.scene.props.length + 1), x, y, w, d: h, h: Math.min(w, h, 1), color: '' };
-      MN.state.scene.props.push(p); MN.sel = { kind: 'prop', id: p.id };
+      MN.state.scene.props.push(p); selectOnly('prop', p.id);
     }
-    renderTree(); renderRight(); saveSoon(); paint();
+    refreshSel(); saveSoon(); paint();
     return;
   }
-  if (d.moved) { saveSoon(); }
+}
+
+/* ============================================================
+ * 右键菜单（本次核心：搭好的东西右键就能删）
+ * ============================================================ */
+function closeCtx() {
+  const m = $('#mnCtx'); if (m) m.remove();
+  MN.ctxOpen = false;
+}
+function openCtx(x, y, hit) {
+  closeCtx();
+  const root = $('#mnRoot'); if (!root) return;
+  const items = [];
+  const sep = () => items.push({ sep: true });
+  if (hit) {
+    const kind = hit.kind, o = findObj(kind, hit.id);
+    const n = selList().length;
+    items.push({ icon: 'copy', label: n > 1 ? `复制这 ${n} 个` : '复制', hint: 'Ctrl+D', fn: copySel });
+    items.push({ icon: 'clipboard-paste', label: '原地再放一个', hint: 'Ctrl+V', fn: () => pasteClip(1, 1) });
+    sep();
+    items.push({ icon: o && o.hidden ? 'eye' : 'eye-off', label: o && o.hidden ? '显示' : '隐藏', fn: hideSel });
+    items.push({ icon: 'pencil-line', label: '重命名', hint: 'F2', fn: renameSel });
+    items.push({ icon: 'arrow-up-right', label: '置顶（盖住别的）', fn: bringFront });
+    if (kind === 'person' || kind === 'prop') items.push({ icon: 'rotate-3d', label: '旋转 90°', fn: rotateSel });
+    if (kind === 'wall') items.push({ icon: 'door-open', label: '在点击处打洞', fn: () => holeAt(hit.id, hit.t) });
+    sep();
+    items.push({ icon: 'trash-2', label: n > 1 ? `删除选中的 ${n} 个` : '删除', hint: 'Del', danger: true, fn: delSel });
+  } else {
+    items.push({ icon: 'clipboard-paste', label: '粘贴', hint: 'Ctrl+V', disabled: !MN.clipboard, fn: () => pasteClip(1, 1) });
+    items.push({ icon: 'check', label: '全选', hint: 'Ctrl+A', fn: selectAll });
+    sep();
+    items.push({ icon: 'maximize', label: '适配视图', hint: 'F', fn: () => { fitView(); paint(); } });
+    items.push({ icon: 'grid-2x2', label: MN.grid ? '隐藏网格' : '显示网格', fn: () => { MN.grid = !MN.grid; paint(); } });
+    sep();
+    items.push({ icon: 'square-dashed', label: '画房间', hint: 'R', fn: () => setTool('room') });
+    items.push({ icon: 'minus', label: '画一面墙', hint: 'L', fn: () => setTool('wall') });
+    items.push({ icon: 'user-round', label: '放个人物', hint: 'N', fn: () => setTool('person') });
+  }
+  const m = el('div', 'mn-ctx');
+  m.id = 'mnCtx';
+  m.innerHTML = items.map((it, i) => it.sep
+    ? '<div class="mn-ctx-sep"></div>'
+    : `<button class="mn-ctx-item ${it.danger ? 'danger' : ''} ${it.disabled ? 'disabled' : ''}" data-i="${i}">${icon(it.icon, 's14')}<span>${it.label}</span>${it.hint ? `<kbd>${it.hint}</kbd>` : ''}</button>`).join('');
+  root.appendChild(m);
+  /* 贴边翻转，别跑出屏幕 */
+  const rect = m.getBoundingClientRect();
+  let left = x, top = y;
+  if (left + rect.width > innerWidth - 8) left = Math.max(8, x - rect.width);
+  if (top + rect.height > innerHeight - 8) top = Math.max(8, y - rect.height);
+  m.style.left = left + 'px'; m.style.top = top + 'px';
+  $$('.mn-ctx-item', m).forEach(b => {
+    const it = items[+b.dataset.i];
+    if (it.disabled) { b.onclick = () => toast('剪贴板是空的，先右键复制一个'); return; }
+    b.onclick = () => { closeCtx(); it.fn(); };
+  });
+  MN.ctxOpen = true;
+  setTimeout(() => {
+    document.addEventListener('pointerdown', function h(ev) {
+      if (!m.contains(ev.target)) { closeCtx(); document.removeEventListener('pointerdown', h); }
+    });
+  }, 0);
+}
+
+/* ---------- 选中对象操作 ---------- */
+function delSel() {
+  const list = selList(); if (!list.length) return toast('先选中要删的东西');
+  pushUndo();
+  list.forEach(s => delObj(s.kind, s.id));
+  clearSel(); renderAll(); saveSoon();
+  toast('删了 ' + list.length + ' 个（Ctrl+Z 可撤销）', 'ok');
+}
+function copySel() {
+  const list = selList().map(s => ({ kind: s.kind, data: JSON.parse(JSON.stringify(findObj(s.kind, s.id))) })).filter(x => x.data);
+  if (!list.length) return toast('先选中要复制的东西');
+  MN.clipboard = list;
+  toast('已复制 ' + list.length + ' 个 · Ctrl+V 粘贴', 'ok');
+}
+function pasteClip(dx, dy) {
+  let list = MN.clipboard;
+  if (!list) return toast('剪贴板是空的');
+  if (!Array.isArray(list)) list = [{ kind: list.x1 != null ? 'wall' : 'person', data: list }];  // 兼容旧格式
+  pushUndo();
+  const added = [];
+  list.forEach(({ kind, data }) => {
+    const c = JSON.parse(JSON.stringify(data)); c.id = uid();
+    if (kind === 'wall') { c.x1 += dx; c.y1 += dy; c.x2 += dx; c.y2 += dy; MN.state.scene.walls.push(c); }
+    else if (kind === 'room') { c.x += dx; c.y += dy; MN.state.scene.rooms.push(c); }
+    else if (kind === 'light') { c.x += dx; c.y += dy; MN.state.scene.lights.push(c); }
+    else if (kind === 'person') { c.x += dx; c.y += dy; MN.state.scene.persons.push(c); }
+    else { c.x += dx; c.y += dy; MN.state.scene.props.push(c); }
+    added.push({ kind, id: c.id });
+  });
+  MN.selList = added; MN.sel = added[added.length - 1] || null;
+  renderAll(); saveSoon();
+  toast('粘贴了 ' + added.length + ' 个', 'ok');
+}
+function duplicateSel() { copySel(); pasteClip(1, 1); }
+function hideSel() {
+  const list = selList(); if (!list.length) return;
+  pushUndo();
+  const anyShow = list.some(s => { const o = findObj(s.kind, s.id); return o && !o.hidden; });
+  list.forEach(s => { const o = findObj(s.kind, s.id); if (o) o.hidden = anyShow; });
+  renderAll(); saveSoon();
+  toast(anyShow ? '已隐藏（在左侧清单点眼睛恢复）' : '已显示');
+}
+function renameSel() {
+  const s = MN.sel; if (!s) return toast('先选中一个东西');
+  const o = findObj(s.kind, s.id); if (!o) return;
+  const name = prompt('改个名字', o.name || '');
+  if (name == null) return;
+  pushUndo(); o.name = String(name).slice(0, 20); renderAll(); saveSoon();
+}
+function bringFront() {
+  const s = MN.sel; if (!s) return;
+  const sc = MN.state.scene;
+  const arr = s.kind === 'room' ? sc.rooms : s.kind === 'prop' ? sc.props : s.kind === 'person' ? sc.persons : s.kind === 'wall' ? sc.walls : sc.lights;
+  const i = arr.findIndex(o => o.id === s.id); if (i < 0 || i === arr.length - 1) return;
+  pushUndo(); arr.push(arr.splice(i, 1)[0]); renderTree(); paint(); saveSoon();
+  toast('已置顶');
+}
+function rotateSel() {
+  const list = selList(); if (!list.length) return;
+  pushUndo();
+  list.forEach(s => {
+    if (s.kind !== 'person' && s.kind !== 'prop') return;
+    const o = findObj(s.kind, s.id); if (!o) return;
+    if (s.kind === 'person') o.rot = ((o.rot || 0) + 90) % 360;
+    else { const t = o.w; o.w = o.d; o.d = t; }      // 造物：宽深互换 = 转 90°
+  });
+  renderAll(); saveSoon();
+}
+function holeAt(id, t) {
+  const wl = findObj('wall', id); if (!wl) return;
+  pushUndo();
+  (wl.holes = wl.holes || []).push({ t: +(t || 0.5).toFixed(3), w: 1 });
+  selectOnly('wall', id); refreshSel(); saveSoon();
+  toast('开了个门洞');
+}
+function selectAll() {
+  const sc = MN.state.scene;
+  const list = [];
+  sc.rooms.forEach(o => { if (!o.hidden) list.push({ kind: 'room', id: o.id }); });
+  sc.walls.forEach(o => { if (!o.hidden) list.push({ kind: 'wall', id: o.id }); });
+  sc.props.forEach(o => { if (!o.hidden) list.push({ kind: 'prop', id: o.id }); });
+  sc.persons.forEach(o => { if (!o.hidden) list.push({ kind: 'person', id: o.id }); });
+  sc.lights.forEach(o => { if (!o.hidden) list.push({ kind: 'light', id: o.id }); });
+  MN.selList = list; MN.sel = list[list.length - 1] || null;
+  refreshSel();
+  toast('全选 ' + list.length + ' 个');
+}
+function nudgeSel(dx, dy) {
+  const list = selList(); if (!list.length) return;
+  pushUndo();
+  list.forEach(s => {
+    const o = findObj(s.kind, s.id); if (!o) return;
+    if (s.kind === 'wall') { o.x1 += dx; o.y1 += dy; o.x2 += dx; o.y2 += dy; }
+    else { o.x = +(o.x + dx).toFixed(2); o.y = +(o.y + dy).toFixed(2); }
+  });
+  renderTree(); renderRight(); paint(); saveSoon();
 }
 function onWheel(e) {
   e.preventDefault();
+  closeCtx();
   const r = cv.getBoundingClientRect();
   const sx = e.clientX - r.left, sy = e.clientY - r.top;
   const w = s2w(sx, sy);
@@ -1420,10 +1843,10 @@ function closeModal() { const b = $('.mn-modal-back'); if (b) b.remove(); }
 function openHelpModal() {
   const body = `
     <div class="mn-help-step"><span class="mn-step-no">01</span><div><strong>画空间</strong><p>拖框画房间，两两连续画墙，造物也划拉矩形，默认高 4 格。拖的时候，空格拖动平移。</p></div></div>
-    <div class="mn-help-step"><span class="mn-step-no">02</span><div><strong>改两下</strong><p>点哪改哪，上色、Shift 多选、Ctrl + C 复制、Ctrl + V 后点位置粘贴。打字可点一格，也可拖出一片，封顶可最高低刷高。</p></div></div>
+    <div class="mn-help-step"><span class="mn-step-no">02</span><div><strong>改两下</strong><p><b>右键点物体</b>：删除 / 复制 / 改名 / 置顶 / 旋转 / 打洞。<b>右键拖画布</b>：平移。<b>空白处拖动</b>：框选多个（Shift 加选）。方向键微调，Del 删除，Ctrl+Z 撤销，双击改名。</p></div></div>
     <div class="mn-help-step"><span class="mn-step-no">03</span><div><strong>找镜头</strong><p>选中物体，绕着它旋转、缩放、双击聚焦，F 聚全，P 配这截。镜头可拖动画画中，双击看大图。清单里的右下角有快照名。</p></div></div>
     <div class="mn-help-step"><span class="mn-step-no">04</span><div><strong>让 AI 搭</strong><p>左上角「AI 规则」里有 5 条现成规则：描述想法出场景、俯视图还原、生成造物、生成人物姿势、剧情出三镜预演。复制 / 下载交给 AI，拿回的 JSON 拖进窗口就导入。</p></div></div>
-    <p class="mn-help-para">左上角「AI 规则」可接脑洞、绘画 AI 搭场景，也可将物体或参考图片直接导入。人数放多少小人或大人；选中大小可选的姿势或编辑环动作，编辑身体、手指及导入人物；编辑环动作与运镜同争，Esc 结束编辑，单击镜头保存在本页预览；轨迹输出可完整重项目、下载图片，工作台下方可中央图形全屏，Esc 退出；旁边可隐藏界面，连续按 666 次复原，人物是抬右边隐藏框，输入 233 站位，重新进入人和角色复。右上角星座图可快捷开存储建，仙人有模式用 Alt 下降，退出后停在原先位置。模拟默认，P 镜头可拖动指定，与故事投五通；新情况默认 3 秒，两边都可下拉全部图片。运镜直接使用镜头从相位，时长同放故事检；直达、旋挥、转向与手持晃动均关注可用。优化比机位能更宽戏，环镜光向中心，查她更多十测，取景框可单拉压额外。像板与面板 02-18 安全可用，日改动能需要方电。录屏预演制十时后收戏，Esc 退出。</p>
+    <p class="mn-help-para">想省事就用「物件库」：右侧点一个家具，再点画布就落地，连着点连着放，Esc 退出。3D 里左拖转视角、滚轮缩放、右键平移、双击聚焦；「立起来」之后点「＋」把当前机位存进镜头册，双击镜头回机位。剪辑台（E）把镜头册的图排成片：拖入拆分、空格播放、Ctrl+C 在播放头处分割、Delete 删除片段，最后导出成片。</p>
     <p class="mn-help-para">剪辑台（E）：上下方向素材，下方排成片，拖入可拆分。空格 播放/暂停，Ctrl+C 分割，Ctrl+Z 恢复撤销，停转拖右边调长短，右侧可补录、配音、加转场与手转效果，再导出成片；完整项目可一起保存。</p>
     <div class="mn-help-more" id="mnHelpMore">${icon('chevron-down', 's14')}更细说明</div>
     <div id="mnHelpMoreBox" hidden>
@@ -1447,7 +1870,22 @@ function openKeysModal() {
     ['prop', '造物', '默认 B'], ['hole', '打洞', '默认 H'], ['person', '放人物', '默认 N'],
     ['pan', '拖住平移', '拖住生效'], ['sun', '光影调节', '默认 O'],
   ];
-  const body = `<p class="mn-help-para">点「录制」后按键，就能直接改写。默认除个人，Esc 后会退出。</p>
+  const editRows = [
+    ['右键点物体', '删除 / 复制 / 改名 / 置顶 / 旋转 / 打洞'],
+    ['右键拖画布', '平移视图'],
+    ['空白处拖动', '框选多个（Shift 追加）'],
+    ['Del', '删除选中的全部'],
+    ['Ctrl + Z / Y', '撤销 / 重做'],
+    ['Ctrl + D', '原地复制一份'],
+    ['Ctrl + C / V', '复制 / 粘贴'],
+    ['Ctrl + A', '全选'],
+    ['方向键', '微调 0.5 格（Shift 0.1 格）'],
+    ['F2 / 双击', '重命名'],
+    ['滚轮', '以鼠标为中心缩放'],
+    ['Esc', '退出放置 / 取消选择'],
+  ];
+  const body = `<div class="mn-key-static">${editRows.map(r => `<div class="mn-key-static-row"><kbd>${r[0]}</kbd><span>${r[1]}</span></div>`).join('')}</div>
+    <p class="mn-help-para" style="margin:12px 0 8px">下面这些是工具键。点「录制」后按键，就能直接改写。</p>
     <div style="column-count:2;column-gap:24px">${rows.map(r => `<div class="mn-key-row"><span class="mn-key-name">${r[1]}<small>${r[2]}</small></span><input class="mn-key-input" data-k="${r[0]}" value="${esc(keys[r[0]])}" readonly /><button class="mn-ghost" data-rec="${r[0]}">${icon('loader-circle', 's12')}录制</button></div>`).join('')}</div>
     <p class="mn-help-para" style="margin-top:10px">保存后立即生效，只存在这台机器。</p>`;
   const m = openModal('快捷键，按你的来。', '导演台', body, [
@@ -1569,19 +2007,34 @@ function onKeyDown(e) {
   if (e.ctrlKey || e.metaKey) {
     if (k === 'Z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (k === 'Y') { e.preventDefault(); redo(); return; }
-    if (k === 'C') { const o = MN.sel && findObj(MN.sel.kind, MN.sel.id); if (o) { MN.clipboard = JSON.parse(JSON.stringify(o)); toast('已复制'); } return; }
-    if (k === 'V') { if (MN.clipboard && MN.clipboard.name !== undefined) { pushUndo(); const c = JSON.parse(JSON.stringify(MN.clipboard)); c.id = uid(); if (c.x != null) { c.x += 1; c.y += 1; MN.state.scene.persons.push(c); } else { c.x1 += 1; c.y1 += 1; c.x2 += 1; c.y2 += 1; MN.state.scene.walls.push(c); } renderAll(); saveSoon(); toast('已粘贴'); } return; }
+    if (k === 'C') { e.preventDefault(); copySel(); return; }
+    if (k === 'V') { e.preventDefault(); pasteClip(1, 1); return; }
+    if (k === 'D') { e.preventDefault(); duplicateSel(); return; }
+    if (k === 'A') { e.preventDefault(); selectAll(); return; }
     if (k === 'K') { e.preventDefault(); const s = $('#mnTreeSearch'); if (s) { s.focus(); } return; }
     return;
   }
   if (e.key === 'Escape') {
     if ($('.mn-modal-back')) { closeModal(); return; }
+    if ($('#mnCtx')) { closeCtx(); return; }
+    if (MN.pending) { MN.pending = null; renderRight(); paint(); toast('退出放置'); return; }
     if (MN.immersive) { toggleImmersive(); return; }
     if (MN.wallDraft) { MN.wallDraft = null; paint(); return; }
-    if (MN.sel) { MN.sel = null; renderTree(); renderRight(); paint(); return; }
+    if (selList().length) { clearSel(); refreshSel(); return; }
   }
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (MN.sel) { e.preventDefault(); pushUndo(); delObj(MN.sel.kind, MN.sel.id); renderAll(); saveSoon(); }
+    if (selList().length) { e.preventDefault(); delSel(); }
+    return;
+  }
+  if (e.key === 'F2') { e.preventDefault(); renameSel(); return; }
+  /* 方向键微调：0.5 格，按住 Shift 0.1 格 */
+  if (e.key.indexOf('Arrow') === 0) {
+    if (!selList().length) return;
+    e.preventDefault();
+    const step = e.shiftKey ? 0.1 : 0.5;
+    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+    nudgeSel(dx, dy);
     return;
   }
   if (e.key === ' ') { MN.spaceDown = true; cv.style.cursor = 'grab'; e.preventDefault(); return; }
@@ -1612,12 +2065,21 @@ function fitView() {
   const st = $('#mnStage'); if (!st) { MN.view = { x: 80, y: 60, k: 1 }; return; }
   const W = st.clientWidth, H = st.clientHeight;
   const sc = MN.state.scene;
-  let maxX = 16, maxY = 16;
-  sc.rooms.forEach(r => { maxX = Math.max(maxX, r.x + r.w + 2); maxY = Math.max(maxY, r.y + r.d + 2); });
-  const k = clamp(Math.min(W / (maxX * CELL), H / (maxY * CELL)), 0.3, 1.2);
+  /* 2026-10-26：原来只算房间，纯墙场景 / 只有道具的场景会「适配」到奇怪的位置 */
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const acc = (x0, y0, x1, y1) => { minX = Math.min(minX, x0); minY = Math.min(minY, y0); maxX = Math.max(maxX, x1); maxY = Math.max(maxY, y1); };
+  sc.rooms.forEach(r => acc(r.x, r.y, r.x + r.w, r.y + r.d));
+  sc.walls.forEach(w => acc(Math.min(w.x1, w.x2), Math.min(w.y1, w.y2), Math.max(w.x1, w.x2), Math.max(w.y1, w.y2)));
+  sc.props.forEach(p => acc(p.x, p.y, p.x + p.w, p.y + p.d));
+  sc.persons.forEach(p => acc(p.x, p.y, p.x, p.y));
+  if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 16; maxY = 16; }
+  const pad = 2;
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+  const bw = Math.max(2, maxX - minX), bh = Math.max(2, maxY - minY);
+  const k = clamp(Math.min(W / (bw * CELL), H / (bh * CELL)), 0.3, 1.2);
   MN.view.k = k;
-  MN.view.x = (W - maxX * CELL * k) / 2;
-  MN.view.y = (H - maxY * CELL * k) / 2;
+  MN.view.x = (W - bw * CELL * k) / 2 - minX * CELL * k;
+  MN.view.y = (H - bh * CELL * k) / 2 - minY * CELL * k;
 }
 
 /* ---------- 启动 ---------- */
@@ -1635,7 +2097,7 @@ async function loadMiaoning() {
     document.addEventListener('keyup', onKeyUp);
     window.addEventListener('resize', () => { if (secActive()) resizeCanvas(); if (MN.storyOpen) sbFitStage(); });
     const hint = $('#mnHint');
-    hint.innerHTML = `${icon('mouse-pointer-2', 's14')}<span>点一下，改一点。想改谁，就点谁。</span>`;
+    hint.innerHTML = `${icon('mouse-pointer-2', 's14')}<span>点选 · 拖动移动 · 右键删除 · 空白拖动框选</span>`;
     // 拖一个 .json 进来 = 导入（AI 产出的文件直接丢进窗口）
     root.addEventListener('dragover', e => {
       if (e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf('Files') >= 0) { e.preventDefault(); root.classList.add('mn-dropping'); }
@@ -2404,6 +2866,15 @@ window.loadMiaoning = loadMiaoning;
    与 gencanvas.js 暴露 gcNodes 一个套路。 */
 window.MN = MN;
 
+/* ---------- 全局桥（给 miaoning_m3.js 用） ----------
+   ⚠️ 2026-10-26 修复：这些函数以前一个都没挂到 window，
+   m3（剪辑台/仙人模式/运镜录制）里 G.toast / G.saveSoon / G.pushUndo / G.renderAll /
+   G.openModal 全部取到 undefined → 静默降级成「不存盘、不提示、不刷新、弹窗没样式」。 */
+Object.assign(window, {
+  toast, saveSoon, pushUndo, undo, redo, renderAll, paint, icon, openModal, closeModal, setMode, fitView,
+  mnSel: selectOnly, mnRefresh: refreshSel, mnDel: delSel, mnCtxClose: closeCtx,
+});
+
 /* ---------- bairimeng-director 集成钩子（2026-10-25 移植时新增） ----------
    场景搭建浮层用：打开时把镜头场景种子注入画布 01，保存时读回完整状态。 */
 window.miaoningSeed = function (st) {
@@ -2411,7 +2882,7 @@ window.miaoningSeed = function (st) {
   const fresh = blankState((st.scene && st.scene.title) || '未命名画布');
   MN.state = Object.assign(fresh, st);
   MN.state.format = 'aistudio-director';
-  MN.sel = null; MN.undo = []; MN.redo = [];
+  MN.sel = null; MN.selList = []; MN.pending = null; MN.undo = []; MN.redo = [];
   MN.view = { x: 0, y: 0, k: (st.view && st.view.zoom) || 1 };
   MN.grid = !(st.view && st.view.grid === false);
   fitView();

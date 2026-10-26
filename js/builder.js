@@ -174,6 +174,15 @@ async function attachLatestShot(st) {
   } catch (e) { console.warn('[场景搭建] 参考图挂载失败', e); }
 }
 
+/* 场景快照瘦身：镜头册截图是 base64 PNG，整包塞进 localStorage 会爆 5MB 配额，
+   所以只留机位参数（cam/name），图片本身已经挂在镜头的参考图里了。 */
+function slimMnState(st) {
+  const copy = JSON.parse(JSON.stringify(st));
+  copy.directorShots = (copy.directorShots || []).map(s => ({ name: s && s.name, cam: s && s.cam }));
+  delete copy.project; delete copy.cuttingDesk; delete copy.cameraPath;
+  return copy;
+}
+
 function saveAndClose() {
   const st = window.miaoningGetScene ? window.miaoningGetScene() : null;
   if (!st) { toast('导演台还没准备好，稍等一下再试', 'warn'); return; }
@@ -181,6 +190,9 @@ function saveAndClose() {
   const has = scene.objects.length > 0;
   window.__bdm.updateShot(curShot.id, {
     scene: has ? scene : null,
+    /* 2026-10-26：额外存一份导演台原生状态。
+       否则「房间」保存后再打开会变成 4 面墙（房间概念丢失），改不动了。 */
+    mnState: has ? slimMnState(st) : null,
     ...(has ? { cameraMove: 'free' } : {}),
   });
   window.__bdm.addXP(3, '搭建场景');
@@ -213,7 +225,9 @@ export function openSceneBuilder(shot, onSaved) {
         const root = document.getElementById('mnRoot');
         if (root && th === 'obsidian') root.dataset.mnTheme = 'dark';
       } catch (e) { /*  ignore */ }
-      const st = shotSceneToMn(shot.scene, shot);
+      /* 优先用导演台原生快照（房间/墙/道具原样回来）；
+         老数据只有 shot.scene（白模），才走格式转换 */
+      const st = (shot.mnState && shot.mnState.scene) ? shot.mnState : shotSceneToMn(shot.scene, shot);
       window.miaoningSeed(st);
     } catch (e) {
       console.error('[场景搭建] 初始化失败', e);
