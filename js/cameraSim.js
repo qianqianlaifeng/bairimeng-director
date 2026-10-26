@@ -14,6 +14,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const easeInOut = t => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 const easeOut = t => 1 - Math.pow(1 - t, 3);
+/* 把角度归一到 (-π, π]，用于求 yaw 的最短角差 */
+const wrapPi = a => { a = a % (Math.PI * 2); if (a > Math.PI) a -= Math.PI * 2; if (a < -Math.PI) a += Math.PI * 2; return a; };
 
 /* ---------- 变换工具 ---------- */
 function rotXpt(pt, pivot, ang) {
@@ -408,6 +410,24 @@ function solveCamera(sim, t, actor, opts = {}) {
       set([0, 1.7, 7], head);
   }
 
+  /* 角度型运镜（pan / tilt / rotate）的运动只存在于 yaw/pitch 里：
+   * 后面「景别重定位」和「角度叠加」都会用 lookAt 依据机位重新瞄准并覆盖 yaw/pitch，
+   * 若直接覆盖会把这类运动整段抹平（表现为右摇 / 甩镜 / 摆镜 / 上摇设了却完全不动）。
+   * 这里先量出「相对准星」的角偏移，重瞄之后再原样加回去。位置型运镜此项≈0，不受影响。 */
+  let dYaw = 0, dPitch = 0;
+  if (cam._tgt) {
+    const aim0 = lookAt(cam.pos, cam._tgt);
+    dYaw = wrapPi(cam.yaw - aim0.yaw);
+    dPitch = cam.pitch - aim0.pitch;
+  }
+  const reaim = (target) => {
+    const tg = target || cam._tgt;
+    if (!tg) return;
+    const aim = lookAt(cam.pos, tg);
+    cam.yaw = aim.yaw + dYaw;
+    cam.pitch = clamp(aim.pitch + dPitch, -1.45, 1.45);
+  };
+
   /* 景别：按标准取景重定位 —— 保留运镜的相对运动，把距离重映射到该景别的目标距离
    * 大远景=人物极小 · 远景=全身带环境 · 中景=膝盖以上 · 中近景=胸上 · 近景=上半身 · 特写=脸充满画面 */
   const SIZE_CFG = { ELS: { d: 6.7, fov: 55, aim: 1.0 }, LS: { d: 3.1, fov: 45, aim: 1.05 }, MS: { d: 2.2, fov: 34, aim: 1.15 }, MCU: { d: 2.0, fov: 30, aim: 1.26 }, CU: { d: 2.1, fov: 26, aim: 1.45 }, ECU: { d: 1.35, fov: 18, aim: 1.66 } };
@@ -420,8 +440,9 @@ function solveCamera(sim, t, actor, opts = {}) {
     const dx = cam.pos[0] - cam._tgt[0], dy = cam.pos[1] - cam._tgt[1], dz = cam.pos[2] - cam._tgt[2];
     cam.pos = [cam._tgt[0] + dx * k, cam._tgt[1] + dy * k, cam._tgt[2] + dz * k];
     const aimY = cfg.aim ?? cam._tgt[1];
-    Object.assign(cam, lookAt(cam.pos, [cam._tgt[0], aimY, cam._tgt[2]]));
-    cam._tgt = [cam._tgt[0], aimY, cam._tgt[2]];
+    const tg = [cam._tgt[0], aimY, cam._tgt[2]];
+    cam._tgt = tg;
+    reaim(tg);   // 只调整取景距离/高度，保留 pan/tilt 的角偏移
     if (cfg.fov) cam.fov = cfg.fov;
   }
 
@@ -444,7 +465,7 @@ function solveCamera(sim, t, actor, opts = {}) {
       }
     }
     else if (ang === 'dutch') cam.roll = 0.16;
-    if (ang !== 'dutch' && cam._tgt) Object.assign(cam, lookAt(cam.pos, cam._tgt));
+    if (ang !== 'dutch' && cam._tgt) reaim();   // 保留 pan/tilt 的角偏移
   }
   cam.roll = cam.roll || 0;
   return cam;
