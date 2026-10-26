@@ -67,7 +67,7 @@ function shotSceneToMn(scene, shot) {
       st.scene.persons.push({
         id: uid(), name: '人物', x: o.x, y: o.z,
         rot: ((90 - (+o.rot || 0)) % 360 + 360) % 360,
-        color: '#e1453e', pose: P2A[o.action] || '站立', face: 1, faceDir: 0, jump: 0, hidden: false,
+        color: '#2e7cf6', pose: P2A[o.action] || '站立', face: 1, faceDir: 0, jump: 0, hidden: false,
       });
     }
   }

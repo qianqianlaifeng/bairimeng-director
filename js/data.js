@@ -303,8 +303,8 @@ const TUTORIAL = [
 
 /* ---------------- 背景与主题 ---------------- */
 const THEMES = [
-  { key: 'porcelain', name: '白瓷', desc: '暖白底 · 朱砂红点缀（默认，对齐原版工作台）' },
-  { key: 'obsidian', name: '曜夜', desc: '深蓝夜幕 · 红色点缀（深色模式）' },
+  { key: 'porcelain', name: '晴空', desc: '晴白底 · 潮玩蓝点缀（默认 · 年轻化）' },
+  { key: 'obsidian', name: '曜夜', desc: '深蓝夜幕 · 亮蓝点缀（深色模式）' },
   { key: 'gilt', name: '鎏金', desc: '深棕暖金，影院奢华感' },
 ];
 

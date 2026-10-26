@@ -28,7 +28,7 @@ function save(key, val) {
 
 /* ---------------- 默认值 ---------------- */
 const DEFAULT_SETTINGS = {
-  theme: 'porcelain',  // 白瓷浅色（对齐原版导演台观感）
+  theme: 'porcelain',  // 晴空浅色（年轻化蓝调）
   background: 'aurora',
   bgMask: 40,
   effects: true,       // 动效全开

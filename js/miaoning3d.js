@@ -161,7 +161,7 @@
     }
     for (const p of sc.persons) {
       if (p.hidden) continue;
-      const col = material === 'random' ? hashColor(vi++) : hex2rgb(p.color || '#e1453e');
+      const col = material === 'random' ? hashColor(vi++) : hex2rgb(p.color || '#2e7cf6');
       const a = ((p.rot || 0) * Math.PI) / 180, cx = p.x, cz = p.y;
       pushBox(g, 0.22, 0.55, 0.15, a, cx, 0.55, cz, col);
       pushBox(g, 0.16, 0.16, 0.16, a, cx, 1.18, cz, col);

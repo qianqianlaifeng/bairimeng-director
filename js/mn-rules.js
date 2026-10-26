@@ -109,7 +109,7 @@ ${F}json
     ],
     "persons": [
       { "id": "a1", "name": "店员", "x": 1.6, "y": 5.2, "rot": 270, "color": "#3c6e9e", "pose": "站立", "face": 1, "faceDir": 0, "jump": 0, "hidden": false },
-      { "id": "a2", "name": "顾客", "x": 6.3, "y": 2.4, "rot": 180, "color": "#e1453e", "pose": "走路", "face": 1, "faceDir": 0, "jump": 0, "hidden": false }
+      { "id": "a2", "name": "顾客", "x": 6.3, "y": 2.4, "rot": 180, "color": "#2e7cf6", "pose": "走路", "face": 1, "faceDir": 0, "jump": 0, "hidden": false }
     ],
     "lights": [
       { "id": "l1", "name": "顶灯", "x": 4, "y": 3, "color": "#fff4d6", "hidden": false },
@@ -175,7 +175,7 @@ ${F}json
       { "id": "p5", "name": "衣柜", "x": 3.1, "y": 3.2, "w": 0.8, "d": 2, "h": 2.2, "color": "#b9a68c", "hidden": false }
     ],
     "persons": [
-      { "id": "a1", "name": "住户", "x": 3, "y": 1.6, "rot": 180, "color": "#e1453e", "pose": "站立", "face": 1, "faceDir": 0, "jump": 0, "hidden": false }
+      { "id": "a1", "name": "住户", "x": 3, "y": 1.6, "rot": 180, "color": "#2e7cf6", "pose": "站立", "face": 1, "faceDir": 0, "jump": 0, "hidden": false }
     ],
     "lights": [
       { "id": "l1", "name": "客厅主灯", "x": 3, "y": 1.5, "color": "#fff4d6", "hidden": false },
@@ -260,7 +260,7 @@ ${F}json
   "format": "aistudio-person",
   "version": 1,
   "persons": [
-    { "name": "女主", "x": 3, "y": 4, "rot": 90, "color": "#e1453e", "pose": "招手", "face": 1, "faceDir": 0, "jump": 0 }
+    { "name": "女主", "x": 3, "y": 4, "rot": 90, "color": "#2e7cf6", "pose": "招手", "face": 1, "faceDir": 0, "jump": 0 }
   ]
 }
 ${F}
@@ -290,7 +290,7 @@ ${F}json
   "format": "aistudio-person",
   "version": 1,
   "persons": [
-    { "name": "女主", "x": 3, "y": 4, "rot": 90, "color": "#e1453e", "pose": "招手", "face": 1.1, "faceDir": 0, "jump": 0 },
+    { "name": "女主", "x": 3, "y": 4, "rot": 90, "color": "#2e7cf6", "pose": "招手", "face": 1.1, "faceDir": 0, "jump": 0 },
     { "name": "男主", "x": 4.4, "y": 4.2, "rot": 200, "color": "#3c6e9e", "pose": "坐下", "face": 1, "faceDir": 15, "jump": 0 }
   ]
 }
@@ -367,7 +367,7 @@ ${F}json
       { "id": "p4", "name": "绿植", "x": 0.3, "y": 4.4, "w": 0.5, "d": 0.5, "h": 1.2, "color": "#5b8c5a", "hidden": false }
     ],
     "persons": [
-      { "id": "a1", "name": "被裁员工", "x": 2.2, "y": 1.4, "rot": 90, "color": "#e1453e", "pose": "站立", "face": 1, "faceDir": 0, "jump": 0, "hidden": false },
+      { "id": "a1", "name": "被裁员工", "x": 2.2, "y": 1.4, "rot": 90, "color": "#2e7cf6", "pose": "站立", "face": 1, "faceDir": 0, "jump": 0, "hidden": false },
       { "id": "a2", "name": "人事", "x": 4.4, "y": 2.6, "rot": 270, "color": "#3c6e9e", "pose": "站立", "face": 1, "faceDir": 0, "jump": 0, "hidden": false }
     ],
     "lights": [

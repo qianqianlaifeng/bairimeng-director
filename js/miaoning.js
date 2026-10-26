@@ -1,4 +1,5 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.11.1（2026-10-26）：全站换年轻化蓝调主题（晴空蓝 #2e7cf6），画布/3D/人物默认色同步。
    v1.11.0（2026-10-26）：右键菜单 / 右键平移 / 框选多选 / 物件库 / 对齐参考线 / 撤销粒度修复。
    v1.10.28：仿 B 站玩具页 MiorningDYT（v0.6.17）原生重制 —— M1 里程碑：
    应用外壳 + 2D 户型编辑器（画房间/画墙/造物/打洞/放人）+ 场景清单 +
@@ -34,7 +35,7 @@ function toast(msg) {
 }
 
 /* ---------- 调色板（跟随主题，canvas 用） ---------- */
-const PAL = { canvas: '#f2eee6', grid: '#ddd7cd', gridMajor: '#c8bfae', ink: '#121212', muted: '#76716b', accent: '#e1453e', roomFill: '#fdfcf8', roomLine: '#b7ad9c', prop: '#d9b382', paper: '#fcfaf6' };
+const PAL = { canvas: '#f2eee6', grid: '#ddd7cd', gridMajor: '#c8bfae', ink: '#121212', muted: '#76716b', accent: '#2e7cf6', roomFill: '#fdfcf8', roomLine: '#b7ad9c', prop: '#d9b382', paper: '#fcfaf6' };
 function syncPal() {
   const dark = $('#mnRoot') && $('#mnRoot').dataset.mnTheme === 'dark';
   PAL.canvas = dark ? '#171717' : '#f2eee6';
@@ -42,7 +43,7 @@ function syncPal() {
   PAL.gridMajor = dark ? '#3b3835' : '#cfc5b3';
   PAL.ink = dark ? '#f2eee6' : '#121212';
   PAL.muted = dark ? '#b0aaa1' : '#76716b';
-  PAL.accent = dark ? '#b31919' : '#e1453e';
+  PAL.accent = dark ? '#5b9bff' : '#2e7cf6';
   PAL.roomFill = dark ? '#211f1d' : '#fdfcf8';
   PAL.roomLine = dark ? '#4a463f' : '#b7ad9c';
   PAL.prop = '#d9b382';
@@ -518,7 +519,7 @@ function renderTree() {
         </span></div>`;
     if (open) html += `<div class="mn-tree-kids">` + items.map(o => {
       const sel = MN.sel && MN.sel.kind === o._k && MN.sel.id === o.id;
-      const dot = o._k === 'person' ? (o.color || '#e1453e') : o._k === 'prop' ? (o.color || '#d9b382') : o._k === 'light' ? '#f5b301' : o._k === 'room' ? '#9db4c0' : '#5b564e';
+      const dot = o._k === 'person' ? (o.color || '#2e7cf6') : o._k === 'prop' ? (o.color || '#d9b382') : o._k === 'light' ? '#f5b301' : o._k === 'room' ? '#9db4c0' : '#5b564e';
       return `<div class="mn-tree-row ${sel ? 'sel' : ''}" data-obj="${o._k}:${o.id}" style="${o.hidden ? 'opacity:.45' : ''}">
         <button class="mn-grip">${icon('grip-vertical', 's14')}</button>
         <button class="mn-obj-name"><span class="mn-obj-dot" style="background:${dot}"></span><span>${esc(o.name || '未命名')}</span></button>
@@ -671,7 +672,7 @@ function toggleImmersive() {
 /* ---------- 右侧栏 ---------- */
 const ROOM_COLORS = ['', '#f3e9d8', '#e8eef3', '#eaf0e6', '#f5e6e4', '#efe8f2'];
 const PROP_COLORS = ['#d9b382', '#c98d6b', '#8a9b8e', '#7d8ca3', '#b8b0a4', '#a3b8c9', '#d4a5a5', '#c9b8d4'];
-const PERSON_COLORS = ['#e1453e', '#ffffff', '#f5b301', '#e33e3e', '#c98d6b', '#8a9b8e', '#7d8ca3', '#2b2c2f', '#76716b', '#3c6e9e', '#5b8c5a', '#b0aaa1'];
+const PERSON_COLORS = ['#2e7cf6', '#ffffff', '#f5b301', '#e33e3e', '#c98d6b', '#8a9b8e', '#7d8ca3', '#2b2c2f', '#76716b', '#3c6e9e', '#5b8c5a', '#b0aaa1'];
 const GROUND_COLORS = ['#ffffff', '#f1ece3', '#e3e5e7', '#d9d2c5', '#c4cdd6', '#b8c9b8', '#e8d5c0', '#d4c4b0', '#9aa5b1', '#5b564e'];
 
 function renderRight() {
@@ -1068,9 +1069,9 @@ function doPaint() {
   for (const p of sc.persons) {
     if (p.hidden) continue;
     const q = w2s(p.x, p.y), r = Math.max(5, 0.45 * C);
-    ctx.fillStyle = p.color || '#e1453e';
+    ctx.fillStyle = p.color || '#2e7cf6';
     ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, 7); ctx.fill();
-    ctx.strokeStyle = p.color || '#e1453e'; ctx.lineWidth = 2;
+    ctx.strokeStyle = p.color || '#2e7cf6'; ctx.lineWidth = 2;
     const rot = (p.rot || 0) * Math.PI / 180;
     ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(q.x + Math.cos(rot) * r * 1.7, q.y + Math.sin(rot) * r * 1.7); ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,.85)';
@@ -1264,7 +1265,7 @@ function placePending(wx, wy) {
   const p = MN.pending; if (!p) return;
   pushUndo();
   if (p.kind === 'person') {
-    const o = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: snap(wx), y: snap(wy), rot: 0, color: p.preset.color || '#e1453e', pose: '站立', face: 1, faceDir: 0, jump: 0 };
+    const o = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: snap(wx), y: snap(wy), rot: 0, color: p.preset.color || '#2e7cf6', pose: '站立', face: 1, faceDir: 0, jump: 0 };
     MN.state.scene.persons.push(o); selectOnly('person', o.id);
   } else if (p.kind === 'light') {
     const o = { id: uid(), name: '光源 ' + (MN.state.scene.lights.length + 1), x: snap(wx), y: snap(wy), color: '#ffe9b0', intensity: 1, h: 2.5 };
@@ -1342,7 +1343,7 @@ function onPtrDown(e) {
   }
   if (tool === 'person') {
     pushUndo();
-    const p = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: snap(w.x), y: snap(w.y), rot: 0, color: '#e1453e', pose: '站立', face: 1, faceDir: 0, jump: 0 };
+    const p = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: snap(w.x), y: snap(w.y), rot: 0, color: '#2e7cf6', pose: '站立', face: 1, faceDir: 0, jump: 0 };
     MN.state.scene.persons.push(p);
     selectOnly('person', p.id);
     refreshSel(); saveSoon(); paint();
@@ -1655,7 +1656,7 @@ function normPerson(p, i, center) {
     id: p.id || uid(), name: strOr(p.name, '人物 ' + (i + 1), 12),
     x: has ? +p.x : center.x, y: has ? +p.y : center.y,
     rot: ((numOr(p.rot, 90) % 360) + 360) % 360,
-    color: p.color || '#e1453e',
+    color: p.color || '#2e7cf6',
     pose: POSES.indexOf(p.pose) >= 0 ? p.pose : '站立',
     face: clamp(numOr(p.face, 1), 0.5, 2), faceDir: numOr(p.faceDir, 0), jump: clamp(numOr(p.jump, 0), 0, 3),
     hidden: !!p.hidden,

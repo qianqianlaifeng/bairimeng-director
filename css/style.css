@@ -1,8 +1,7 @@
 /* ============================================================
- * 白日梦导演台 · 全站样式 v3
- * 设计语言：对齐原版导演台 —— 浅色三维工作台
- *   暖白底 / 白卡片细边框 / 朱砂红点缀与选中态
- *   紧凑专业控件 / 红色滑块 / 左栏红色高亮
+ * 白日梦导演台 · 全站样式 v4
+ * 设计语言：年轻化蓝调 —— 晴白底 / 白卡片细边框 / 潮玩蓝点缀
+ *   紧凑专业控件 / 蓝色滑块 / 左栏蓝色高亮 / 青蓝渐变
  * ============================================================ */
 
 /* ---------- 主题变量 ---------- */
@@ -18,20 +17,20 @@ body.theme-porcelain {
   --panel-hi: rgba(255, 255, 255, 0.9);
   --border: #e4e7ed; --border-hi: #c9cfdb;
   --text: #272b34; --dim: #8a90a0;
-  --acc: #e0485a; --acc-hi: #c9384a; --acc2: #e8704f; --acc-ink: #ffffff;
+  --acc: #2e7cf6; --acc-hi: #1e63d9; --acc2: #22b8d4; --acc-ink: #ffffff;
   --ok: #189a5c; --warn: #d9881f; --bad: #d64545;
-  --chip-bg: rgba(224, 72, 90, 0.09);
+  --chip-bg: rgba(46, 124, 246, 0.09);
   --input-bg: #f6f7f9;
   --shadow: 0 1px 3px rgba(24, 28, 44, 0.07), 0 6px 20px rgba(24, 28, 44, 0.05);
-  --glow: 0 4px 14px rgba(224, 72, 90, 0.25);
-  --glow-pink: 0 4px 14px rgba(224, 72, 90, 0.25);
-  --ring: 0 0 0 3px rgba(224, 72, 90, 0.16);
-  --grad: linear-gradient(135deg, #e8556a, #d13c4e);
-  --grad-pink: linear-gradient(135deg, #e8556a, #f0808f);
-  --pink: #e0485a;
-  --glow1: rgba(224, 72, 90, 0.05);
+  --glow: 0 4px 14px rgba(46, 124, 246, 0.25);
+  --glow-pink: 0 4px 14px rgba(46, 124, 246, 0.25);
+  --ring: 0 0 0 3px rgba(46, 124, 246, 0.16);
+  --grad: linear-gradient(135deg, #3f8cff, #2461e6);
+  --grad-pink: linear-gradient(135deg, #3f8cff, #6fb1ff);
+  --pink: #2e7cf6;
+  --glow1: rgba(46, 124, 246, 0.05);
   --glow2: rgba(90, 120, 220, 0.05);
-  --glow3: rgba(232, 128, 80, 0.04);
+  --glow3: rgba(34, 184, 212, 0.04);
 }
 /* 曜夜（深色备选） */
 body.theme-obsidian {
@@ -40,20 +39,20 @@ body.theme-obsidian {
   --panel-hi: rgba(255, 255, 255, 0.045);
   --border: #262d42; --border-hi: #38415f;
   --text: #e8ebf4; --dim: #8f97ad;
-  --acc: #e8556a; --acc-hi: #ff8b9b; --acc2: #e8875f; --acc-ink: #ffffff;
+  --acc: #4f8cff; --acc-hi: #8ab6ff; --acc2: #35c3dd; --acc-ink: #ffffff;
   --ok: #3ddc97; --warn: #ffc857; --bad: #ff6b81;
-  --chip-bg: rgba(232, 85, 106, 0.14);
+  --chip-bg: rgba(79, 140, 255, 0.16);
   --input-bg: #12151f;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-  --glow: 0 4px 16px rgba(232, 85, 106, 0.35);
-  --glow-pink: 0 4px 16px rgba(232, 85, 106, 0.35);
-  --ring: 0 0 0 3px rgba(232, 85, 106, 0.25);
-  --grad: linear-gradient(135deg, #e8556a, #d13c4e);
-  --grad-pink: linear-gradient(135deg, #e8556a, #f0808f);
-  --pink: #e8556a;
-  --glow1: rgba(232, 85, 106, 0.10);
+  --glow: 0 4px 16px rgba(79, 140, 255, 0.35);
+  --glow-pink: 0 4px 16px rgba(79, 140, 255, 0.35);
+  --ring: 0 0 0 3px rgba(79, 140, 255, 0.25);
+  --grad: linear-gradient(135deg, #3f8cff, #2461e6);
+  --grad-pink: linear-gradient(135deg, #3f8cff, #6fb1ff);
+  --pink: #4f8cff;
+  --glow1: rgba(79, 140, 255, 0.10);
   --glow2: rgba(90, 120, 220, 0.09);
-  --glow3: rgba(232, 135, 95, 0.07);
+  --glow3: rgba(53, 195, 221, 0.07);
 }
 /* 鎏金（深金备选） */
 body.theme-gilt {
@@ -89,7 +88,7 @@ body {
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
-::selection { background: rgba(224, 72, 90, 0.22); }
+::selection { background: rgba(46, 124, 246, 0.22); }
 
 /* ---------- 背景层：淡雅光晕 ---------- */
 body::before {
