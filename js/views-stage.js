@@ -216,6 +216,23 @@ export function renderPreview(container, payload = {}) {
           <div class="form-row"><label>布景</label><select id="pvScene" class="input">${opts(STAGE_SCENES, 'plain')}</select></div>
           <div class="form-row"><label>景别（真实距离）</label><select id="pvSize" class="input">${opts(SHOT_SIZES, 'MS')}</select></div>
           <div class="form-row"><label>拍摄角度（直观可见）</label><select id="pvAngle" class="input">${opts(ANGLES, 'eye')}</select></div>
+          <div class="form-row"><label>看向高度（拍哪里）</label><select id="pvAim" class="input">
+            <option value="auto" selected>自动（跟景别走）</option>
+            <option value="1.66">脸 · 特写 1.66m</option>
+            <option value="1.45">眼 · 平视 1.45m</option>
+            <option value="1.30">胸 1.30m</option>
+            <option value="1.00">腰 1.00m</option>
+            <option value="0.75">膝 0.75m</option>
+            <option value="0.15">地面 0.15m</option>
+          </select></div>
+          <div class="form-row"><label>机位高度</label><select id="pvCamH" class="input">
+            <option value="auto" selected>自动（跟运镜走）</option>
+            <option value="0.5">低机位 0.5m</option>
+            <option value="1.2">腰平 1.2m</option>
+            <option value="1.7">眼平 1.7m</option>
+            <option value="2.6">高机位 2.6m</option>
+            <option value="4.5">俯视 4.5m</option>
+          </select></div>
           <div class="form-row"><label>运镜速度</label><select id="pvMoveSpeed" class="input">
             <option value="std" selected>标准</option><option value="slow">慢 · 细腻</option><option value="fast">快 · 有力</option>
           </select></div>
@@ -269,7 +286,8 @@ export function renderPreview(container, payload = {}) {
     const action = container.querySelector('#pvAction').value;
     const scene = container.querySelector('#pvScene').value;
     const dur = +container.querySelector('#pvDur').value;
-    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value, size: container.querySelector('#pvSize').value });
+    const aimV = container.querySelector('#pvAim').value, camHV = container.querySelector('#pvCamH').value;
+    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value, size: container.querySelector('#pvSize').value, aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV });
     drawMap();
     playBtn.textContent = '⏸ 暂停';
     player.onEnd = () => { playBtn.textContent = '▶ 播放'; };
@@ -288,6 +306,8 @@ export function renderPreview(container, payload = {}) {
   container.querySelector('#pvAction').onchange = () => startPlay(0);
   container.querySelector('#pvAngle').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvSize').onchange = () => startPlay(player.t || 0);
+  container.querySelector('#pvAim').onchange = () => startPlay(player.t || 0);
+  container.querySelector('#pvCamH').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvMoveSpeed').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvScene').onchange = () => startPlay(0);
   const durInput = container.querySelector('#pvDur');
@@ -299,6 +319,7 @@ export function renderPreview(container, payload = {}) {
   scrub.addEventListener('input', () => {
     const t = +scrub.value / 1000;
     const mv = moveByKey[curMove];
+    const aimV = container.querySelector('#pvAim').value, camHV = container.querySelector('#pvCamH').value;
     player.seek(mv.sim, t, {
       action: container.querySelector('#pvAction').value,
       scene: container.querySelector('#pvScene').value,
@@ -306,6 +327,8 @@ export function renderPreview(container, payload = {}) {
       angle: container.querySelector('#pvAngle').value,
       moveSpeed: container.querySelector('#pvMoveSpeed').value,
       size: container.querySelector('#pvSize').value,
+      aimY: aimV === 'auto' ? undefined : +aimV,
+      camH: camHV === 'auto' ? undefined : +camHV,
     });
     drawMap();
     timeEl.textContent = `${(t * +durInput.value).toFixed(1)}s / ${durInput.value}s`;
@@ -324,6 +347,8 @@ export function renderPreview(container, payload = {}) {
     const mv = moveByKey[curMove];
     const angle = container.querySelector('#pvAngle').value;
     const size = container.querySelector('#pvSize').value;
+    const aimV = container.querySelector('#pvAim').value, camHV = container.querySelector('#pvCamH').value;
+    const fine = { aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV };
     const action = container.querySelector('#pvAction').value;
     const dur = +container.querySelector('#pvDur').value || 4;
     const N = 48;
@@ -331,12 +356,12 @@ export function renderPreview(container, payload = {}) {
     for (let i = 0; i <= N; i++) {
       const tt = i / N;
       const actor = solveActor(action, tt, mv.sim, dur);
-      const c = solveCamera(mv.sim, tt, actor, { angle, size });
+      const c = solveCamera(mv.sim, tt, actor, { angle, size, ...fine });
       pts.push({ x: c.pos[0], z: c.pos[2], yaw: c.yaw, fov: c.fov });
     }
     const t = clamp(player.t || 0, 0, 1);
     const actorCur = solveActor(action, t, mv.sim, dur);
-    const cur = solveCamera(mv.sim, t, actorCur, { angle, size });
+    const cur = solveCamera(mv.sim, t, actorCur, { angle, size, ...fine });
     const W2 = mapCv.width / 2, S = 13;
     const m2p = (x, z) => [W2 + (x / S) * (W2 - 12), W2 + (z / S) * (W2 - 12)];
     mapCtx.clearRect(0, 0, mapCv.width, mapCv.height);

@@ -2,7 +2,7 @@
  * 白日梦导演台 · 白模运镜模拟引擎
  * 极简软件级 3D 渲染器（Canvas 2D）：
  *   透视投影 + 画家算法 + 平面光照 + 雾
- * 相机模型：pos / yaw / pitch / fov
+ * 相机模型：pos / yaw / pitch / fov（+ 拍摄微调：aimY 看向高度 / camH 机位高度）
  * 坐标系：Y 向上，相机默认朝 -Z
  * ============================================================ */
 
@@ -467,6 +467,18 @@ function solveCamera(sim, t, actor, opts = {}) {
     else if (ang === 'dutch') cam.roll = 0.16;
     if (ang !== 'dutch' && cam._tgt) reaim();   // 保留 pan/tilt 的角偏移
   }
+
+  /* 拍摄微调（最后生效）：机位高度 / 看向高度 —— 直接决定画面里是脸还是身体。
+   * aimY 把镜头目标钉到人物身上的某个绝对高度（脸≈1.66m / 眼≈1.45m / 胸≈1.3m），
+   * 推得再近也始终看着那个点，不会怼到躯干上；pan/tilt 的角运动仍保留。 */
+  if (sim.type !== 'free' && (opts.aimY != null || opts.camH != null)) {
+    if (opts.camH != null) cam.pos[1] = clamp(+opts.camH, 0.15, 9);
+    if (opts.aimY != null && cam._tgt) {
+      const tg = [cam._tgt[0], clamp(+opts.aimY, 0, 3), cam._tgt[2]];
+      cam._tgt = tg;
+      reaim(tg);
+    }
+  }
   cam.roll = cam.roll || 0;
   return cam;
 }
@@ -810,8 +822,8 @@ class MovePlayer {
     this.duration = 4;
     this.hud = true;
   }
-  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0, angle, moveSpeed, size } = {}) {
-    this.extra = { angle, moveSpeed, size };
+  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0, angle, moveSpeed, size, aimY, camH } = {}) {
+    this.extra = { angle, moveSpeed, size, aimY, camH };
     this.sim = sim; this.duration = duration;
     this.action = action; this.loop = loop;
     this.renderer.scene = scene;
@@ -821,10 +833,11 @@ class MovePlayer {
   }
   seek(sim, t, opts) {
     this.sim = sim; this.action = opts?.action || this.action || 'stand';
-    if (opts?.angle !== undefined) this.extra = { angle: opts.angle, moveSpeed: opts.moveSpeed, size: opts.size };
+    if (opts?.angle !== undefined) this.extra = { angle: opts.angle, moveSpeed: opts.moveSpeed, size: opts.size, aimY: opts.aimY, camH: opts.camH };
+    else if (opts?.aimY !== undefined || opts?.camH !== undefined) this.extra = { ...(this.extra || {}), aimY: opts.aimY, camH: opts.camH };
     this.renderer.scene = opts?.scene || this.renderer.scene;
     this.duration = opts?.duration || this.duration;
-    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size });
+    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH });
   }
   stop() { this.playing = false; }
   destroy() { this.playing = false; if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
@@ -838,7 +851,7 @@ class MovePlayer {
         else { t = 1; this.playing = false; if (this.onEnd) this.onEnd(); }
       }
       this.t = t;
-      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size });
+      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH });
       if (this.onTick) this.onTick(t);
       this._raf = requestAnimationFrame(this._frame.bind(this));
     }
