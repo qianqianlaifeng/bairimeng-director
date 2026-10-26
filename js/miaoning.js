@@ -821,7 +821,9 @@ function renderShots() {
     <div class="mn-shot-list">
       <button class="mn-shot-add" id="mnShotAdd"><span class="mn-plus">${icon('plus', 's14')}</span>立起来，再找镜头</button>
       ${shots.length ? '' : `<div class="mn-shot-empty"><b>还没拍。问题不大。</b>记住机位 · 导出无界面图片</div>`}
-      ${shots.map((s, i) => `<div style="flex:0 0 auto;text-align:center"><img class="mn-shot-img" data-shot="${i}" src="${s.image}" style="height:88px;border-radius:8px;border:1px solid var(--line);display:block;cursor:pointer" title="${esc(s.name)}（点击：3D 回到该机位 / 看大图）" /><small style="font-size:11px;color:var(--muted)">${i + 1}. ${esc(s.name)}</small></div>`).join('')}
+      ${shots.map((s, i) => `<div style="flex:0 0 auto;text-align:center">${s.image
+      ? `<img class="mn-shot-img" data-shot="${i}" src="${s.image}" style="height:88px;border-radius:8px;border:1px solid var(--line);display:block;cursor:pointer" title="${esc(s.name)}（点击：3D 回到该机位 / 看大图）" />`
+      : `<div class="mn-shot-img mn-shot-ph" data-shot="${i}" title="${esc(s.name)}（AI 给的机位，点击回该机位）">${icon('camera', 's18')}<b>${i + 1}</b></div>`}<small style="font-size:11px;color:var(--muted)">${i + 1}. ${esc(s.name)}</small></div>`).join('')}
     </div>`;
   $('#mnShotAdd').onclick = () => {
     if (!window.MN3D || !MN3D.ok) { toast('3D 引擎不可用，先在 3D 里看一眼'); return; }
@@ -840,16 +842,22 @@ function renderShots() {
   $('#mnShotClear').onclick = () => { if (!shots.length) return; if (!confirm('删除全部 ' + shots.length + ' 个镜头？')) return; pushUndo(); MN.state.directorShots = []; renderShots(); saveSoon(); };
 }
 function downloadShots() {
-  MN.state.directorShots.forEach((s, i) => {
+  const list = (MN.state.directorShots || []).filter(s => s && s.image);
+  if (!list.length) { toast('镜头册里没有可下载的图（AI 机位只有角度，进 3D 点一下再存）', 'warn'); return; }
+  list.forEach((s, i) => {
     const a = document.createElement('a');
     a.href = s.image; a.download = (MN.state.scene.title || '镜头') + '-' + (i + 1) + '.png'; a.click();
   });
-  toast('开始下载 ' + MN.state.directorShots.length + ' 张');
+  toast('开始下载 ' + list.length + ' 张', 'ok');
 }
 function onShotClick(s) {
-  if (MN.state.view.mode === '3d' && s.cam && window.MN3D) {
-    MN3D.setCamera(s.cam); MN3D.render(MN.state); toast('已回到该机位'); return;
+  if (s && s.cam && window.MN3D && MN3D.ok) {
+    if (MN.state.view.mode !== '3d') setMode('3d');
+    MN3D.setCamera(s.cam);
+    toast(s.image ? '已回到该机位' : '已回到该机位（AI 只给了角度 · 想留图就点「立起来，再找镜头」）', 'ok');
+    return;
   }
+  if (!s || !s.image) { toast('这个机位没有图', 'warn'); return; }
   showShotBig(s);
 }
 function showShotBig(s) {
@@ -1173,50 +1181,209 @@ function exportProject() {
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   toast('已导出完整项目 JSON');
 }
-function openImportModal() {
-  let mode = 'full';
+function openImportModal(preMode) {
+  let mode = preMode === 'model' ? 'model' : 'auto';
   const body = `
-    <p class="mn-help-para">导入选项前会再次确认。备份将自动存到当前画布。</p>
-    <button class="mn-choice active" data-m="full"><span class="mn-ai-ico">${icon('box', 's18')}</span><span><strong>完整项目<span class="mn-tag">推荐</span></strong><small>模型、机位、截图、全部运镜、故事板、配音和剪辑，一起带走。</small></span></button>
-    <button class="mn-choice" data-m="model"><span class="mn-ai-ico">${icon('cuboid')}</span><span><strong>仅模型</strong><small>墙、造物、人物和灯光，只用场景 JSON。</small></span></button>
-    <button class="mn-choice" data-m="json"><span class="mn-ai-ico">${icon('file-braces')}</span><span><strong>粘贴 JSON 代码</strong><small>复制过来，直接导入。</small></span></button>
+    <p class="mn-help-para">智能导入会自己认：完整项目 / 只有造物 / 只有人物 / 机位 / 分镜表。加东西不覆盖，整项目才会问一句。</p>
+    <button class="mn-choice ${mode === 'auto' ? 'active' : ''}" data-m="auto"><span class="mn-ai-ico">${icon('sparkles', 's18')}</span><span><strong>智能导入<span class="mn-tag">推荐</span></strong><small>AI 给的 JSON 直接贴进来；只加不删，已有场景保留。</small></span></button>
+    <button class="mn-choice ${mode === 'model' ? 'active' : ''}" data-m="model"><span class="mn-ai-ico">${icon('cuboid')}</span><span><strong>只替换场景</strong><small>保留镜头册、故事板、剪辑台，只换墙 / 造物 / 人物 / 灯光。</small></span></button>
     <div style="margin-top:14px">
       <input type="file" id="mnImpFile" accept=".json,application/json" style="font-size:12.5px" />
-      <textarea class="mn-json-box" id="mnImpJson" placeholder="或把 JSON 粘到这里…" style="margin-top:10px"></textarea>
+      <textarea class="mn-json-box" id="mnImpJson" placeholder="或把 AI 回的 JSON 粘到这里…（带 json 代码块围栏也能自动剥掉）" style="margin-top:10px"></textarea>
     </div>`;
-  openModal('导入什么？', '当前画布', body, [
+  const m = openModal('导入什么？', '当前画布', body, [
     { label: '取消', ghost: true },
     { label: '导入', primary: true, fn: () => doImport(mode) },
   ], 'wide');
-  const back = $('.mn-modal');
-  $$('[data-m]', back).forEach(b => b.onclick = () => {
-    $$('[data-m]', back).forEach(x => x.classList.remove('active')); b.classList.add('active'); mode = b.dataset.m;
+  $$('[data-m]', m).forEach(b => b.onclick = () => {
+    $$('[data-m]', m).forEach(x => x.classList.remove('active')); b.classList.add('active'); mode = b.dataset.m;
   });
-  $('#mnImpFile', back).onchange = async e => {
+  $('#mnImpFile', m).onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
-    try { $('#mnImpJson', back).value = await f.text(); toast('已读取 ' + f.name); } catch (err) { toast('读取失败'); }
+    try { $('#mnImpJson', m).value = await f.text(); toast('已读取 ' + f.name); } catch (err) { toast('读取失败', 'warn'); }
+  };
+  setTimeout(() => { const t = $('#mnImpJson', m); if (t) t.focus(); }, 60);
+}
+
+/* ---------- 智能导入 ----------
+   认 5 种 AI 产物，只加不删（整场景才提示覆盖）：
+     ① 完整项目 {scene:{...}, sun, camera, shots, storyboard}
+     ② 只有场景 {scene:{...}}（mode=model 时保留机位/故事板）
+     ③ 造物补丁 {props:[...]} 或 {prop:{...}}
+     ④ 人物补丁 {persons:[...]} 或 {person:{...}}
+     ⑤ 机位 / 分镜 {shots:[{cam}]} / {storyboard:[...]} */
+function arrOf(x) { if (!x) return []; return (Array.isArray(x) ? x : [x]).filter(Boolean); }
+function numOr(v, d) { const n = +v; return isFinite(n) ? n : d; }
+function strOr(v, d, max) { const s = (v == null ? '' : String(v)).trim(); return (s || d).slice(0, max || 40); }
+
+function normProp(p, i, center) {
+  const w = Math.max(0.05, numOr(p.w, 1)), d = Math.max(0.05, numOr(p.d, 1)), h = Math.max(0.05, numOr(p.h, 1));
+  const has = isFinite(+p.x) && isFinite(+p.y);
+  return {
+    id: p.id || uid(), name: strOr(p.name, '造物 ' + (i + 1), 12),
+    x: has ? +p.x : center.x - w / 2, y: has ? +p.y : center.y - d / 2,
+    w, d, h, color: p.color || '', hidden: !!p.hidden,
   };
 }
-function doImport(mode) {
-  const txt = ($('#mnImpJson') ? $('#mnImpJson').value : '').trim();
-  if (!txt) return toast('先选文件或粘 JSON');
-  let data;
-  try { data = JSON.parse(txt); } catch (e) { return toast('JSON 格式不对：' + e.message); }
-  if (!data || typeof data !== 'object' || !data.scene) return toast('这不是导演台项目文件（缺 scene）');
-  if (!confirm(mode === 'model' ? '导入模型会覆盖当前画布场景，确定？' : '导入会覆盖当前画布全部内容，确定？')) return;
-  pushUndo();
-  if (mode === 'model') { MN.state.scene = data.scene; }
-  else {
-    MN.state.scene = data.scene;
-    MN.state.view = Object.assign(MN.state.view, data.view || {});
-    MN.state.sun = data.sun || MN.state.sun;
-    MN.state.camera = data.camera || MN.state.camera;
-    MN.state.directorShots = data.directorShots || [];
-    MN.state.project = data.project || null;
-    MN.state.cuttingDesk = data.cuttingDesk || null;
-    MN.state.cameraPath = data.cameraPath || null;
+function normPerson(p, i, center) {
+  const POSES = ['站立', '走路', '坐下', '招手', '躺下', '运动'];
+  const has = isFinite(+p.x) && isFinite(+p.y);
+  return {
+    id: p.id || uid(), name: strOr(p.name, '人物 ' + (i + 1), 12),
+    x: has ? +p.x : center.x, y: has ? +p.y : center.y,
+    rot: ((numOr(p.rot, 90) % 360) + 360) % 360,
+    color: p.color || '#e1453e',
+    pose: POSES.indexOf(p.pose) >= 0 ? p.pose : '站立',
+    face: clamp(numOr(p.face, 1), 0.5, 2), faceDir: numOr(p.faceDir, 0), jump: clamp(numOr(p.jump, 0), 0, 3),
+    hidden: !!p.hidden,
+  };
+}
+function normScene(sc) {
+  const out = {
+    title: strOr(sc.title, '未命名画布', 30),
+    rooms: [], walls: [], props: [], persons: [], lights: [],
+    ground: Object.assign({ color: '#ffffff', grid: true }, sc.ground || {}),
+  };
+  arrOf(sc.rooms).forEach((r, i) => out.rooms.push({
+    id: r.id || uid(), name: strOr(r.name, '房间 ' + (i + 1), 12),
+    x: numOr(r.x, 0), y: numOr(r.y, 0),
+    w: Math.max(0.5, numOr(r.w, 4)), d: Math.max(0.5, numOr(r.d, 4)),
+    h: clamp(numOr(r.h, 4), 2.4, 8), color: r.color || '',
+  }));
+  arrOf(sc.walls).forEach((w, i) => out.walls.push({
+    id: w.id || uid(), name: strOr(w.name, '墙面 ' + (i + 1), 12),
+    x1: numOr(w.x1, 0), y1: numOr(w.y1, 0), x2: numOr(w.x2, 4), y2: numOr(w.y2, 0),
+    h: clamp(numOr(w.h, 2.6), 1.2, 4),
+    holes: arrOf(w.holes).map(hp => ({ t: clamp(numOr(hp.t, 0.5), 0.02, 0.98), w: clamp(numOr(hp.w, 1), 0.3, 4) })),
+  }));
+  arrOf(sc.props).forEach((p, i) => out.props.push(normProp(p, i, { x: 0, y: 0 })));
+  arrOf(sc.persons).forEach((p, i) => out.persons.push(normPerson(p, i, { x: 0, y: 0 })));
+  arrOf(sc.lights).forEach((l, i) => out.lights.push({
+    id: l.id || uid(), name: strOr(l.name, '光源 ' + (i + 1), 12),
+    x: numOr(l.x, 4), y: numOr(l.y, 4), color: l.color || '#ffe9b0', hidden: !!l.hidden,
+  }));
+  return out;
+}
+function applyShotList(list) {
+  MN.state.directorShots = MN.state.directorShots || [];
+  let n = 0;
+  list.forEach((s) => {
+    if (!s || !s.cam) return;
+    MN.state.directorShots.push({
+      image: (typeof s.image === 'string' && s.image.indexOf('data:image') === 0) ? s.image : null,
+      name: strOr(s.name, '机位 ' + (MN.state.directorShots.length + 1), 20),
+      note: strOr(s.note, '', 60),
+      cam: {
+        theta: numOr(s.cam.theta, 0.6), phi: clamp(numOr(s.cam.phi, 1), 0.02, 1.52),
+        r: clamp(numOr(s.cam.r, 10), 4, 120),
+        tx: numOr(s.cam.tx, 4), ty: numOr(s.cam.ty, 1.5), tz: numOr(s.cam.tz, 4),
+      },
+    });
+    n++;
+  });
+  return n;
+}
+function applyStoryboard(list) {
+  const p = ensureProject();
+  let n = 0;
+  list.forEach((s) => {
+    if (!s) return;
+    p.shots.push({
+      id: uid(), title: strOr(s.title || s.name, '分镜 ' + (p.shots.length + 1), 30),
+      duration: clamp(numOr(s.duration, 3), 1, 20),
+      scene: strOr(s.scene || s.shot, '中景', 10),
+      action: s.action || '', dialogue: s.dialogue || '', camera: s.camera || '',
+      image: null, strokes: [], audio: null,
+    });
+    n++;
+  });
+  return n;
+}
+
+function importAiData(data, mode) {
+  if (!data || typeof data !== 'object') throw new Error('不是有效的 JSON 对象');
+  const st = MN.state;
+  const center = computeBoundsCenter();
+  const hasScene = !!(data.scene && typeof data.scene === 'object');
+  const propsIn = arrOf(data.props || data.prop || data.objects);
+  const personsIn = arrOf(data.persons || data.person || data.actors);
+  const lightsIn = arrOf(data.lights || data.light);
+  const allShots = arrOf(data.shots || data.directorShots);
+  const shotsIn = allShots.filter(s => s && s.cam);
+  const boardIn = arrOf(data.storyboard || data.board).concat(allShots.filter(s => s && !s.cam && (s.action != null || s.duration != null || s.scene != null)));
+  const parts = [];
+
+  if (hasScene) {
+    pushUndo();
+    const sc = normScene(data.scene);
+    if (mode === 'model') {
+      st.scene = sc;
+      if (data.sun) st.sun = Object.assign(st.sun || {}, data.sun);
+      if (data.camera) st.camera = Object.assign(st.camera || {}, data.camera);
+      parts.push('场景（保留机位/故事板）');
+    } else {
+      st.scene = sc;
+      if (data.view) st.view = Object.assign(st.view || {}, data.view);
+      if (data.sun) st.sun = Object.assign(st.sun || {}, data.sun);
+      if (data.camera) st.camera = Object.assign(st.camera || {}, data.camera);
+      if (Array.isArray(data.directorShots)) st.directorShots = [];
+      st.project = data.project || null;
+      st.cuttingDesk = data.cuttingDesk || null;
+      st.cameraPath = data.cameraPath || null;
+      parts.push(`${sc.rooms.length} 房间 / ${sc.walls.length} 墙 / ${sc.props.length} 造物 / ${sc.persons.length} 人`);
+    }
+  } else {
+    const addProps = propsIn.map((p, i) => normProp(p, i, center));
+    const addPersons = personsIn.map((p, i) => normPerson(p, i, center));
+    const addLights = lightsIn.map((l, i) => ({
+      id: l.id || uid(), name: strOr(l.name, '光源 ' + (i + 1), 12),
+      x: numOr(l.x, center.x), y: numOr(l.y, center.y), color: l.color || '#ffe9b0', hidden: false,
+    }));
+    if (addProps.length || addPersons.length || addLights.length) pushUndo();
+    if (addProps.length) { st.scene.props = (st.scene.props || []).concat(addProps); parts.push(addProps.length + ' 个造物'); }
+    if (addPersons.length) { st.scene.persons = (st.scene.persons || []).concat(addPersons); parts.push(addPersons.length + ' 个人物'); }
+    if (addLights.length) { st.scene.lights = (st.scene.lights || []).concat(addLights); parts.push(addLights.length + ' 个光源'); }
   }
-  MN.sel = null; closeModal(); renderAll(); saveSoon(); toast('导入成功');
+
+  const nShots = applyShotList(shotsIn);
+  if (nShots) parts.push(nShots + ' 个机位');
+  const nBoard = applyStoryboard(boardIn);
+  if (nBoard) parts.push(nBoard + ' 条分镜');
+
+  if (!parts.length) throw new Error('没认出里面的场景 / 造物 / 人物 / 机位 / 分镜');
+  MN.sel = null;
+  return { msg: '导入成功：' + parts.join(' · ') + (hasScene ? '（点「立起来」看立体）' : '') };
+}
+
+function doImport(mode) {
+  let txt = ($('#mnImpJson') ? $('#mnImpJson').value : '').trim();
+  if (!txt) { toast('先选文件或粘 JSON', 'warn'); return; }
+  // AI 常把 JSON 包在 ```json 代码块里，顺手剥掉
+  const fence = txt.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) txt = fence[1].trim();
+  let data;
+  try { data = JSON.parse(txt); } catch (e) { return toast('JSON 格式不对：' + e.message, 'warn'); }
+  const hasScene = !!(data && data.scene);
+  if (hasScene && !confirm(mode === 'model' ? '只替换场景？墙 / 造物 / 人物 / 灯光会换掉，机位和故事板保留。' : '这是一个完整项目，会覆盖当前画布全部内容（可先导出备份）。继续？')) return;
+  try {
+    const r = importAiData(data, mode);
+    closeModal(); renderAll(); saveSoon();
+    toast(r.msg, 'ok');
+  } catch (e) { toast('导入失败：' + e.message, 'warn'); }
+}
+
+/* 拖文件 / 粘文本的快捷入口（AI 给的 .json 直接丢进窗口就行） */
+function importText(txt, label) {
+  let t = String(txt || '').trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) t = fence[1].trim();
+  let data;
+  try { data = JSON.parse(t); } catch (e) { toast((label || 'JSON') + ' 解析失败：' + e.message, 'warn'); return false; }
+  if (data && data.scene && !confirm('这是一个完整场景，会覆盖当前画布内容（可先导出备份）。继续？')) return false;
+  try {
+    const r = importAiData(data, 'auto');
+    renderAll(); saveSoon(); toast(r.msg, 'ok'); return true;
+  } catch (e) { toast('导入失败：' + e.message, 'warn'); return false; }
 }
 
 /* ---------- 主题 ---------- */
@@ -1255,6 +1422,7 @@ function openHelpModal() {
     <div class="mn-help-step"><span class="mn-step-no">01</span><div><strong>画空间</strong><p>拖框画房间，两两连续画墙，造物也划拉矩形，默认高 4 格。拖的时候，空格拖动平移。</p></div></div>
     <div class="mn-help-step"><span class="mn-step-no">02</span><div><strong>改两下</strong><p>点哪改哪，上色、Shift 多选、Ctrl + C 复制、Ctrl + V 后点位置粘贴。打字可点一格，也可拖出一片，封顶可最高低刷高。</p></div></div>
     <div class="mn-help-step"><span class="mn-step-no">03</span><div><strong>找镜头</strong><p>选中物体，绕着它旋转、缩放、双击聚焦，F 聚全，P 配这截。镜头可拖动画画中，双击看大图。清单里的右下角有快照名。</p></div></div>
+    <div class="mn-help-step"><span class="mn-step-no">04</span><div><strong>让 AI 搭</strong><p>左上角「AI 规则」里有 5 条现成规则：描述想法出场景、俯视图还原、生成造物、生成人物姿势、剧情出三镜预演。复制 / 下载交给 AI，拿回的 JSON 拖进窗口就导入。</p></div></div>
     <p class="mn-help-para">左上角「AI 规则」可接脑洞、绘画 AI 搭场景，也可将物体或参考图片直接导入。人数放多少小人或大人；选中大小可选的姿势或编辑环动作，编辑身体、手指及导入人物；编辑环动作与运镜同争，Esc 结束编辑，单击镜头保存在本页预览；轨迹输出可完整重项目、下载图片，工作台下方可中央图形全屏，Esc 退出；旁边可隐藏界面，连续按 666 次复原，人物是抬右边隐藏框，输入 233 站位，重新进入人和角色复。右上角星座图可快捷开存储建，仙人有模式用 Alt 下降，退出后停在原先位置。模拟默认，P 镜头可拖动指定，与故事投五通；新情况默认 3 秒，两边都可下拉全部图片。运镜直接使用镜头从相位，时长同放故事检；直达、旋挥、转向与手持晃动均关注可用。优化比机位能更宽戏，环镜光向中心，查她更多十测，取景框可单拉压额外。像板与面板 02-18 安全可用，日改动能需要方电。录屏预演制十时后收戏，Esc 退出。</p>
     <p class="mn-help-para">剪辑台（E）：上下方向素材，下方排成片，拖入可拆分。空格 播放/暂停，Ctrl+C 分割，Ctrl+Z 恢复撤销，停转拖右边调长短，右侧可补录、配音、加转场与手转效果，再导出成片；完整项目可一起保存。</p>
     <div class="mn-help-more" id="mnHelpMore">${icon('chevron-down', 's14')}更细说明</div>
@@ -1301,20 +1469,78 @@ function openKeysModal() {
   $$('[data-k]', m).forEach(inp => inp.onclick = () => { inp.select(); });
 }
 
-/* ---------- AI 规则弹窗 ---------- */
-function openAiModal() {
-  const cards = [
-    ['描述想法 → 生成立体场景', '把脑子里的场景，交给 AI 搭。', 'sparkles'],
-    ['上传单张俯视图 → 还原墙面和物体', '随手图上拍，或是哪里，安心交给物体。', 'upload'],
-    ['描述或图片 → 生成可调物体', '先说大小和可调属性，再让 AI 值。', 'cuboid'],
-    ['图片或描述 → 生成人物姿势', '让 AI 摆个姿势，再选中人导入导入。', 'user-round'],
-    ['描述剧情 → 生成三镜预演', '场景、动作、镜头和运灯光，一起排。', 'clapperboard'],
-  ];
-  const body = `<p class="mn-help-para">挑一条现成交给 AI，再慢慢改成图片。你管拍啥，先回答大小和可调属性，拿回 JSON，文件化改编都能导入。</p>
-    ${cards.map(c => `<button class="mn-ai-card" data-ai="${esc(c[0])}"><span class="mn-ai-ico">${icon(c[2])}</span><span><strong>${c[0]}</strong><small>${c[1]}</small></span>${icon('download', 's14')}</button>`).join('')}
-    <p class="mn-help-para" style="margin-top:10px">点诊断，下载後，姿势选中人后导入；三维预览图无需配图导入，格式与蚂蚁版本独立。</p>`;
-  const m = openModal('让 AI 搭，你来拍。', '导演台', body, [{ label: '关闭', primary: true }]);
-  $$('[data-ai]', m).forEach(b => b.onclick = () => toast('🚧 本地版先用「场景模板」顶一阵，真 AI 生成后续版本接本地模型'));
+/* ---------- AI 规则弹窗（2026-10-26 重做：5 条真规则，可预览 / 复制 / 下载 / 直接导入） ----------
+   规则正文在 js/mn-rules.js（window.MN_RULES），这里只负责界面。 */
+function copyText(txt) {
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = txt; ta.style.position = 'fixed'; ta.style.top = '-9999px'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove(); return ok;
+    } catch (e) { return false; }
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(txt).then(() => true).catch(fallback);
+  }
+  return Promise.resolve(fallback());
+}
+function downloadText(name, txt, mime) {
+  const blob = new Blob([txt], { type: (mime || 'text/markdown') + ';charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+let aiRuleIdx = 0;
+function openAiModal(startIdx) {
+  const rules = window.MN_RULES || [];
+  if (!rules.length) { toast('规则文件没加载上，刷新页面再试', 'warn'); return; }
+  aiRuleIdx = Math.max(0, Math.min(rules.length - 1, startIdx | 0));
+  const body = `
+    <p class="mn-help-para">挑一条交给 AI —— 你管拍啥，AI 管搭。规则整个复制走，豆包 / 通义 / Claude / GPT 都行；把 AI 回的 JSON 贴回来就能导入。</p>
+    <div class="mn-ai-wrap">
+      <div class="mn-ai-list" id="mnAiList">
+        ${rules.map((r, i) => `<button class="mn-ai-card" data-rule="${i}">
+          <span class="mn-ai-ico">${icon(r.icon, 's18')}</span>
+          <span class="mn-ai-txt"><strong>${esc(r.title)}</strong><small>${esc(r.sub)}</small></span>
+          <span class="mn-ai-tag">${esc(r.tag || '')}</span>
+        </button>`).join('')}
+      </div>
+      <div class="mn-ai-pane">
+        <div class="mn-ai-pane-head">
+          <strong id="mnAiPaneTitle"></strong>
+          <span class="mn-ai-pane-acts">
+            <button class="mn-ghost" id="mnAiCopy">${icon('copy', 's12')}复制规则</button>
+            <button class="mn-ghost" id="mnAiDown">${icon('download', 's12')}下载 .md</button>
+          </span>
+        </div>
+        <pre class="mn-ai-pre" id="mnAiPre"></pre>
+        <div class="mn-ai-steps">
+          <span><b>1</b> 复制 / 下载规则</span>
+          <span><b>2</b> 粘给 AI，改掉文末「我的描述」</span>
+          <span><b>3</b> 把 AI 回的 JSON 导进来</span>
+        </div>
+      </div>
+    </div>`;
+  const m = openModal('让 AI 搭，你来拍。', '导演台 · 5 条规则', body, [
+    { label: '⬇ 下载全部规则', ghost: true, fn: () => { downloadText('白日梦导演台-AI搭建规则合集.md', window.MN_RULES_ALL ? window.MN_RULES_ALL() : ''); toast('已下载规则合集（5 条）', 'ok'); } },
+    { label: '导入 AI 生成的 JSON', primary: true, fn: () => { closeModal(); setTimeout(() => openImportModal(), 80); } },
+  ], 'wide');
+  const list = $$('.mn-ai-card', m);
+  const show = (i) => {
+    aiRuleIdx = i;
+    const r = rules[i];
+    list.forEach((b, j) => b.classList.toggle('active', j === i));
+    $('#mnAiPaneTitle', m).textContent = r.title;
+    const pre = $('#mnAiPre', m);
+    pre.textContent = r.md; pre.scrollTop = 0;
+  };
+  list.forEach((b, i) => b.onclick = () => show(i));
+  $('#mnAiCopy', m).onclick = () => copyText(rules[aiRuleIdx].md).then(ok => toast(ok ? '规则已复制，去粘给 AI 吧' : '复制失败，用「下载 .md」也一样', ok ? 'ok' : 'warn'));
+  $('#mnAiDown', m).onclick = () => { downloadText(rules[aiRuleIdx].file, rules[aiRuleIdx].md); toast('已下载：' + rules[aiRuleIdx].file, 'ok'); };
+  show(aiRuleIdx);
 }
 
 /* ---------- 场景模板弹窗 ---------- */
@@ -1410,6 +1636,27 @@ async function loadMiaoning() {
     window.addEventListener('resize', () => { if (secActive()) resizeCanvas(); if (MN.storyOpen) sbFitStage(); });
     const hint = $('#mnHint');
     hint.innerHTML = `${icon('mouse-pointer-2', 's14')}<span>点一下，改一点。想改谁，就点谁。</span>`;
+    // 拖一个 .json 进来 = 导入（AI 产出的文件直接丢进窗口）
+    root.addEventListener('dragover', e => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf('Files') >= 0) { e.preventDefault(); root.classList.add('mn-dropping'); }
+    });
+    root.addEventListener('dragleave', e => { if (!e.relatedTarget) root.classList.remove('mn-dropping'); });
+    root.addEventListener('drop', async e => {
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      e.preventDefault(); root.classList.remove('mn-dropping');
+      if (!/\.json$/i.test(f.name) && (f.type || '').indexOf('json') < 0) { toast('只认 .json 文件（规则文件是 .md，用来喂 AI 的）', 'warn'); return; }
+      try { importText(await f.text(), f.name); } catch (err) { toast('文件读不动：' + err.message, 'warn'); }
+    });
+    // Ctrl/Cmd + Shift + V：把剪贴板里的 JSON 直接导入（比开弹窗快一步）
+    document.addEventListener('paste', e => {
+      if (!secActive() || MN.storyOpen) return;
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const txt = (e.clipboardData || window.clipboardData || {}).getData ? (e.clipboardData || window.clipboardData).getData('text') : '';
+      if (!txt || txt.trim().charAt(0) !== '{') return;
+      e.preventDefault(); importText(txt, '剪贴板');
+    });
   }
   await loadCanvas(MN.canvasId);
   setTimeout(resizeCanvas, 60);
@@ -1489,6 +1736,7 @@ function renderStoryboard() {
       </span>
       <span class="mn-sb-meta">目标 <input id="sbTarget" class="mn-sb-num" type="number" min="1" value="${p.target}" /> 秒 · 当前 <b id="sbTotal">0</b> 秒</span>
       <span class="mn-sb-spacer"></span>
+      <button class="mn-sb-btn" id="sbAiRule" title="让 AI 按规则出三镜预演 + 分镜表">${icon('file-braces')} AI 分镜规则</button>
       <button class="mn-sb-btn primary" id="sbGen">${icon('sparkles')} 一键生成故事板</button>
       <button class="mn-sb-btn" id="sbImg4k">${icon('image')} 下载全部图片(4K)</button>
       <button class="mn-sb-btn" id="sbMp4">${icon('film')} 导出 MP4</button>
@@ -1553,6 +1801,7 @@ function bindStoryboard() {
   $('#sbAspect').onchange = e => { ensureProject().aspect = e.target.value; saveSoon(); renderStoryboard(); };
   $('#sbTarget').oninput = e => { const v = parseFloat(e.target.value); ensureProject().target = isNaN(v) ? 30 : v; saveSoon(); sbUpdateTotal(); };
   $('#sbGen').onclick = generateFromDirector;
+  $('#sbAiRule').onclick = () => openAiModal(4);
   $('#sbImg4k').onclick = () => exportStoryboardImages();
   $('#sbMp4').onclick = () => exportStoryboardMP4();
   $('#sbTheme').onclick = () => { const r = $('#mnRoot'); const d = r.dataset.mnTheme === 'dark'; r.dataset.mnTheme = d ? '' : 'dark'; try { localStorage.setItem('miorning-director-dark', d ? '0' : '1'); } catch (e) { } syncPal(); renderStoryboard(); };
@@ -1588,7 +1837,12 @@ function buildSbSizeChips() {
 function sbRenderList() {
   const box = $('#sbList'); if (!box) return;
   const p = ensureProject();
-  if (!p.shots.length) { box.innerHTML = `<div class="mn-sb-empty">还没分镜。<br>点右上「一键生成故事板」试试傻瓜模式。</div>`; return; }
+  if (!p.shots.length) {
+    box.innerHTML = `<div class="mn-sb-empty">还没分镜。<br>点右上「一键生成故事板」试试傻瓜模式。
+      <button class="mn-sb-mini" id="sbEmptyGen" style="margin-top:10px">${icon('sparkles', 's12')} 现在就生成</button></div>`;
+    const b = $('#sbEmptyGen', box); if (b) b.onclick = generateFromDirector;
+    return;
+  }
   box.innerHTML = p.shots.map((s, i) => `
     <div class="mn-sb-shot ${i === (MN.sbSel | 0) ? 'active' : ''}" data-i="${i}">
       <img class="mn-sb-shot-img" src="${s.image || ''}" ${s.image ? '' : 'data-empty="1"'} />
@@ -1641,6 +1895,19 @@ function sbRenderCanvas() {
   } else { bx.fillStyle = PAL.paper; bx.fillRect(0, 0, sz.w, sz.h); }
   // 墨层（矢量 strokes）
   paintInkTo(ink.getContext('2d'), shot, sz.w, sz.h);
+  // 空分镜给一行提示，别让人对着白板发呆（有笔画或图就自动消失）
+  if (!shot || (!shot.image && !(shot.strokes || []).length)) {
+    const cx = ink.getContext('2d');
+    const dark = $('#mnRoot').dataset.mnTheme === 'dark';
+    cx.save();
+    cx.fillStyle = dark ? 'rgba(255,255,255,.30)' : 'rgba(120,110,100,.55)';
+    cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    cx.font = Math.round(sz.w * 0.019) + 'px -apple-system,"Microsoft YaHei",sans-serif';
+    cx.fillText('这个分镜还没有画面', sz.w / 2, sz.h / 2 - sz.h * 0.045);
+    cx.font = Math.round(sz.w * 0.0135) + 'px -apple-system,"Microsoft YaHei",sans-serif';
+    cx.fillText('回导演台拍个机位，或者直接在这里画两笔', sz.w / 2, sz.h / 2 + sz.h * 0.045);
+    cx.restore();
+  }
 }
 function containRect(iw, ih, cw, ch) {
   const s = Math.min(cw / iw, ch / ih); const w = iw * s, h = ih * s; return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
@@ -1685,6 +1952,7 @@ function sbPointerUp() {
   if (!MN.sbDraw) return;
   const shot = sbCurrentShot(); if (shot) { shot.strokes = shot.strokes || []; shot.strokes.push(MN.sbDraw); }
   MN.sbDraw = null; saveSoon();
+  sbRenderCanvas();   // 重画一遍：空画面提示该收掉了
 }
 function sbNorm(e) {
   const ink = $('#sbInk'); const r = ink.getBoundingClientRect();
@@ -1761,15 +2029,32 @@ function sbUpdateTotal() {
 function generateFromDirector() {
   const shots = (MN.state.directorShots || []);
   const p = ensureProject();
+  const old = p.shots.length;
+  if (old && !confirm(`故事板里已经有 ${old} 条分镜，一键生成会替换掉。继续？`)) return;
   if (shots.length) {
-    p.shots = shots.map((s, i) => ({ id: uid(), title: s.name || ('机位 ' + (i + 1)), duration: 3, scene: '中景', action: '', dialogue: '', image: s.image || null, strokes: [], audio: null }));
-    toast('已从导演台同步 ' + p.shots.length + ' 个分镜（傻瓜模式）');
+    p.shots = shots.map((s, i) => ({
+      id: uid(), title: s.name || ('机位 ' + (i + 1)),
+      duration: 3, scene: i === 0 ? '全景' : (i === shots.length - 1 ? '近景' : '中景'),
+      action: s.note || '', dialogue: '', image: s.image || null, camera: '', strokes: [], audio: null,
+    }));
+    toast('已把导演台 ' + p.shots.length + ' 个机位同步成分镜', 'ok');
   } else {
-    const tpl = ['开场：交代环境', '发展：人物登场', '转折：冲突浮现', '结尾：收束'];
-    p.shots = tpl.map((t, i) => ({ id: uid(), title: t, duration: 3, scene: i === 0 ? '全景' : '中景', action: '', dialogue: '', image: null, strokes: [], audio: null }));
-    toast('没在导演台拍镜头，已生成 ' + p.shots.length + ' 个空白分镜模板');
+    // 没有机位：按「一句话梗概」铺一套能直接改的五镜结构，不再是四行空白
+    const src = strOr((p.title || '').replace(/[·:：].*$/, ''), '这个故事', 24);
+    const beats = [
+      ['定场', '大远景', `交代空间与时间：${src}`, '', 4, '缓慢横移'],
+      ['人物进画', '全景', '主角从画面外走进来，停在关键位置', '', 4, '跟移'],
+      ['事情发生', '中景', '两个人同框，视线交错，说第一句话', '（这里填台词）', 5, '缓慢推近'],
+      ['转折', '近景', '情绪变的一刻，表情先动', '', 4, '固定 · 微微手持'],
+      ['收束', '特写', '关键道具或眼神定格', '', 3, '固定'],
+    ];
+    p.shots = beats.map(([t, sc, act, dlg, sec, cam]) => ({
+      id: uid(), title: t, duration: sec, scene: sc,
+      action: act, dialogue: dlg, camera: cam, image: null, strokes: [], audio: null,
+    }));
+    toast('机器还没拍到镜头，先按梗概铺了 ' + p.shots.length + ' 条分镜骨架，直接改就行', 'ok');
   }
-  p.title = ((MN.state.scene && MN.state.scene.title) || '未命名') + '·故事板';
+  p.title = p.title || ((MN.state.scene && MN.state.scene.title) || '未命名') + '·故事板';
   MN.sbSel = 0; saveSoon(); renderStoryboard();
 }
 
@@ -2110,7 +2395,8 @@ async function exportStoryboardMP4() {
 /* ---------- QA 句柄 ---------- */
 window.miaoningAPI = {
   openStoryboard, closeStoryboard, generateFromDirector, exportStoryboardImages, exportStoryboardMP4,
-  renderStoryboard, drawShotFrame, paintInkTo, sbAspectWH, ensureProject, blankProject
+  renderStoryboard, drawShotFrame, paintInkTo, sbAspectWH, ensureProject, blankProject,
+  openAiModal, importAiData, importText, openImportModal,
 };
 
 window.loadMiaoning = loadMiaoning;

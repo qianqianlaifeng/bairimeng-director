@@ -1074,15 +1074,18 @@ body.sb-mn-open { overflow: hidden; }
 .sb-mn-overlay.open { display: flex; }
 .sb-mn-overlay .mn-root { flex: 1; min-height: 0; }
 .sb-mn-dock {
-  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
-  z-index: 20; display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border-radius: 999px;
+  /* 2026-10-26：从「底部居中」挪到「镜头册上方的右下角」——
+     原来正好压住镜头册，拍完的镜头看不到也点不到 */
+  position: absolute; right: 14px; bottom: 152px;
+  z-index: 20; display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px 7px 14px; border-radius: 999px;
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(0, 0, 0, 0.10);
   box-shadow: 0 8px 30px rgba(20, 14, 6, 0.18);
   backdrop-filter: blur(6px);
 }
 .sb-mn-dock-tip { font-size: 12px; color: #76716b; white-space: nowrap; }
-@media (max-width: 900px) {
+@media (max-width: 1240px) {
   .sb-mn-dock-tip { display: none; }
+  .sb-mn-dock { padding: 7px 8px; }
 }

@@ -484,3 +484,70 @@
 .mn-sb-tl-block span{font-size:11px;color:var(--muted)}
 .mn-sb-tl-empty{font-size:12px;color:var(--muted);padding:10px 0}
 .mn-story[data-mn-theme="dark"] .mn-sb-bg{background:#202020}
+
+/* ================================================================
+   AI 规则面板（2026-10-26 重做）
+   左：5 条规则，条目之间留 10px 呼吸位，不再挤成一坨
+   右：规则全文预览 + 复制 / 下载
+   ================================================================ */
+.mn-ai-wrap{display:grid;grid-template-columns:minmax(260px,300px) minmax(0,1fr);gap:16px;align-items:stretch;margin-top:4px}
+.mn-ai-list{display:flex;flex-direction:column;gap:10px}
+.mn-ai-card{display:flex;align-items:flex-start;gap:12px;width:100%;padding:13px 14px;border:1px solid var(--line);
+  border-radius:12px;background:var(--paper);text-align:left;transition:border-color .15s,background .15s,transform .15s}
+.mn-ai-card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.mn-ai-card.active{border-color:var(--accent);background:var(--accent-soft)}
+.mn-ai-card .mn-ai-ico{width:34px;height:34px;border-radius:10px;background:var(--soft);color:var(--ink);
+  display:grid;place-items:center;flex:0 0 auto}
+.mn-ai-card.active .mn-ai-ico{background:var(--accent);color:#fff}
+.mn-ai-card .mn-ai-txt{flex:1;min-width:0}
+.mn-ai-card .mn-ai-txt strong{display:block;font-size:13px;line-height:1.45;font-weight:650}
+.mn-ai-card .mn-ai-txt small{display:block;margin-top:4px;font-size:11.5px;line-height:1.6;color:var(--muted)}
+.mn-ai-card .mn-ai-tag{flex:0 0 auto;font-size:10.5px;line-height:1;padding:4px 6px;border-radius:5px;
+  background:var(--soft);color:var(--muted);margin-top:2px}
+.mn-ai-card.active .mn-ai-tag{background:var(--accent);color:#fff}
+
+.mn-ai-pane{display:flex;flex-direction:column;min-height:340px;border:1px solid var(--line);border-radius:12px;
+  background:var(--paper);overflow:hidden}
+.mn-ai-pane-head{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);
+  background:var(--soft)}
+.mn-ai-pane-head strong{flex:1;min-width:0;font-size:13px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mn-ai-pane-acts{display:flex;gap:8px;flex:0 0 auto}
+.mn-ai-pane-acts .mn-ghost{height:26px;padding:0 9px;font-size:11.5px;display:inline-flex;align-items:center;gap:5px;
+  border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);cursor:pointer}
+.mn-ai-pane-acts .mn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.mn-ai-pre{margin:0;flex:1;min-height:0;max-height:min(46vh,420px);overflow:auto;padding:14px 16px;
+  font:12px/1.75 ui-monospace,SFMono-Regular,Consolas,"Microsoft YaHei",monospace;
+  white-space:pre-wrap;word-break:break-word;color:var(--ink);background:var(--paper);tab-size:2}
+.mn-ai-pre::-webkit-scrollbar{width:8px;height:8px}
+.mn-ai-pre::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+.mn-ai-steps{display:flex;flex-wrap:wrap;gap:8px 16px;padding:10px 14px;border-top:1px solid var(--line);
+  background:var(--soft);font-size:11.5px;color:var(--muted)}
+.mn-ai-steps b{display:inline-grid;place-items:center;width:16px;height:16px;margin-right:5px;border-radius:50%;
+  background:var(--accent);color:#fff;font-size:10px}
+@media (max-width:760px){
+  .mn-ai-wrap{grid-template-columns:1fr}
+  .mn-ai-pane{min-height:260px}
+  .mn-ai-pre{max-height:32vh}
+}
+
+/* 工具卡再松一点（原来 gap 6px 十张挤在一起） */
+.mn-tool-list{gap:8px}
+.mn-tool-card{padding:9px 10px}
+
+/* 镜头册：AI 只给机位、没有图时的占位卡 */
+.mn-shot-ph{width:132px;height:88px;border-radius:8px;border:1px dashed var(--line);background:var(--soft);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--muted);cursor:pointer}
+.mn-shot-ph:hover{border-color:var(--accent);color:var(--accent)}
+.mn-shot-ph b{font-size:11px;font-weight:600}
+
+/* 拖 JSON 进来的提示边框 */
+.mn-root.mn-dropping::after{content:"松手就导入 · 只认 .json";position:absolute;inset:10px;z-index:60;
+  border:2px dashed var(--accent);border-radius:12px;background:rgba(225,69,62,.06);
+  display:grid;place-items:center;font-size:13px;color:var(--accent);pointer-events:none}
+
+/* 故事板空状态里的「现在就生成」 */
+.mn-sb-empty .mn-sb-mini{display:block;width:fit-content;margin:10px auto 0}
+/* 故事板底部工具条：不许把「画笔 / 橡皮」挤成一条线（2026-10-26） */
+.mn-sb-tools>*{flex:0 0 auto}
+.mn-sb-tools .mn-sb-spacer{flex:1 1 12px;min-width:12px}
+.mn-sb-tools{row-gap:6px;overflow-x:auto}
