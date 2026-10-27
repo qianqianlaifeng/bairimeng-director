@@ -438,6 +438,7 @@ export function renderScenes(container) {
       <div class="page-head">
         <h2>🏗 场景库 <span class="dim">· ${scenes.length} 套景 · 一套景可以被任意镜头套用（连戏不用重搭）</span></h2>
         <div class="page-head-actions">
+          <button class="btn btn-ghost" id="scAutoGroup">🧠 按场次智能归组</button>
           <button class="btn btn-primary" id="scNew">＋ 新建场景</button>
         </div>
       </div>
@@ -465,6 +466,20 @@ export function renderScenes(container) {
     if (newBtn) newBtn.onclick = async () => {
       const { openSceneBuilder } = await import('./builder.js');
       openSceneBuilder(null, draw, { library: true });
+    };
+
+    /* 智能归组：按剧本场次给镜头建景 + 绑定 */
+    const grpBtn = container.querySelector('#scAutoGroup');
+    if (grpBtn) grpBtn.onclick = () => {
+      const groups = store.groupShotsByScene();
+      const named = groups.filter(g => g.key !== '未分场');
+      if (!named.length) {
+        toast('这些镜头还没有场次信息（用「剧本 → 一键拆分镜」带场次标题拆出来的镜头才有）', 'warn');
+        return;
+      }
+      const r = store.autoBindScenesByGroup();
+      toast(`已按 ${r.groups} 个场次归组：新建 ${r.created} 套景、绑定 ${r.bound} 个镜头`, 'ok');
+      draw();
     };
 
     container.querySelectorAll('.sc-card').forEach(card => {
@@ -520,6 +535,57 @@ export function renderScenes(container) {
       toast(`已把「${it.name}」套用到 ${n} 个镜头`, 'ok');
       m.close(); after();
     };
+  };
+
+  draw();
+  return null;
+}
+
+/* ============================================================
+ * 连戏检查（相邻镜头一致性）
+ * ============================================================ */
+export function renderContinuity(container) {
+  const p = store.active;
+  if (!p) { container.innerHTML = `<div class="empty-tip">先打开一个项目</div>`; return; }
+
+  const draw = async () => {
+    const { analyzeContinuity } = await import('./continuity.js');
+    const { issues, stats } = analyzeContinuity(p);
+    const lv = { err: { t: '严重', c: 'lv-err' }, warn: { t: '注意', c: 'lv-warn' }, info: { t: '提示', c: 'lv-info' } };
+    const fixLabel = { all: '整镜对齐上一镜', cam: '对齐机位/镜头', light: '对齐光线', persons: '对齐人物摆位' };
+    container.innerHTML = `
+      <div class="page-head">
+        <h2>🔗 连戏检查 <span class="dim">· ${stats.shots} 镜 / ${stats.pairs} 组相邻关系 · ${stats.withScene} 镜有场景</span></h2>
+        <div class="page-head-actions">
+          <button class="btn btn-ghost" id="ctRescan">🔄 重新检查</button>
+        </div>
+      </div>
+      <div class="card ct-sum">
+        <div class="ct-sum-item"><b class="lv-err">${stats.err}</b><span>严重</span></div>
+        <div class="ct-sum-item"><b class="lv-warn">${stats.warn}</b><span>注意</span></div>
+        <div class="ct-sum-item"><b class="lv-info">${stats.info}</b><span>提示</span></div>
+        <div class="ct-sum-tip dim">${stats.err === 0 && stats.warn === 0 ? '✅ 没有发现明显穿帮风险' : '逐条看下面的建议；「对齐」会把上一镜的对应设置复制到这一镜'}</div>
+      </div>
+      ${issues.length ? `<div class="ct-list">${issues.map((it, i) => `
+        <div class="ct-item ${lv[it.level].c}">
+          <span class="ct-badge">${lv[it.level].t}</span>
+          <div class="ct-body">
+            <div class="ct-title">${esc(it.title)}</div>
+            <div class="ct-detail dim">${esc(it.detail)}</div>
+          </div>
+          ${it.fix ? `<button class="btn btn-ghost btn-sm" data-fix="${it.fix}" data-shot="${it.shotId}" data-prev="${it.prevId}">${fixLabel[it.fix] || '对齐'}</button>` : ''}
+        </div>`).join('')}</div>` : `<div class="empty-tip">没有发现问题。镜头越多、场景越完整，检查越准。</div>`}
+      <div class="card ct-hint dim">
+        💡 检查项：越轴（机位方位角突变）· 人物瞬移 · 人物转向 · 光线突变 · 换景提醒。
+        给镜头套用同一套场景库的景、并让相邻镜头沿用同一机位，穿帮会少一大半。
+      </div>`;
+
+    container.querySelector('#ctRescan').onclick = draw;
+    container.querySelectorAll('[data-fix]').forEach(b => b.onclick = () => {
+      const ok = store.alignContinuity(b.dataset.shot, b.dataset.prev, b.dataset.fix);
+      toast(ok ? '已对齐上一镜 ✅' : '对齐失败（缺少上一镜数据）', ok ? 'ok' : 'warn');
+      if (ok) draw();
+    });
   };
 
   draw();
