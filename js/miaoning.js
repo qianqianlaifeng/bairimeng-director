@@ -1,4 +1,9 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.11.9（2026-10-27）：道具库 23 类多部件精细模型（桌面+围板+四腿 / 沙发坐垫+靠背+扶手 / 柜门+拉手…），
+                          2D 俯视符号、3D 导演台、白模预演三端共用同一套部件；3D 与预演里的道具终于会跟随「旋转 Z」。
+                          修：3D 朝向与 2D 反向（rot=90 现在三端一起朝向地图下方）；运镜预演/动态分镜真正吃进
+                          「本镜场景」（此前 scene 没交给渲染器 = 空舞台），场景自动居中、有墙自动剖开前方外墙；
+                          存镜头时把导演台机位一并带进预演。
    v1.11.8（2026-10-27）：新增「运动轨迹」工具（2D 画走位线→3D 蓝线→预演沿轨迹走动）；重命名改用应用内弹窗（原 prompt 被拦截时无反应）。
    v1.11.7（2026-10-27）：3D 头部补全五官（双眼/眉/鼻/嘴）；3D 视图支持点击地面直接放置物件（射线求交，拖拽不误放）。
    v1.11.6（2026-10-27）：新增「连戏检查」页（越轴/人物瞬移/转向/光线突变/换景 + 一键对齐上一镜）、按场次智能归组场景、镜头一键沿用上一镜设置。
@@ -328,23 +333,36 @@ function bindShell() {
   });
   const cv3 = $('#mn3d'); if (cv3) { cv3.style.display = 'none'; if (window.MN3D) { try { MN3D.ensure(cv3); } catch (e) { } } }
   /* 3D 视图里点地面直接放置（射线求交地面 → 世界 x,z） */
-  if (window.MN3D) window.MN3D.onPlace = (x, z) => {
-    const px = snap(x), pz = snap(z);
-    if (MN.pending) { placePending(px, pz); return; }
-    if (MN.tool === 'person' || MN.tool === 'light') {
-      pushUndo();
-      if (MN.tool === 'person') {
-        const o = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: px, y: pz, rot: 0, color: '#2e7cf6', pose: '站立', face: 1, faceDir: 0, jump: 0 };
-        MN.state.scene.persons.push(o); selectOnly('person', o.id);
-      } else {
-        const o = { id: uid(), name: '光源 ' + (MN.state.scene.lights.length + 1), x: px, y: pz, color: '#ffe9b0', intensity: 1, h: 2.5 };
-        MN.state.scene.lights.push(o); selectOnly('light', o.id);
+  if (window.MN3D) {
+    window.MN3D.isPlacing = () => !!(MN.pending || MN.tool === 'person' || MN.tool === 'light');
+    window.MN3D.onSelect = (kind, id) => {
+      if (!kind) { clearSel(); refreshSel(); return; }
+      selectOnly(kind, id); refreshSel();
+    };
+    window.MN3D.onMove = () => { saveSoon(); paint(); };
+    window.MN3D.onMoveEnd = () => { saveSoon(); };
+    window.MN3D.onContext = (kind, id, x, y) => {
+      if (kind) { selectOnly(kind, id); refreshSel(); }
+      openCtx(x, y, kind ? { kind, id } : null);
+    };
+    window.MN3D.onPlace = (x, z) => {
+      const px = snap(x), pz = snap(z);
+      if (MN.pending) { placePending(px, pz); return; }
+      if (MN.tool === 'person' || MN.tool === 'light') {
+        pushUndo();
+        if (MN.tool === 'person') {
+          const o = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: px, y: pz, rot: 0, color: '#2e7cf6', pose: '站立', face: 1, faceDir: 0, jump: 0 };
+          MN.state.scene.persons.push(o); selectOnly('person', o.id);
+        } else {
+          const o = { id: uid(), name: '光源 ' + (MN.state.scene.lights.length + 1), x: px, y: pz, color: '#ffe9b0', intensity: 1, h: 2.5 };
+          MN.state.scene.lights.push(o); selectOnly('light', o.id);
+        }
+        refreshSel(); saveSoon(); paint(); toast('已放在 3D 地面上的这个位置');
+        return;
       }
-      refreshSel(); saveSoon(); paint(); toast('已放在 3D 地面上的这个位置');
-      return;
-    }
-    toast('先在右侧物件库点一个物件（或左侧「人物 / 光源」），再点 3D 地面放置', 'warn');
-  };
+      toast('先在右侧物件库点一个物件（或左侧「人物 / 光源」），再点 3D 地面放置', 'warn');
+    };
+  }
 }
 
 /* ---------- 3D 视图（M2） ---------- */
@@ -768,19 +786,11 @@ function renderRight() {
   bindLibrary();
 }
 
-/* 物件库预设：点一下 → 画布点一下落地（尺寸单位 = 1 格，颜色对齐原版暖纸色） */
-const PRESETS = [
-  { name: '桌子', w: 1.4, d: 0.8, h: 0.75, color: '#d9b382' },
-  { name: '椅子', w: 0.6, d: 0.6, h: 0.9, color: '#c98d6b' },
-  { name: '沙发', w: 2.2, d: 0.9, h: 0.8, color: '#8a9b8e' },
-  { name: '床', w: 2, d: 3, h: 0.6, color: '#b8b0a4' },
-  { name: '柜子', w: 1.2, d: 0.6, h: 2, color: '#a3b8c9' },
-  { name: '箱子', w: 0.8, d: 0.8, h: 0.8, color: '#d9b382' },
-  { name: '柱子', w: 0.4, d: 0.4, h: 2.6, color: '#b0aaa1' },
-  { name: '门', w: 1, d: 0.2, h: 2.1, color: '#c98d6b' },
-  { name: '窗', w: 1.6, d: 0.2, h: 1.4, color: '#cfe4ff' },
-  { name: '树', w: 1.2, d: 1.2, h: 2.8, color: '#7d8c63' },
-];
+/* 物件库预设：直接吃道具库 mn-props.js 的全部种类，每类一个精细模型 */
+const PRESETS = (window.MN_PROP_ORDER || []).map(k => {
+  const K = window.MN_PROP_KINDS[k] || {};
+  return { kind: k, name: K.name || k, w: K.w || 1, d: K.d || 1, h: K.h || 1, color: K.color || '#d9b382' };
+});
 
 function renderObjPanel() {
   const sel = MN.sel && findObj(MN.sel.kind, MN.sel.id) ? MN.sel : null;
@@ -814,6 +824,10 @@ function renderObjPanel() {
       <label class="mn-field"><span>宽 X</span><input type="number" step="0.5" data-f="w" value="${o.w}" /></label>
       <label class="mn-field"><span>深 Y</span><input type="number" step="0.5" data-f="d" value="${o.d}" /></label>
       <label class="mn-field"><span>高 Z</span><input type="number" step="0.5" data-f="h" value="${o.h}" /></label>
+    </div>
+    <div class="mn-num3">
+      <label class="mn-field"><span>旋转 Z</span><input type="number" step="15" data-f="rot" value="${o.rot || 0}" /></label>
+      <label class="mn-field"><span>模型</span><input type="text" value="${(window.MN_PROP_KINDS[o.kind] || {}).name || o.kind || '方块'}" disabled /></label>
     </div>
     <label class="mn-field"><span>颜色</span></label>${swatches(PROP_COLORS, o.color, 'color')}
   </section>`;
@@ -1124,17 +1138,29 @@ function doPaint() {
     }
   }
 
-  /* 造物 */
+  /* 造物：按道具库精细模型画俯视符号，跟随「旋转 Z」 */
   for (const p of sc.props) {
     if (p.hidden) continue;
-    const q = w2s(p.x, p.y), w = p.w * C, h = p.d * C;
-    ctx.fillStyle = p.color || PAL.prop;
-    ctx.fillRect(q.x, q.y, w, h);
-    ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 1;
-    ctx.strokeRect(q.x, q.y, w, h);
-    ctx.fillStyle = 'rgba(0,0,0,.55)';
-    if (w > 30 && h > 14) ctx.fillText(p.name, q.x + w / 2, q.y + h / 2);
-    if (isSel('prop', p.id)) selRect(q.x, q.y, w, h);
+    const ctr = window.MN_propCenter(p);
+    const q = w2s(ctr.x, ctr.y);
+    const w = p.w * C, h = p.d * C;
+    const kind = window.MN_kindOf(p);
+    const K = window.MN_PROP_KINDS[kind];
+    const baseCol = p.color || (K && K.color) || PAL.prop;
+    const st = { fill: baseCol, dark: tint(baseCol, 0.18), light: tint(baseCol, 0.62), accent: (K && K.accent) || '#8d8f94' };
+    ctx.save();
+    ctx.translate(q.x, q.y);
+    ctx.rotate((p.rot || 0) * Math.PI / 180);
+    if (isSel('prop', p.id)) {
+      ctx.strokeStyle = PAL.accent; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+      ctx.strokeRect(-w / 2, -h / 2, w, h); ctx.setLineDash([]);
+    }
+    if (K && K.top) { ctx.scale(C, C); K.top(ctx, p.w, p.d, st); }
+    else { ctx.fillStyle = st.fill; ctx.fillRect(-w / 2, -h / 2, w, h); ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 1; ctx.strokeRect(-w / 2, -h / 2, w, h); }
+    ctx.restore();
+    /* 名称（不跟随旋转） */
+    ctx.fillStyle = 'rgba(0,0,0,.6)';
+    if (w > 30 && h > 14) ctx.fillText(p.name, q.x, q.y);
   }
 
   /* 人物（俯视人形：肩宽椭圆 + 头 + 鼻尖朝向 + 手臂 + 名字）
@@ -1314,7 +1340,7 @@ function hitTest(wx, wy) {
   const near = (a, b, t) => Math.abs(a - b) <= t;
   for (const l of sc.lights) if (!l.hidden && near(l.x, wx, 0.5) && near(l.y, wy, 0.5)) return { kind: 'light', id: l.id };
   for (const p of sc.persons) if (!p.hidden && near(p.x, wx, 0.5) && near(p.y, wy, 0.5)) return { kind: 'person', id: p.id };
-  for (const p of sc.props) if (!p.hidden && wx >= p.x && wx <= p.x + p.w && wy >= p.y && wy <= p.y + p.d) return { kind: 'prop', id: p.id };
+  for (const p of sc.props) { if (p.hidden) continue; const b = window.MN_propAABB(p); if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.d) return { kind: 'prop', id: p.id }; }
   for (const wl of sc.walls) {
     if (wl.hidden) continue;
     const dx = wl.x2 - wl.x1, dy = wl.y2 - wl.y1;
@@ -1344,7 +1370,13 @@ function toggleSel(kind, id) {
   }
 }
 /* 选中后刷新三处（清单 / 属性面板 / 画布） */
-function refreshSel() { renderTree(); renderRight(); paint(); }
+function refreshSel() {
+  renderTree(); renderRight(); paint();
+  /* 3D 视图同步选中高亮环 */
+  if (window.MN3D && window.MN3D.setSel) {
+    try { window.MN3D.setSel(MN.sel ? { kind: MN.sel.kind, id: MN.sel.id } : null); } catch (e) { }
+  }
+}
 
 /* ---------- 画布交互 ---------- */
 /* ---------- 画布交互（2026-10-26 重做）
@@ -1389,7 +1421,7 @@ function objectsInRect(x0, y0, x1, y1) {
   const inter = (ax, ay, aw, ah) => ax < x1 && ax + aw > x0 && ay < y1 && ay + ah > y0;
   const inside = (ax, ay) => ax >= x0 && ax <= x1 && ay >= y0 && ay <= y1;
   sc.rooms.forEach(o => { if (!o.hidden && o.x >= x0 && o.y >= y0 && o.x + o.w <= x1 && o.y + o.d <= y1) out.push({ kind: 'room', id: o.id }); });
-  sc.props.forEach(o => { if (!o.hidden && inter(o.x, o.y, o.w, o.d)) out.push({ kind: 'prop', id: o.id }); });
+  sc.props.forEach(o => { if (!o.hidden) { const b = window.MN_propAABB(o); if (inter(b.x, b.y, b.w, b.d)) out.push({ kind: 'prop', id: o.id }); } });
   sc.walls.forEach(o => { if (!o.hidden && inter(Math.min(o.x1, o.x2), Math.min(o.y1, o.y2), Math.abs(o.x2 - o.x1), Math.abs(o.y2 - o.y1))) out.push({ kind: 'wall', id: o.id }); });
   sc.persons.forEach(o => { if (!o.hidden && inside(o.x, o.y)) out.push({ kind: 'person', id: o.id }); });
   sc.lights.forEach(o => { if (!o.hidden && inside(o.x, o.y)) out.push({ kind: 'light', id: o.id }); });
@@ -1428,7 +1460,7 @@ function placePending(wx, wy) {  const p = MN.pending; if (!p) return;
     MN.state.scene.lights.push(o);
   } else {
     const pr = p.preset;
-    const o = { id: uid(), name: pr.name, x: snap(wx - pr.w / 2), y: snap(wy - pr.d / 2), w: pr.w, d: pr.d, h: pr.h, color: pr.color || '' };
+    const o = { id: uid(), name: pr.name, x: snap(wx - pr.w / 2), y: snap(wy - pr.d / 2), w: pr.w, d: pr.d, h: pr.h, color: pr.color || '', kind: pr.kind || window.MN_kindOf({ name: pr.name }), rot: 0 };
     MN.state.scene.props.push(o);
   }
   renderAll(); saveSoon();
@@ -1738,7 +1770,7 @@ function rotateSel() {
     if (s.kind !== 'person' && s.kind !== 'prop') return;
     const o = findObj(s.kind, s.id); if (!o) return;
     if (s.kind === 'person') o.rot = ((o.rot || 0) + 90) % 360;
-    else { const t = o.w; o.w = o.d; o.d = t; }      // 造物：宽深互换 = 转 90°
+    else o.rot = ((o.rot || 0) + 90) % 360;      // 造物：用旋转角，宽深不变
   });
   renderAll(); saveSoon();
 }
@@ -1838,7 +1870,9 @@ function normProp(p, i, center) {
   return {
     id: p.id || uid(), name: strOr(p.name, '造物 ' + (i + 1), 12),
     x: has ? +p.x : center.x - w / 2, y: has ? +p.y : center.y - d / 2,
-    w, d, h, color: p.color || '', hidden: !!p.hidden,
+    w, d, h, color: p.color || '',
+    kind: p.kind || window.MN_kindOf(p), rot: ((numOr(p.rot, 0) % 360) + 360) % 360,
+    hidden: !!p.hidden,
   };
 }
 function normPerson(p, i, center) {
@@ -2232,6 +2266,27 @@ function onKeyDown(e) {
     return;
   }
   if (e.key === ' ') { MN.spaceDown = true; cv.style.cursor = 'grab'; e.preventDefault(); return; }
+  /* 3D 视图：Q/E 旋转选中物体（墙绕中点转，其余改 rot） */
+  if (MN.state && MN.state.view.mode === '3d' && (k === 'Q' || k === 'E') && selList().length) {
+    e.preventDefault();
+    const step = k === 'E' ? 15 : -15;
+    pushUndo();
+    selList().forEach(s => {
+      const o = findObj(s.kind, s.id); if (!o) return;
+      if (s.kind === 'wall') {
+        const cx = (o.x1 + o.x2) / 2, cz = (o.y1 + o.y2) / 2;
+        const a = step * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+        const rp = (x, z) => [cx + (x - cx) * ca - (z - cz) * sa, cz + (x - cx) * sa + (z - cz) * ca];
+        const p1 = rp(o.x1, o.y1), p2 = rp(o.x2, o.y2);
+        o.x1 = p1[0]; o.y1 = p1[1]; o.x2 = p2[0]; o.y2 = p2[1];
+      } else {
+        o.rot = ((+o.rot || 0) + step + 360) % 360;
+      }
+    });
+    refreshSel(); saveSoon();
+    toast(`旋转 ${step > 0 ? '+' : ''}${step}°`);
+    return;
+  }
   for (const [id, kk] of Object.entries(keys)) {
     // ⚠️ 别再把 select 排除掉：原版 V=选择，排除后按 V 没反应，点击会继续放小人（1.10.28 QA 实测）
     if (k === kk.toUpperCase()) {
