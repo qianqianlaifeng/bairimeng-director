@@ -4,7 +4,7 @@
 import { CAMERA_MOVES, MOVE_CATS, ACTOR_ACTIONS, STAGE_SCENES, ANGLES, SHOT_SIZES } from './data.js';
 import { MovePlayer, solveCamera, solveActor, clamp } from './cameraSim.js';
 import { moveByKey } from './breakdown.js';
-import { esc, el, modal, toast, copyText, opts } from './ui.js';
+import { esc, el, modal, toast, copyText, opts, askText, confirmDlg } from './ui.js';
 
 let store;
 export function initViewsStage(s) { store = s; }
@@ -423,4 +423,105 @@ export function renderPreview(container, payload = {}) {
   store.addXP(2, '运镜预演');
 
   return () => player.destroy();
+}
+
+/* ============================================================
+ * 场景库（项目级）—— 一套景，多镜复用
+ * ============================================================ */
+export function renderScenes(container) {
+  const p = store.active;
+  if (!p) { container.innerHTML = `<div class="empty-tip">先打开一个项目</div>`; return; }
+
+  const draw = () => {
+    const scenes = store.scenes;
+    container.innerHTML = `
+      <div class="page-head">
+        <h2>🏗 场景库 <span class="dim">· ${scenes.length} 套景 · 一套景可以被任意镜头套用（连戏不用重搭）</span></h2>
+        <div class="page-head-actions">
+          <button class="btn btn-primary" id="scNew">＋ 新建场景</button>
+        </div>
+      </div>
+      <div class="card sc-hint dim">💡 在场景搭建里点「存入场景库」，这里就会出现；套用到多个镜头后，各镜仍可单独微调。</div>
+      ${scenes.length ? `<div class="sc-grid" id="scGrid">${scenes.map(it => {
+        const st = (it.mnState && it.mnState.scene) || {};
+        const n = (a) => (a || []).length;
+        const use = store.sceneUsage(it.id);
+        return `<div class="sc-card" data-id="${it.id}">
+          <div class="sc-thumb">${it.thumb ? `<img src="${it.thumb}" alt="">` : `<span class="sc-thumb-ph">🏗</span>`}</div>
+          <div class="sc-body">
+            <div class="sc-name">${esc(it.name)}</div>
+            <div class="sc-meta dim">房 ${n(st.rooms)} · 墙 ${n(st.walls)} · 道具 ${n(st.props)} · 人物 ${n(st.persons)} · 用在 <b>${use}</b> 镜</div>
+            <div class="sc-ops">
+              <button class="btn btn-primary btn-sm" data-act="apply">套用到镜头…</button>
+              <button class="btn btn-ghost btn-sm" data-act="rename">重命名</button>
+              <button class="btn btn-ghost btn-sm" data-act="del">删除</button>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}</div>` : `<div class="empty-tip">还没有场景。点右上角「＋ 新建场景」或去分镜板打开任意镜头的「场景搭建」，搭好后「存入场景库」。</div>`}
+    `;
+
+    const newBtn = container.querySelector('#scNew');
+    if (newBtn) newBtn.onclick = async () => {
+      const { openSceneBuilder } = await import('./builder.js');
+      openSceneBuilder(null, draw, { library: true });
+    };
+
+    container.querySelectorAll('.sc-card').forEach(card => {
+      const id = card.dataset.id;
+      const it = store.findScene(id);
+      card.querySelector('[data-act="apply"]').onclick = () => openApply(id, draw);
+      card.querySelector('[data-act="rename"]').onclick = async () => {
+        const nm = await askText({ title: '重命名场景', label: '场景名称', value: it.name, okText: '保存' });
+        if (nm) { store.renameScene(id, nm); draw(); }
+      };
+      card.querySelector('[data-act="del"]').onclick = async () => {
+        if (await confirmDlg(`删除场景「${it.name}」？已套用它的镜头会保留当前场景副本。`, { danger: true, okText: '删除' })) { store.deleteScene(id); draw(); }
+      };
+    });
+  };
+
+  /* 套用到哪些镜头 */
+  const openApply = (sceneId, after) => {
+    const it = store.findScene(sceneId);
+    const m = modal({
+      title: `套用场景「${it.name}」到镜头`,
+      body: `
+        <div class="dim" style="margin-bottom:10px">勾选要使用这套景的镜头（可多选）。套用后各镜独立，可再单独改。</div>
+        <div class="sc-pick-tools">
+          <button class="btn btn-ghost btn-sm" id="scAll">全选</button>
+          <button class="btn btn-ghost btn-sm" id="scNone">清空</button>
+          <span class="dim" id="scCount"></span>
+        </div>
+        <div class="sc-pick-list" id="scPick">
+          ${p.shots.map((s, i) => `<label class="sc-pick-item"><input type="checkbox" value="${s.id}" ${s.sceneId === sceneId ? 'checked' : ''}>
+            <span class="sc-pick-idx">${i + 1}</span>
+            <span class="sc-pick-desc">${esc((s.desc || '（未描述）').slice(0, 26))}</span>
+            ${s.sceneId === sceneId ? '<span class="tag tag-ok">已用</span>' : ''}
+          </label>`).join('') || '<div class="empty-tip">还没有镜头</div>'}
+        </div>
+        <div class="modal-actions">
+          <div class="spacer"></div>
+          <button class="btn btn-ghost" id="scCancel">取消</button>
+          <button class="btn btn-primary" id="scOk">套用</button>
+        </div>`,
+    });
+    const list = m.body.querySelector('#scPick');
+    const boxes = () => Array.from(list.querySelectorAll('input[type=checkbox]'));
+    const upd = () => { const n = boxes().filter(b => b.checked).length; m.body.querySelector('#scCount').textContent = `已选 ${n} 镜`; };
+    boxes().forEach(b => b.onchange = upd); upd();
+    m.body.querySelector('#scAll').onclick = () => { boxes().forEach(b => b.checked = true); upd(); };
+    m.body.querySelector('#scNone').onclick = () => { boxes().forEach(b => b.checked = false); upd(); };
+    m.body.querySelector('#scCancel').onclick = () => m.close();
+    m.body.querySelector('#scOk').onclick = () => {
+      const ids = boxes().filter(b => b.checked).map(b => b.value);
+      if (!ids.length) { toast('先勾选镜头', 'warn'); return; }
+      const n = store.applySceneToShots(sceneId, ids);
+      toast(`已把「${it.name}」套用到 ${n} 个镜头`, 'ok');
+      m.close(); after();
+    };
+  };
+
+  draw();
+  return null;
 }
