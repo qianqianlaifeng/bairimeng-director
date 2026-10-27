@@ -128,7 +128,16 @@ function mnToShotScene(st) {
   (sc.persons || []).forEach(pe => {
     if (pe.hidden) return;
     const A2P = { '站立': 'stand', '走路': 'walk', '运动': 'walk', '坐下': 'sit', '招手': 'stand', '躺下': 'sit' };
-    push({ type: 'actor', x: +pe.x || 0, z: +pe.y || 0, rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: 1, action: A2P[pe.pose] || 'stand', color: pe.color || '#2e7cf6', name: pe.name || '' });
+    /* 运动轨迹：带上路径与速度，运镜预演 / 动态分镜里人物会沿轨迹走动 */
+    const pathPts = (pe.path || []).map(q => ({ x: +q.x || 0, z: +q.y || 0 }));
+    const hasPath = pathPts.length >= 2;
+    push({
+      type: 'actor', x: +pe.x || 0, z: +pe.y || 0,
+      rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: 1,
+      action: hasPath ? 'walk' : (A2P[pe.pose] || 'stand'),
+      color: pe.color || '#2e7cf6', name: pe.name || '',
+      ...(hasPath ? { path: pathPts, speed: +pe.speed || 1.2 } : {}),
+    });
   });
   (sc.lights || []).forEach(l => {
     if (l.hidden) return;
