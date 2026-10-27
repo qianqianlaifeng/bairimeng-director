@@ -58,6 +58,7 @@ function newShot(partial = {}) {
     camH: null,         // 机位高度（m，null=自动跟运镜）：0.5 低机位 / 1.7 眼平 / 4.5 俯视
     scene: null,        // 场景搭建 {objects:[], cam:}
     mnState: null,      // 导演台原生场景快照（房间/墙/道具，重开时无损还原）
+    sceneId: null,      // 引用的场景库条目 id（同一场景多镜复用）
     note: '',
     review: null,       // {score, checks:{...}, note}
     ...partial,
@@ -70,6 +71,7 @@ function newProject(name, aspect = '16:9') {
     aspect,
     script: '',
     shots: [],
+    scenes: [],        // 场景库：[{id,name,scene,mnState,thumb,updatedAt}]，任意镜头可复用
     createdAt: Date.now(),
     updatedAt: Date.now(),
     meta: { breakdownCount: 0, previewPlayed: false, exported: false, reviewed: false },
@@ -175,7 +177,15 @@ class Store {
   /* ---------- 镜头操作 ---------- */
   addShot(partial = {}, at = -1) {
     const p = this.active; if (!p) return null;
-    const s = newShot(partial);
+    /* 连戏默认：新镜头自动沿用上一镜的场景（同一个景里继续拍，不用重搭） */
+    const prev = at >= 0 ? p.shots[at - 1] : p.shots[p.shots.length - 1];
+    const inherit = (prev && prev.scene) ? {
+      scene: JSON.parse(JSON.stringify(prev.scene)),
+      mnState: prev.mnState ? JSON.parse(JSON.stringify(prev.mnState)) : null,
+      sceneId: prev.sceneId || null,
+      cameraMove: prev.cameraMove === 'free' ? 'free' : undefined,
+    } : {};
+    const s = newShot({ ...inherit, ...partial });
     if (at >= 0) p.shots.splice(at, 0, s); else p.shots.push(s);
     p.updatedAt = Date.now();
     this.persistProjects(); this.emit();
@@ -221,6 +231,65 @@ class Store {
     p.updatedAt = Date.now();
     this.persistProjects(); this.emit();
   }
+
+  /* ---------- 场景库（项目级，任意镜头可复用） ---------- */
+  get scenes() { const p = this.active; return (p && p.scenes) || []; }
+  findScene(sceneId) { return this.scenes.find(s => s.id === sceneId) || null; }
+
+  /** 存入场景库；同 id 则更新。返回条目 */
+  saveScene({ id, name, scene, mnState, thumb }) {
+    const p = this.active; if (!p) return null;
+    if (!Array.isArray(p.scenes)) p.scenes = [];
+    const clone = o => (o ? JSON.parse(JSON.stringify(o)) : null);
+    const slim = (st) => {
+      if (!st) return null;
+      const c = clone(st);
+      c.directorShots = (c.directorShots || []).map(s => ({ name: s && s.name, cam: s && s.cam }));
+      delete c.project; delete c.cuttingDesk; delete c.cameraPath;
+      return c;
+    };
+    let item = id ? p.scenes.find(s => s.id === id) : null;
+    if (!item) { item = { id: uid(), name: name || '场景 ' + (p.scenes.length + 1), createdAt: Date.now() }; p.scenes.push(item); }
+    if (name) item.name = name;
+    item.scene = clone(scene);
+    item.mnState = slim(mnState);
+    if (thumb) item.thumb = thumb;
+    item.updatedAt = Date.now();
+    p.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+    return item;
+  }
+  renameScene(sceneId, name) {
+    const it = this.findScene(sceneId); if (!it) return;
+    it.name = name; it.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+  }
+  deleteScene(sceneId) {
+    const p = this.active; if (!p) return;
+    p.scenes = (p.scenes || []).filter(s => s.id !== sceneId);
+    p.shots.forEach(s => { if (s.sceneId === sceneId) s.sceneId = null; });
+    p.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+  }
+  /** 把场景库条目套用到指定镜头（深拷贝，后续各镜可独立微调） */
+  applySceneToShots(sceneId, shotIds = []) {
+    const p = this.active; if (!p) return 0;
+    const it = this.findScene(sceneId); if (!it) return 0;
+    let n = 0;
+    p.shots.forEach(s => {
+      if (!shotIds.includes(s.id)) return;
+      s.scene = it.scene ? JSON.parse(JSON.stringify(it.scene)) : null;
+      s.mnState = it.mnState ? JSON.parse(JSON.stringify(it.mnState)) : null;
+      s.sceneId = sceneId;
+      if (s.scene) s.cameraMove = 'free';
+      n++;
+    });
+    p.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+    return n;
+  }
+  /** 镜头用到的场景库条目统计 */
+  sceneUsage(sceneId) { const p = this.active; return p ? p.shots.filter(s => s.sceneId === sceneId).length : 0; }
   totalDuration(p = this.active) {
     if (!p) return 0;
     return p.shots.reduce((a, s) => a + (+s.duration || 0), 0);
