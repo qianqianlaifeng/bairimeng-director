@@ -55,6 +55,16 @@ function shotSceneToMn(scene, shot) {
       st.scene.walls.push({ id: uid(), name: '', x1: o.x - dx, y1: o.z - dy, x2: o.x + dx, y2: o.z + dy, h: Math.max(1.5, Math.min(4, +o.h || 2.4)), holes: [] });
     } else if (o.type === 'prop' && o.shape === 'lamp') {
       st.scene.lights.push({ id: uid(), name: '光源', x: o.x, y: o.z, color: '#ffe9b0', hidden: false });
+    } else if (o.type === 'prop' && o.kind && window.MN_PROP_KINDS && window.MN_PROP_KINDS[o.kind]) {
+      // 道具库条目：kind / 真实尺寸 / 朝向都要还原回来，否则重开导演台又变回一块光板
+      // （白模里的 rot 是取过负号的内部值，这里再取负回「俯视顺时针」）
+      const K = window.MN_PROP_KINDS[o.kind];
+      const w = Math.max(0.05, +o.w || 1), d = Math.max(0.05, +o.d || 1), h = Math.max(0.05, +o.h || 1);
+      st.scene.props.push({
+        id: uid(), name: K.name || o.kind, kind: o.kind,
+        x: o.x - w / 2, y: o.z - d / 2, w, d, h, color: '',
+        rot: ((-(+o.rot || 0)) % 360 + 360) % 360, hidden: false,
+      });
     } else if (o.type === 'prop') {
       // 其他道具按形状标称尺寸还原成“造物”（方块家具）
       const NOM = { box: [0.8, 0.8, 0.8], pillar: [0.4, 0.4, 2.4], table: [1.3, 0.85, 0.75], door: [1.24, 0.3, 2.1], window: [2.4, 0.3, 2.4], sofa: [1.6, 0.85, 0.75], tree: [1.2, 1.2, 2.8] };
@@ -70,6 +80,14 @@ function shotSceneToMn(scene, shot) {
         color: o.color || '#2e7cf6', pose: P2A[o.action] || '站立', face: 1, faceDir: 0, jump: 0, hidden: false,
       });
     }
+  }
+  /* mnToShotScene 把场景平移到了原点；读回导演台时要平移回原来的网格位置 */
+  const C = (scene && scene.center) || { x: 0, z: 0 };
+  if (C.x || C.z) {
+    st.scene.walls.forEach(w => { w.x1 += C.x; w.x2 += C.x; w.y1 += C.z; w.y2 += C.z; });
+    st.scene.props.forEach(p => { p.x += C.x; p.y += C.z; });
+    st.scene.persons.forEach(p => { p.x += C.x; p.y += C.z; });
+    st.scene.lights.forEach(p => { p.x += C.x; p.y += C.z; });
   }
   if (scene && scene.light) {
     st.sun = {
@@ -109,6 +127,13 @@ function mnToShotScene(st) {
   (sc.props || []).forEach(p => {
     if (p.hidden) return;
     const w = Math.max(0.05, +p.w || 1), d = Math.max(0.05, +p.d || 1), h = Math.max(0.05, +p.h || 1);
+    /* 有道具库种类 → 直接把 kind 与真实尺寸/朝向交给白模，按同一套多部件建模预演 */
+    const kind = window.MN_kindOf ? window.MN_kindOf(p) : (p.kind || null);
+    if (kind && window.MN_PROP_KINDS && window.MN_PROP_KINDS[kind] && window.MN_propCenter) {
+      const ct = window.MN_propCenter(p);
+      push({ type: 'prop', shape: 'kind', kind, x: ct.x, z: ct.y, w, d, h, rot: -((+p.rot || 0)), scale: 1 });
+      return;
+    }
     /* 按长宽高比例认回原始形状：桌/沙发/门/窗/树/柱 —— 预演时还原真实家具，
      * 否则所有造物一律渲染成方块，「用场景预演」等于白搭 */
     const CAND = [
@@ -146,11 +171,49 @@ function mnToShotScene(st) {
 
   const sun = st.sun || {};
   const light = { az: +sun.dir || 300, el: Math.min(85, Math.max(5, +sun.alt ?? 53)), int: sun.on === false ? 0.35 : 1 };
-  const cam = { az: 25, dist: 7.5, h: 1.8, fov: Math.min(90, Math.max(25, +((st.camera || {}).fov) || 55)) };
+
+  /* ---------- 场景居中 ----------
+     白模的机位系统是「围着原点搭台」的：固定机位在 (0,1.7,7) 看向原点、自由机位绕原点转、
+     摇臂/环绕/拉远都以原点为中心。用户搭的景可能落在网格任何角落，直接送进预演就只剩边角料。
+     所以把整份场景平移到以原点为中心；原中心存进 scene.center，回读导演台时再平移回去。 */
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const o of objects) {
+    const hx = o.type === 'actor' ? 0.4 : (o.shape === 'wall' ? Math.abs(+o.w || 3) / 2 + 0.3 : Math.abs(+o.w || 1) / 2);
+    const hz = o.type === 'actor' ? 0.4 : (o.shape === 'wall' ? 0.4 : Math.abs(+o.d || 1) / 2);
+    minX = Math.min(minX, o.x - hx); maxX = Math.max(maxX, o.x + hx);
+    minZ = Math.min(minZ, o.z - hz); maxZ = Math.max(maxZ, o.z + hz);
+  }
+  const center = isFinite(minX) ? { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 } : { x: 0, z: 0 };
+  if (center.x || center.z) {
+    for (const o of objects) {
+      o.x -= center.x; o.z -= center.z;
+      if (Array.isArray(o.path)) o.path.forEach(q => { q.x -= center.x; q.z -= center.z; });
+    }
+  }
+
+  /* ---------- 机位：导演台「存镜头」时的那台相机 ----------
+     MN3D.getCamera() = {theta, phi, r, tx, ty, tz}，eye = target + r(sinφcosθ, cosφ, sinφsinθ)。
+     白模自由机位 = eye(az, dist, h) 绕原点 → az = 90° - θ、dist = r·sinφ、h = ty + r·cosφ。 */
+  const dirShots = (st.directorShots || []).filter(s => s && s.cam);
+  const dc = dirShots.length ? dirShots[dirShots.length - 1].cam : null;
+  const fov = Math.min(90, Math.max(25, +((st.camera || {}).fov) || 55));
+  const cam = dc && isFinite(dc.theta) && isFinite(dc.r)
+    ? {
+        az: (((90 - (dc.theta * 180) / Math.PI) % 360) + 360) % 360,
+        dist: Math.max(1.2, Math.abs(dc.r * Math.sin(dc.phi || 1.0))),
+        h: Math.max(0.3, (+dc.ty || 0) + Math.abs(dc.r * Math.cos(dc.phi || 1.0))),
+        fov,
+      }
+    : { az: 25, dist: 7.5, h: 1.8, fov };
+
   return {
     base: 'plain',
     floor: (sc.ground && sc.ground.color) || '',
     objects, light, cam, cams: [],
+    center,
+    /* 剖开前方外墙：导演台里勾了就跟着走；没勾但有 3 面以上墙（= 房间）时默认剖开，
+       否则机位一退就被自己搭的墙糊住整个画面，用户看到的是「一面大白墙」 */
+    cutaway: !!(st.camera && st.camera.cutaway) || objects.filter(o => o.shape === 'wall').length >= 3,
   };
 }
 
