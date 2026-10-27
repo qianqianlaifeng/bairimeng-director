@@ -897,4 +897,4 @@ function imageTransformFor(sim, t) {
   return { scale, dx, dy, rot };
 }
 
-export { WhiteModelRenderer, MovePlayer, imageTransformFor, solveCamera, solveActor, clamp, lerp, easeInOut, easeOut, propPart, rotXpt, rotYpt };
+export { WhiteModelRenderer, MovePlayer, imageTransformFor, solveCamera, solveActor, clamp, lerp, easeInOut, easeOut, propPart, rotXpt, rotYpt, pathPosAt };
