@@ -260,11 +260,19 @@
         put(col, [0.035, 0.945, s * 0.252], [0.038, 0.10, 0.038], [...leanJ, sj, ej], null);
         put(skin, [0.045, 0.828, s * 0.252], [0.048, 0.042, 0.042], [...leanJ, sj, ej], null);
       }
-      /* 颈 / 头 / 鼻尖 / 头发（跟人脸朝向） */
+      /* 颈 / 头 / 头发（跟人脸朝向） */
       put(skin, [0, 1.40, 0], [0.042, 0.032, 0.042], leanJ, null);
       put(skin, [0, 1.545, 0], [0.098 * fs, 0.112 * fs, 0.098 * fs], leanJ, fd);
-      put([0.34, 0.29, 0.27], [0.112 * fs, 1.545, 0], [0.032, 0.030, 0.026], leanJ, fd);
       put(hair, [0, 1.638, 0], [0.104 * fs, 0.028, 0.104 * fs], leanJ, fd);
+      /* 五官（贴在头的正面 local +x）：双眼 / 双眉 / 鼻 / 嘴 —— 之前只有一个深色块，像单眼怪 */
+      const faceX = 0.099 * fs, eyeZ = 0.034 * fs;
+      const eyeC = [0.10, 0.12, 0.14], browC = [0.28, 0.22, 0.20], mouthC = [0.62, 0.34, 0.34];
+      for (const s of [1, -1]) {
+        put(eyeC, [faceX, 1.564, s * eyeZ], [0.007, 0.014, 0.014], leanJ, fd);   // 眼睛
+        put(browC, [faceX, 1.589, s * eyeZ], [0.007, 0.005, 0.020], leanJ, fd);  // 眉毛
+      }
+      put([0.93, 0.85, 0.79], [faceX + 0.008, 1.542, 0], [0.014, 0.020, 0.013], leanJ, fd); // 鼻
+      put(mouthC, [faceX, 1.507, 0], [0.005, 0.006, 0.022], leanJ, fd);                      // 嘴
     }
     for (const l of sc.lights) {
       if (l.hidden) continue;
@@ -404,13 +412,40 @@
   }
 
   /* ---------- 交互 ---------- */
+  /* 屏幕点 → 地面 y=0 的世界坐标（用于 3D 里直接放置物件） */
+  function screenToFloor(cv, clientX, clientY) {
+    const rect = cv.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
+    const eye = eyeOf();
+    const ctr = [cam.tx, cam.ty, cam.tz];
+    const zAxis = norm(sub(eye, ctr));                 // 相机朝 -z
+    const upv = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
+    const xAxis = norm(cross(upv, zAxis));
+    const yAxis = cross(zAxis, xAxis);
+    const fwd = [-zAxis[0], -zAxis[1], -zAxis[2]];
+    const tanH = Math.tan((45 * Math.PI / 180) / 2);
+    const aspect = rect.width / rect.height;
+    const dir = norm([
+      fwd[0] + xAxis[0] * ndcX * tanH * aspect + yAxis[0] * ndcY * tanH,
+      fwd[1] + xAxis[1] * ndcX * tanH * aspect + yAxis[1] * ndcY * tanH,
+      fwd[2] + xAxis[2] * ndcX * tanH * aspect + yAxis[2] * ndcY * tanH,
+    ]);
+    if (Math.abs(dir[1]) < 1e-4) return null;          // 与地面平行，无交点
+    const t = -eye[1] / dir[1];
+    if (t <= 0) return null;                            // 交点在相机背后
+    return [eye[0] + dir[0] * t, eye[2] + dir[2] * t];
+  }
+
   function bindControls(cv) {
     let drag = null;
     cv.addEventListener('contextmenu', e => e.preventDefault());
-    cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, btn: e.button }; });
+    cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: 0 }; });
     cv.addEventListener('pointermove', e => {
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+      drag.moved += Math.abs(dx) + Math.abs(dy);
       if (drag.btn === 2 || e.shiftKey) {
         const eye = eyeOf(), view = lookAt(eye, [cam.tx, cam.ty, cam.tz], [0, 1, 0]);
         const right = [view[0], view[4], view[8]], upv = [view[1], view[5], view[9]], k = cam.r * 0.0016;
@@ -418,7 +453,16 @@
       } else if (drag.btn === 0) { cam.theta -= dx * 0.01; cam.phi = Math.max(0.02, Math.min(1.52, cam.phi - dy * 0.01)); }
       if (M._last) draw(M._last);
     });
-    const end = e => { if (drag) { try { cv.releasePointerCapture(e.pointerId); } catch (_) { } drag = null; } };
+    const end = e => {
+      if (!drag) return;
+      const wasClick = drag.btn === 0 && drag.moved < 5;   // 没拖动 = 单击
+      try { cv.releasePointerCapture(e.pointerId); } catch (_) { }
+      drag = null;
+      if (wasClick && typeof M.onPlace === 'function') {
+        const hit = screenToFloor(cv, e.clientX, e.clientY);
+        if (hit) M.onPlace(hit[0], hit[1]);
+      }
+    };
     cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
     cv.addEventListener('wheel', e => { e.preventDefault(); cam.r = Math.max(4, Math.min(120, cam.r * (1 + (e.deltaY > 0 ? 0.1 : -0.1)))); if (M._last) draw(M._last); }, { passive: false });
     cv.addEventListener('dblclick', () => { frame(); if (M._last) draw(M._last); });
