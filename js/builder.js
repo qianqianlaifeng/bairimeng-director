@@ -18,7 +18,7 @@
  *          （运镜预演 / 动态分镜链路不变，照常消费）
  *          镜头册最新截图 → 挂成该镜参考图
  * ============================================================ */
-import { toast } from './ui.js';
+import { toast, askText } from './ui.js';
 
 const DEG = Math.PI / 180;
 const uid = () => 'x' + Math.random().toString(36).slice(2, 9);
@@ -151,6 +151,7 @@ function mnToShotScene(st) {
 let ovEl = null;
 let curShot = null;
 let curOnSaved = null;
+let libraryMode = false;
 
 function buildOverlay() {
   ovEl = document.createElement('div');
@@ -159,12 +160,15 @@ function buildOverlay() {
   ovEl.innerHTML = `
     <div class="mn-root" id="mnRoot"></div>
     <div class="sb-mn-dock">
-      <span class="sb-mn-dock-tip">搭建好后点「保存到镜头」——运镜预演 / 动态分镜就会用这个场景</span>
+      <span class="sb-mn-dock-tip" id="sbMnTip">搭建好后点「保存到镜头」——运镜预演 / 动态分镜就会用这个场景</span>
+      <button class="btn btn-ghost btn-sm" id="sbMnLib">📚 存入场景库</button>
       <button class="btn btn-primary btn-sm" id="sbMnSave">💾 保存到镜头</button>
       <button class="btn btn-ghost btn-sm" id="sbMnClose">直接返回</button>
     </div>`;
   document.body.appendChild(ovEl);
-  ovEl.querySelector('#sbMnSave').onclick = saveAndClose;
+  ovEl.querySelector('#sbMnSave').onclick = () => saveAndClose();
+  /* ⚠️ 不能直接绑 saveToLibrary：click 事件对象会被当成 st0 传进去，场景被判空 */
+  ovEl.querySelector('#sbMnLib').onclick = () => saveToLibrary();
   ovEl.querySelector('#sbMnClose').onclick = () => { closeOverlay(); };
 }
 
@@ -202,11 +206,14 @@ function saveAndClose() {
   if (!st) { toast('导演台还没准备好，稍等一下再试', 'warn'); return; }
   const scene = mnToShotScene(st);
   const has = scene.objects.length > 0;
+  /* 独立建景模式（从场景库进入，没有绑定镜头）：只入库 */
+  if (libraryMode || !curShot) { saveToLibrary(st, scene, has); return; }
   window.__bdm.updateShot(curShot.id, {
     scene: has ? scene : null,
     /* 2026-10-26：额外存一份导演台原生状态。
        否则「房间」保存后再打开会变成 4 面墙（房间概念丢失），改不动了。 */
     mnState: has ? slimMnState(st) : null,
+    sceneId: null,       // 本镜自己改过的场景 → 与场景库条目解绑（库里的仍保留）
     ...(has ? { cameraMove: 'free' } : {}),
   });
   window.__bdm.addXP(3, '搭建场景');
@@ -216,15 +223,60 @@ function saveAndClose() {
   if (curOnSaved) curOnSaved();
 }
 
+/* 存入项目场景库：之后任何镜头都能一键套用同一个景 */
+async function saveToLibrary(st0, scene0, has0) {
+  const st = st0 || (window.miaoningGetScene ? window.miaoningGetScene() : null);
+  if (!st) { toast('导演台还没准备好', 'warn'); return; }
+  const scene = scene0 || mnToShotScene(st);
+  const has = has0 != null ? has0 : scene.objects.length > 0;
+  if (!has) { toast('先搭点东西再存场景库', 'warn'); return; }
+  const defName = (curShot && (curShot.desc || '').slice(0, 12)) || ('场景 ' + ((window.__bdm.scenes || []).length + 1));
+  const name = await askText({
+    title: '存入场景库',
+    label: '场景名称（之后任意镜头都能套用）',
+    value: defName,
+    placeholder: '例如：客厅 A / 街角 / 教室',
+    okText: '存入',
+  });
+  if (name == null) return;
+  const shots = (st.directorShots || []);
+  const thumb = shots.length ? (shots[shots.length - 1].image || shots[shots.length - 1].url) : null;
+  const it = window.__bdm.saveScene({ name: name.trim() || defName, scene, mnState: st, thumb: typeof thumb === 'string' ? thumb : null });
+  /* 当前镜头同时指向这条场景，便于「这个景用在哪几镜」统计 */
+  if (curShot && !libraryMode) {
+    window.__bdm.updateShot(curShot.id, { scene, mnState: slimMnState(st), sceneId: it.id, cameraMove: 'free' });
+  }
+  window.__bdm.addXP(4, '存入场景库');
+  attachLatestShot(st);
+  toast(`已存入场景库「${it.name}」，任意镜头都能套用 📚`, 'ok');
+  closeOverlay();
+  if (curOnSaved) curOnSaved();
+}
+
 /* ============================================================
  * 对外入口（views-core.js 的「🏗 场景搭建」按钮调用）
  * ============================================================ */
-export function openSceneBuilder(shot, onSaved) {
-  curShot = shot;
+export function openSceneBuilder(shot, onSaved, opts = {}) {
+  curShot = shot || null;
   curOnSaved = onSaved || null;
+  libraryMode = !!(opts && opts.library) || !shot;
+  /* 新手教程是弹窗层（z-index 高于搭建浮层），会挡住画布点击 —— 进搭建时自动收起 */
+  document.querySelectorAll('.modal-ov').forEach(o => {
+    if (o.querySelector('#tuBox')) { o.remove(); try { localStorage.setItem('bdm_tutorial_v1', '1'); } catch (e) { } }
+  });
   if (!ovEl) buildOverlay();
   ovEl.classList.add('open');
   document.body.classList.add('sb-mn-open');
+  /* 停靠条按模式切换文案：独立建景没有「镜头」可存 */
+  const tip = ovEl.querySelector('#sbMnTip');
+  const saveBtn = ovEl.querySelector('#sbMnSave');
+  if (libraryMode) {
+    if (tip) tip.textContent = '独立建景：搭好后「存入场景库」，之后任何镜头都能一键套用';
+    if (saveBtn) saveBtn.textContent = '💾 存入场景库并返回';
+  } else {
+    if (tip) tip.textContent = '搭建好后点「保存到镜头」——运镜预演 / 动态分镜就会用这个场景';
+    if (saveBtn) saveBtn.textContent = '💾 保存到镜头';
+  }
 
   (async () => {
     try {
@@ -240,8 +292,10 @@ export function openSceneBuilder(shot, onSaved) {
         if (root && th === 'obsidian') root.dataset.mnTheme = 'dark';
       } catch (e) { /*  ignore */ }
       /* 优先用导演台原生快照（房间/墙/道具原样回来）；
-         老数据只有 shot.scene（白模），才走格式转换 */
-      const st = (shot.mnState && shot.mnState.scene) ? shot.mnState : shotSceneToMn(shot.scene, shot);
+         老数据只有 shot.scene（白模），才走格式转换；独立建景则给一张空场景 */
+      const st = (curShot && curShot.mnState && curShot.mnState.scene)
+        ? curShot.mnState
+        : shotSceneToMn(curShot ? curShot.scene : null, curShot || { desc: '新场景' });
       window.miaoningSeed(st);
     } catch (e) {
       console.error('[场景搭建] 初始化失败', e);
