@@ -6,7 +6,7 @@ import { Store } from './store.js';
 import { TUTORIAL } from './data.js';
 import { el, modal, toast } from './ui.js';
 import { initViewsCore, renderHome, renderScript, renderStoryboard, openProjectRename } from './views-core.js';
-import { initViewsStage, renderDict, renderPreview, renderScenes } from './views-stage.js';
+import { initViewsStage, renderDict, renderPreview, renderScenes, renderContinuity } from './views-stage.js';
 import { initViewsPlayer, renderAnimatic, renderEditor } from './views-player.js';
 import { initViewsTools, renderPrompts, renderReview, renderAchievements, renderSettings, openProjectExport } from './views-tools.js';
 
@@ -23,6 +23,7 @@ const VIEWS = {
   script:      { title: '剧本',     icon: '📜', render: renderScript,      group: '创作', needProject: true },
   storyboard:  { title: '分镜板',   icon: '🎞️', render: renderStoryboard,  group: '创作', needProject: true },
   scenes:      { title: '场景库',   icon: '🏗', render: renderScenes,      group: '创作', needProject: true },
+  continuity:  { title: '连戏检查', icon: '🔗', render: renderContinuity,  group: '创作', needProject: true },
   dict:        { title: '运镜词典', icon: '🧭', render: renderDict,        group: '创作' },
   preview:     { title: '运镜预演', icon: '👁️', render: renderPreview,     group: '创作' },
   animatic:    { title: '动态分镜', icon: '🌟', render: renderAnimatic,    group: '创作', needProject: true },
