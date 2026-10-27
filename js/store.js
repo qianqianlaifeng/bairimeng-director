@@ -59,6 +59,7 @@ function newShot(partial = {}) {
     scene: null,        // 场景搭建 {objects:[], cam:}
     mnState: null,      // 导演台原生场景快照（房间/墙/道具，重开时无损还原）
     sceneId: null,      // 引用的场景库条目 id（同一场景多镜复用）
+    sceneKey: '',       // 场次标识（剧本拆分自动带上，用于按场次归组）
     note: '',
     review: null,       // {score, checks:{...}, note}
     ...partial,
@@ -290,6 +291,94 @@ class Store {
   }
   /** 镜头用到的场景库条目统计 */
   sceneUsage(sceneId) { const p = this.active; return p ? p.shots.filter(s => s.sceneId === sceneId).length : 0; }
+
+  /* ---------- 连戏：一键对齐上一镜 ---------- */
+  alignContinuity(shotId, prevId, kind = 'all') {
+    const p = this.active; if (!p) return false;
+    const cur = p.shots.find(s => s.id === shotId);
+    const prev = p.shots.find(s => s.id === prevId);
+    if (!cur || !prev) return false;
+    const cp = o => (o ? JSON.parse(JSON.stringify(o)) : null);
+    if (kind === 'all') {
+      cur.scene = cp(prev.scene);
+      cur.mnState = cp(prev.mnState);
+      cur.sceneId = prev.sceneId || null;
+      cur.cameraMove = prev.cameraMove;
+    } else if (kind === 'cam') {
+      ['shotSize', 'angle', 'aimY', 'camH', 'cameraMove', 'moveSpeed'].forEach(k => { cur[k] = prev[k]; });
+      if (prev.scene && prev.scene.cam) { cur.scene = cp(cur.scene) || {}; cur.scene.cam = cp(prev.scene.cam); }
+      if (prev.mnState && prev.mnState.directorShots && cur.mnState) {
+        cur.mnState = cp(cur.mnState);
+        cur.mnState.directorShots = cp(prev.mnState.directorShots);
+      }
+    } else if (kind === 'light') {
+      if (prev.mnState && prev.mnState.sun && cur.mnState) { cur.mnState = cp(cur.mnState); cur.mnState.sun = cp(prev.mnState.sun); }
+      if (prev.scene && prev.scene.light) { cur.scene = cp(cur.scene) || {}; cur.scene.light = cp(prev.scene.light); }
+    } else if (kind === 'persons') {
+      if (prev.mnState && prev.mnState.scene && cur.mnState && cur.mnState.scene) {
+        cur.mnState = cp(cur.mnState);
+        cur.mnState.scene.persons = cp(prev.mnState.scene.persons || []);
+      }
+      if (prev.scene && cur.scene) {
+        cur.scene = cp(cur.scene);
+        const props = (cur.scene.objects || []).filter(o => o.type !== 'actor');
+        const actors = (prev.scene.objects || []).filter(o => o.type === 'actor').map(o => cp(o));
+        cur.scene.objects = props.concat(actors);
+      }
+    }
+    p.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+    return true;
+  }
+
+  /** 沿用上一镜的镜头语言（运镜/景别/角度/看向高度/机位高度/速度），不动内容 */
+  inheritShotSetup(shotId) {
+    const p = this.active; if (!p) return null;
+    const i = p.shots.findIndex(s => s.id === shotId);
+    if (i <= 0) return null;
+    const cur = p.shots[i], prev = p.shots[i - 1];
+    const keys = ['cameraMove', 'shotSize', 'angle', 'aimY', 'camH', 'moveSpeed'];
+    keys.forEach(k => { cur[k] = prev[k]; });
+    if (prev.scene && prev.scene.cam) { cur.scene = cur.scene ? JSON.parse(JSON.stringify(cur.scene)) : {}; cur.scene.cam = JSON.parse(JSON.stringify(prev.scene.cam)); }
+    p.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+    return prev;
+  }
+
+  /* ---------- 场次智能归组 ---------- */
+  shotSceneKey(s) {
+    if (s.sceneKey) return s.sceneKey;
+    const t = String(s.title || '');
+    const m = t.match(/^([^·]{1,12})·/);
+    return m ? m[1] : '';
+  }
+  groupShotsByScene() {
+    const p = this.active; if (!p) return [];
+    const map = new Map();
+    p.shots.forEach((s, i) => {
+      const k = this.shotSceneKey(s) || '未分场';
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push({ shot: s, idx: i });
+    });
+    return Array.from(map.entries()).map(([key, items]) => ({ key, items }));
+  }
+  /** 按场次自动建景 + 绑定：每场一套景，已有则复用 */
+  autoBindScenesByGroup() {
+    const p = this.active; if (!p) return { groups: 0, created: 0, bound: 0 };
+    const groups = this.groupShotsByScene().filter(g => g.key !== '未分场');
+    let created = 0, bound = 0;
+    groups.forEach(g => {
+      let it = (p.scenes || []).find(s => s.name === g.key);
+      if (!it) {
+        it = this.saveScene({ name: g.key, scene: { base: 'plain', objects: [], cam: { az: 25, dist: 7.5, h: 1.8, fov: 55 } }, mnState: null });
+        created++;
+      }
+      g.items.forEach(({ shot }) => { if (shot.sceneId !== it.id) { shot.sceneId = it.id; bound++; } });
+    });
+    p.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+    return { groups: groups.length, created, bound };
+  }
   totalDuration(p = this.active) {
     if (!p) return 0;
     return p.shots.reduce((a, s) => a + (+s.duration || 0), 0);
