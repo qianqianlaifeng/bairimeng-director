@@ -1,4 +1,5 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.11.8（2026-10-27）：新增「运动轨迹」工具（2D 画走位线→3D 蓝线→预演沿轨迹走动）；重命名改用应用内弹窗（原 prompt 被拦截时无反应）。
    v1.11.7（2026-10-27）：3D 头部补全五官（双眼/眉/鼻/嘴）；3D 视图支持点击地面直接放置物件（射线求交，拖拽不误放）。
    v1.11.6（2026-10-27）：新增「连戏检查」页（越轴/人物瞬移/转向/光线突变/换景 + 一键对齐上一镜）、按场次智能归组场景、镜头一键沿用上一镜设置。
    v1.11.5（2026-10-27）：项目级「场景库」——一套景多镜复用（存入/批量套用/新镜头自动继承/使用统计）；修弹窗层级与新手教程遮挡画布。
@@ -167,7 +168,7 @@ async function loadCanvas(id) {
     try { await dbPut('canvas:' + id, st); } catch (e) { /* 存储失败不打断，内存里照样能用 */ }
   }
   MN.state = st;
-  MN.sel = null; MN.selList = []; MN.pending = null; MN.undo = []; MN.redo = [];
+  MN.sel = null; MN.selList = []; MN.pending = null; MN.pathDraft = null; MN.undo = []; MN.redo = [];
   MN.view = { x: 0, y: 0, k: st.view && st.view.zoom || 1 };
   MN.grid = !!(st.view && st.view.grid !== false);
   fitView();
@@ -393,6 +394,7 @@ const TOOLS = [
   { id: 'prop', name: '造物', sub: '画块方的，里面空的', key: 'B', ico: 'cuboid' },
   { id: 'hole', name: '打洞', sub: '点一格，或拖一片', key: 'H', ico: 'door-open' },
   { id: 'person', name: '人物', sub: '放个小人，演不演随它', key: 'N', ico: 'user-round' },
+  { id: 'path', name: '运动轨迹', sub: '给人物画一条走位线', key: 'P', ico: 'route' },
   { id: 'sun', name: '光影调节', sub: '太阳比我有前途', key: 'O', ico: 'sun' },
   { id: 'light', name: '额外光源', sub: '有光也不一定有用', key: 'I', ico: 'lightbulb' },
   { id: 'genie', name: '仙人模式', sub: '我超威！', key: 'J', ico: 'sparkles' },
@@ -461,7 +463,7 @@ function setTool(id) {
   if (id === 'genie') { if (window.MN3) MN3.openGenie(); return; }
   if (id === 'motion') { if (window.MN3) MN3.openMotion(); return; }
   if (id === 'cut') { if (window.MN3) MN3.openCut(); return; }
-  MN.tool = id; MN.wallDraft = null; MN.pending = null;
+  MN.tool = id; MN.wallDraft = null; MN.pending = null; MN.pathDraft = null;
   renderToolList(); buildFloatTools(); paint();
   const hints = { select: '点选 · 拖动移动 · 右键删除 · 空白拖动框选', room: '按住拖矩形 · 松手就是一间 · 接着画', wall: '点两下连线 · 斜着也行 · Esc 取消', prop: '拖一个矩形 · 块方的，里面空的', hole: '点一下墙 · 开出个门洞', person: '点一下 · 放个小人', pan: '拖着看 · 松手停' };
   $('#mnHint').innerHTML = `${icon('mouse-pointer-2', 's14')}<span>${hints[id] || ''}</span>`;
@@ -830,6 +832,12 @@ function renderObjPanel() {
     <label class="mn-field"><span>人脸大小<strong>${o.face || 1} 倍</strong></span><input type="range" class="mn-range" data-f="face" min="0.5" max="2" step="0.1" value="${o.face || 1}" /></label>
     <label class="mn-field"><span>人物颜色</span></label>${swatches(PERSON_COLORS, o.color, 'color')}
     <label class="mn-field mn-color-row"><span>自定义颜色</span><input type="color" class="mn-color" data-f="color" value="${o.color || '#2e7cf6'}" /></label>
+    <label class="mn-field"><span>运动轨迹<strong>${(o.path || []).length ? `${o.path.length} 点 · ${pathLen(o.path).toFixed(1)}m` : '未画'}</strong></span></label>
+    <div class="mn-chip-row">
+      <button class="mn-chip" data-act="drawpath">${icon('route', 's12')}画轨迹</button>
+      <button class="mn-chip" data-act="clearpath">${icon('eraser', 's12')}清除</button>
+    </div>
+    ${(o.path || []).length ? `<label class="mn-field"><span>行走速度<strong>${o.speed || 1.2} m/s</strong></span><input type="range" class="mn-range" data-f="speed" min="0.3" max="4" step="0.1" value="${o.speed || 1.2}" /></label>` : ''}
     <div class="mn-num3">
       <label class="mn-field"><span>位置 X</span><input type="number" step="0.5" data-f="x" value="${o.x}" /></label>
       <label class="mn-field"><span>位置 Y</span><input type="number" step="0.5" data-f="y" value="${o.y}" /></label>
@@ -912,6 +920,14 @@ function bindObjPanel() {
     const a = b.dataset.act;
     if (a === 'del') { delSel(); }
     else if (a === 'hide') { hideSel(); }
+    else if (a === 'drawpath') {
+      MN.tool = 'path'; renderToolList(); buildFloatTools();
+      MN.pathDraft = { id: o.id, pts: (o.path || []).map(p => ({ x: p.x, y: p.y })) };
+      paint(); toast('在画布上逐点点击画走位线 · 右键或 Esc 结束');
+    }
+    else if (a === 'clearpath') {
+      pushUndo(); delete o.path; renderRight(); paint(); saveSoon(); toast('已清除轨迹');
+    }
     else if (a === 'copy') { copySel(); }
     else if (a === 'paste') { pasteClip(1, 1); }
     else if (a === 'addhole') { pushUndo(); (o.holes = o.holes || []).push({ t: 0.5, w: 1 }); renderRight(); paint(); saveSoon(); }
@@ -1173,9 +1189,38 @@ function doPaint() {
     ctx.restore();
   }
 
+  /* 运动轨迹（人物走位线）：虚线 + 途经点 + 终点箭头 + 长度 */
+  for (const p of sc.persons) {
+    const draft = (MN.pathDraft && MN.pathDraft.id === p.id) ? MN.pathDraft.pts : null;
+    const list = draft && draft.length ? draft : (p.path || []);
+    if (!list || list.length < 2) continue;
+    const sp = list.map(pt => w2s(pt.x, pt.y));
+    ctx.save();
+    ctx.strokeStyle = draft ? PAL.accent : 'rgba(46,124,246,.72)';
+    ctx.lineWidth = draft ? 2.4 : 2;
+    ctx.setLineDash([7, 5]);
+    ctx.beginPath(); sp.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.stroke();
+    ctx.setLineDash([]);
+    sp.forEach((q, i) => {
+      ctx.fillStyle = i === 0 ? 'rgba(46,124,246,.92)' : 'rgba(255,255,255,.96)';
+      ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(q.x, q.y, i === 0 ? 4.5 : 3.2, 0, 7); ctx.fill(); ctx.stroke();
+    });
+    const a = sp[sp.length - 2], b = sp[sp.length - 1];
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    ctx.fillStyle = PAL.accent;
+    ctx.beginPath();
+    ctx.moveTo(b.x, b.y);
+    ctx.lineTo(b.x - Math.cos(ang - 0.4) * 11, b.y - Math.sin(ang - 0.4) * 11);
+    ctx.lineTo(b.x - Math.cos(ang + 0.4) * 11, b.y - Math.sin(ang + 0.4) * 11);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(28,34,48,.72)'; ctx.font = '11px sans-serif';
+    ctx.fillText(pathLen(list).toFixed(1) + 'm', (a.x + b.x) / 2 + 9, (a.y + b.y) / 2 - 7);
+    ctx.restore();
+  }
+
   /* 光源 */
-  for (const l of sc.lights) {
-    if (l.hidden) continue;
+  for (const l of sc.lights) {    if (l.hidden) continue;
     const q = w2s(l.x, l.y);
     ctx.fillStyle = l.color || '#ffe9b0';
     ctx.beginPath(); ctx.arc(q.x, q.y, Math.max(4, 0.35 * C), 0, 7); ctx.fill();
@@ -1352,8 +1397,26 @@ function objectsInRect(x0, y0, x1, y1) {
 }
 
 /* ---------- 物体库：点一下落地（连续放置，Esc 退出） ---------- */
-function placePending(wx, wy) {
-  const p = MN.pending; if (!p) return;
+/* 结束轨迹绘制：写进人物 path（>=2 点才算） */
+function pathLen(pts) { let L = 0; for (let i = 1; i < (pts || []).length; i++) L += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y); return L; }
+function finishPath() {
+  const d = MN.pathDraft; MN.pathDraft = null;
+  if (!d) return;
+  const per = findObj('person', d.id);
+  if (per) {
+    if (d.pts.length >= 2) {
+      pushUndo();
+      per.path = d.pts;
+      per.speed = per.speed || 1.2;
+      toast(`轨迹已保存：${d.pts.length} 个点 / ${pathLen(d.pts).toFixed(1)}m`);
+    } else {
+      toast('至少要点两个位置才能形成轨迹', 'warn');
+    }
+  }
+  renderAll(); saveSoon();
+}
+
+function placePending(wx, wy) {  const p = MN.pending; if (!p) return;
   pushUndo();
   /* 放置后「不选中」新物体：右侧继续留在物件库，方便接着换下一个预设连放
      （之前会选中刚放的东西，物件库被属性面板顶掉，想再放别的东西就点不到了） */
@@ -1380,7 +1443,10 @@ function onPtrDown(e) {
   try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 个别嵌入式 webview 不支持捕获，不耽误拖拽 */ }
 
   /* 右键：起手先记位置 —— 拖动超过 4px 算平移，没动才算「点右键弹菜单」 */
-  if (e.button === 2) { MN.drag = { kind: 'rpan', sx, sy, vx: MN.view.x, vy: MN.view.y, moved: false }; return; }
+  if (e.button === 2) {
+    if (MN.pathDraft) { finishPath(); return; }
+    MN.drag = { kind: 'rpan', sx, sy, vx: MN.view.x, vy: MN.view.y, moved: false }; return;
+  }
   if (e.button === 1 || MN.spaceDown || MN.tool === 'pan') {
     MN.drag = { kind: 'pan', sx, sy, vx: MN.view.x, vy: MN.view.y }; cv.style.cursor = 'grabbing'; return;
   }
@@ -1388,6 +1454,21 @@ function onPtrDown(e) {
   if (MN.pending) { placePending(w.x, w.y); return; }
 
   const tool = MN.tool;
+  /* 运动轨迹：先点人物，再逐点画走位线；右键 / Esc 结束 */
+  if (tool === 'path') {
+    if (!MN.pathDraft) {
+      const hit = hitTest(w.x, w.y);
+      if (!hit || hit.kind !== 'person') { toast('先点一个人物，再逐点画它的走位线', 'warn'); return; }
+      const per = findObj('person', hit.id);
+      MN.pathDraft = { id: hit.id, pts: (per.path || []).map(p => ({ x: p.x, y: p.y })) };
+      selectOnly('person', hit.id); refreshSel();
+      toast('接着在画布上逐点点击画轨迹 · 右键或 Esc 结束');
+      return;
+    }
+    MN.pathDraft.pts.push({ x: snap(w.x), y: snap(w.y) });
+    paint();
+    return;
+  }
   if (tool === 'select') {
     const hit = hitTest(w.x, w.y);
     if (hit) {
@@ -1620,9 +1701,27 @@ function hideSel() {
 function renameSel() {
   const s = MN.sel; if (!s) return toast('先选中一个东西');
   const o = findObj(s.kind, s.id); if (!o) return;
-  const name = prompt('改个名字', o.name || '');
-  if (name == null) return;
-  pushUndo(); o.name = String(name).slice(0, 20); renderAll(); saveSoon();
+  /* 2026-10-27：原来用浏览器原生 prompt()，部分环境（webview/嵌入/被策略拦截）会直接返回 null，
+     表现为「点重命名没反应」。改用应用内弹窗，任何环境都稳。 */
+  const kindName = { room: '房间', wall: '墙', prop: '造物', person: '人物', light: '光源' }[s.kind] || '物体';
+  const m = openModal('改个名字', kindName,
+    `<label class="mn-field"><span>名称</span><input type="text" id="mnRenameInput" value="${esc(o.name || '')}" maxlength="20" placeholder="给它起个名字" /></label>`,
+    [
+      { label: '取消', fn: closeModal },
+      {
+        label: '保存', primary: true, fn: () => {
+          const inp = $('#mnRenameInput', m);
+          const v = ((inp && inp.value) || '').trim();
+          if (v) { pushUndo(); o.name = v.slice(0, 20); renderAll(); saveSoon(); toast('已改名为「' + o.name + '」'); }
+          closeModal();
+        },
+      },
+    ]);
+  const inp = $('#mnRenameInput', m);
+  if (inp) {
+    setTimeout(() => { inp.focus(); inp.select(); }, 60);
+    inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); const btn = $('[data-fi="1"]', m); if (btn) btn.click(); } };
+  }
 }
 function bringFront() {
   const s = MN.sel; if (!s) return;
@@ -1955,7 +2054,7 @@ function openHelpModal() {
 }
 
 /* ---------- 快捷键弹窗 ---------- */
-const DEF_KEYS = { select: 'V', room: 'R', wall: 'L', prop: 'B', hole: 'H', person: 'N', pan: 'Space', sun: 'O', genie: 'J', motion: 'M', cut: 'E' };
+const DEF_KEYS = { select: 'V', room: 'R', wall: 'L', prop: 'B', hole: 'H', person: 'N', path: 'P', pan: 'Space', sun: 'O', genie: 'J', motion: 'M', cut: 'E' };
 function openKeysModal() {
   const prefs = MN.state.editorPreferences;
   const keys = Object.assign({}, DEF_KEYS, prefs.shortcuts || {});
@@ -2111,6 +2210,7 @@ function onKeyDown(e) {
   if (e.key === 'Escape') {
     if ($('.mn-modal-back')) { closeModal(); return; }
     if ($('#mnCtx')) { closeCtx(); return; }
+    if (MN.pathDraft) { finishPath(); return; }
     if (MN.pending) { MN.pending = null; clearSel(); refreshSel(); toast('退出放置'); return; }
     if (MN.immersive) { toggleImmersive(); return; }
     if (MN.wallDraft) { MN.wallDraft = null; paint(); return; }
@@ -2965,7 +3065,7 @@ window.MN = MN;
    m3（剪辑台/仙人模式/运镜录制）里 G.toast / G.saveSoon / G.pushUndo / G.renderAll /
    G.openModal 全部取到 undefined → 静默降级成「不存盘、不提示、不刷新、弹窗没样式」。 */
 Object.assign(window, {
-  toast, saveSoon, pushUndo, undo, redo, renderAll, paint, icon, openModal, closeModal, setMode, fitView,
+  toast, saveSoon, pushUndo, undo, redo, renderAll, paint, icon, openModal, closeModal, setMode, fitView, setTool,
   mnSel: selectOnly, mnRefresh: refreshSel, mnDel: delSel, mnCtxClose: closeCtx,
 });
 
@@ -2976,7 +3076,7 @@ window.miaoningSeed = function (st) {
   const fresh = blankState((st.scene && st.scene.title) || '未命名画布');
   MN.state = Object.assign(fresh, st);
   MN.state.format = 'aistudio-director';
-  MN.sel = null; MN.selList = []; MN.pending = null; MN.undo = []; MN.redo = [];
+  MN.sel = null; MN.selList = []; MN.pending = null; MN.pathDraft = null; MN.undo = []; MN.redo = [];
   MN.view = { x: 0, y: 0, k: (st.view && st.view.zoom) || 1 };
   MN.grid = !(st.view && st.view.grid === false);
   fitView();
