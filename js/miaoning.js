@@ -1,4 +1,5 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.11.7（2026-10-27）：3D 头部补全五官（双眼/眉/鼻/嘴）；3D 视图支持点击地面直接放置物件（射线求交，拖拽不误放）。
    v1.11.6（2026-10-27）：新增「连戏检查」页（越轴/人物瞬移/转向/光线突变/换景 + 一键对齐上一镜）、按场次智能归组场景、镜头一键沿用上一镜设置。
    v1.11.5（2026-10-27）：项目级「场景库」——一套景多镜复用（存入/批量套用/新镜头自动继承/使用统计）；修弹窗层级与新手教程遮挡画布。
    v1.11.4（2026-10-27）：3D 关节姿势（站立/走路/运动/招手/坐下/躺下，真实 FK 弯曲 + 落地校准 + 跳跃）；墙面门洞 3D 真镂空（分段墙体 + 门楣）。
@@ -325,6 +326,24 @@ function bindShell() {
     selectOnly(hit.kind, hit.id); refreshSel(); renameSel();
   });
   const cv3 = $('#mn3d'); if (cv3) { cv3.style.display = 'none'; if (window.MN3D) { try { MN3D.ensure(cv3); } catch (e) { } } }
+  /* 3D 视图里点地面直接放置（射线求交地面 → 世界 x,z） */
+  if (window.MN3D) window.MN3D.onPlace = (x, z) => {
+    const px = snap(x), pz = snap(z);
+    if (MN.pending) { placePending(px, pz); return; }
+    if (MN.tool === 'person' || MN.tool === 'light') {
+      pushUndo();
+      if (MN.tool === 'person') {
+        const o = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: px, y: pz, rot: 0, color: '#2e7cf6', pose: '站立', face: 1, faceDir: 0, jump: 0 };
+        MN.state.scene.persons.push(o); selectOnly('person', o.id);
+      } else {
+        const o = { id: uid(), name: '光源 ' + (MN.state.scene.lights.length + 1), x: px, y: pz, color: '#ffe9b0', intensity: 1, h: 2.5 };
+        MN.state.scene.lights.push(o); selectOnly('light', o.id);
+      }
+      refreshSel(); saveSoon(); paint(); toast('已放在 3D 地面上的这个位置');
+      return;
+    }
+    toast('先在右侧物件库点一个物件（或左侧「人物 / 光源」），再点 3D 地面放置', 'warn');
+  };
 }
 
 /* ---------- 3D 视图（M2） ---------- */
@@ -337,6 +356,7 @@ function setMode(mode) {
     if (c2) c2.style.display = 'none';
     if (c3) c3.style.display = 'block';
     const lb = document.querySelector('.mn3d-labels'); if (lb) lb.style.display = '';
+    if (c3) c3.style.cursor = MN.pending || MN.tool === 'person' || MN.tool === 'light' ? 'copy' : 'default';
     $('#mnModeBadge').textContent = '3D';
     $('#mnStageName').textContent = '立体布景';
     $('#mnStageSub').textContent = '左拖转视角 · 滚轮缩放 · 右键平移 · 双击聚焦';
