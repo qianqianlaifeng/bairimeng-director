@@ -122,15 +122,17 @@
      原来单位立方体顶点取 ±0.5×hw，等于把 hw 当全尺寸，而所有调用方（墙/道具/人物）
      都按半尺寸传，导致墙只有设计高度的 3/4 且离地悬空、道具整体缩水。
      现在顶点取 ±1×hw，语义与调用方一致。 */
-  function pushBox(g, hw, hh, hd, a, tx, ty, tz, col) {
+  function pushBox(g, hw, hh, hd, a, tx, ty, tz, col, loc) {
     const C = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]];
     const faces = [
       { n: [0, 0, 1], c: [4, 5, 6, 7] }, { n: [0, 0, -1], c: [1, 0, 3, 2] },
       { n: [1, 0, 0], c: [5, 1, 2, 6] }, { n: [-1, 0, 0], c: [0, 4, 7, 3] },
       { n: [0, 1, 0], c: [3, 2, 6, 7] }, { n: [0, -1, 0], c: [4, 5, 1, 0] }];
+    /* loc = 部件在「物体本地空间」里的偏移（会随 yaw 一起转，所以桌腿跟着桌子转） */
+    const lx = loc ? loc[0] : 0, ly = loc ? loc[1] : 0, lz = loc ? loc[2] : 0;
     for (const f of faces) {
       const wn = tfDir(a, f.n);
-      const wp = f.c.map(i => tfPoint(a, tx, ty, tz, [C[i][0] * hw, C[i][1] * hh, C[i][2] * hd]));
+      const wp = f.c.map(i => tfPoint(a, tx, ty, tz, [C[i][0] * hw + lx, C[i][1] * hh + ly, C[i][2] * hd + lz]));
       for (const k of [0, 1, 2, 0, 2, 3]) { const p = wp[k]; g.pos.push(p[0], p[1], p[2]); g.nrm.push(wn[0], wn[1], wn[2]); g.col.push(col[0], col[1], col[2]); }
     }
   }
@@ -221,14 +223,37 @@
     }
     for (const p of sc.props) {
       if (p.hidden) continue;
-      const col = material === 'random' ? hashColor(vi++) : hex2rgb(p.color || '#d9b382');
-      pushBox(g, (p.w || 1) / 2, (p.h || 1) / 2, (p.d || 1) / 2, 0, p.x + (p.w || 1) / 2, (p.h || 1) / 2, p.y + (p.d || 1) / 2, col);
+      /* ---------- 多部件建模：一张桌子 = 桌面 + 两条围板 + 四条腿 ---------- */
+      const KINDS = window.MN_PROP_KINDS;
+      const kind = (window.MN_kindOf ? window.MN_kindOf(p) : (p.kind || 'block'));
+      const K = KINDS && KINDS[kind];
+      const pw = Math.abs(+p.w || 1), pd = Math.abs(+p.d || 1), ph = Math.abs(+p.h || 1);
+      const ct = (window.MN_propCenter ? window.MN_propCenter(p) : { x: p.x + pw / 2, y: p.y + pd / 2 });
+      /* 3D 内部 yaw 是「俯视逆时针」，2D 平面图与白模预演是「俯视顺时针」；
+         在调用处取负，三端朝向才一致（rot=90 → 面向地图下方）。 */
+      const yaw = -((+p.rot || 0) * Math.PI) / 180;
+      const base = material === 'random' ? hashColor(vi++) : hex2rgb(p.color || (K && K.color) || '#d9b382');
+      const accent = material === 'random' ? base : hex2rgb((K && K.accent) || '#8d8f94');
+      const roleCol = c => c === 'dark' ? base.map(v => v * 0.58)
+        : c === 'light' ? base.map(v => Math.min(1, v + (1 - v) * 0.45))
+          : c === 'accent' ? accent : base;
+      if (K && K.parts) {
+        const sx = K.w ? pw / K.w : 1, sy = K.h ? ph / K.h : 1, sz = K.d ? pd / K.d : 1;
+        for (const pt of K.parts()) {
+          const hw = Math.max(0.004, pt.w * sx / 2), hh = Math.max(0.004, pt.h * sy / 2), hd = Math.max(0.004, pt.d * sz / 2);
+          pushBox(g, hw, hh, hd, yaw, ct.x, 0, ct.y, roleCol(pt.c),
+            [pt.x * sx, (pt.y * sy) + hh, pt.z * sz]);
+        }
+      } else {
+        pushBox(g, pw / 2, ph / 2, pd / 2, yaw, ct.x, 0, ct.y, base, [0, ph / 2, 0]);
+      }
     }
     for (const p of sc.persons) {
       if (p.hidden) continue;
       const col = material === 'random' ? hashColor(vi++) : hex2rgb(p.color || '#2e7cf6');
-      const a = ((p.rot || 0) * Math.PI) / 180, cx = p.x, cz = p.y;
-      const fd = a + ((p.faceDir || 0) * Math.PI) / 180;      // 头部朝向（相对身体）
+      /* 与 2D 平面图 / 白模预演统一：rot 是「俯视顺时针」，本引擎内部 yaw 是逆时针 → 取负 */
+      const a = -((p.rot || 0) * Math.PI) / 180, cx = p.x, cz = p.y;
+      const fd = a - ((p.faceDir || 0) * Math.PI) / 180;      // 头部朝向（相对身体）
       const fs = Math.min(1.8, Math.max(0.6, p.face || 1));   // 人脸大小也影响 3D 头
       const skin = [0.99, 0.93, 0.87], hair = col.map(v => v * 0.45), shoe = col.map(v => v * 0.7);
       const P0 = poseOf(p.pose);
@@ -291,6 +316,26 @@
       if (pts.length < 2) continue;
       for (let i = 1; i < pts.length; i++) paths.push(pts[i - 1].x, y + 0.03, pts[i - 1].y, pts[i].x, y + 0.03, pts[i].y);
     }
+    /* 选中物体：脚下画一圈高亮环 */
+    if (M._sel && state) {
+      const so = findObjById(state, M._sel.kind, M._sel.id);
+      if (so) {
+        let cx0 = so.x, cz0 = so.y, rad = 0.5;
+        if (M._sel.kind === 'prop') {
+          const b = (window.MN_propAABB ? window.MN_propAABB(so) : { x: so.x, y: so.y, w: +so.w || 1, d: +so.d || 1 });
+          cx0 = b.x + b.w / 2; cz0 = b.y + b.d / 2; rad = Math.max(b.w, b.d) / 2 + 0.18;
+        }
+        else if (M._sel.kind === 'person') rad = 0.5;
+        else if (M._sel.kind === 'light') { cx0 = so.x; cz0 = so.y; rad = 0.4; }
+        else if (M._sel.kind === 'room') { cx0 = so.x + so.w / 2; cz0 = so.y + so.d / 2; rad = Math.min(so.w, so.d) / 2 + 0.1; }
+        else if (M._sel.kind === 'wall') { cx0 = (so.x1 + so.x2) / 2; cz0 = (so.y1 + so.y2) / 2; rad = Math.hypot(so.x2 - so.x1, so.y2 - so.y1) / 2 + 0.2; }
+        const N = 28, yy = y + 0.05;
+        for (let i = 0; i < N; i++) {
+          const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2;
+          paths.push(cx0 + Math.cos(a0) * rad, yy, cz0 + Math.sin(a0) * rad, cx0 + Math.cos(a1) * rad, yy, cz0 + Math.sin(a1) * rad);
+        }
+      }
+    }
     return { grid: lp, paths };
   }
 
@@ -307,7 +352,10 @@
     const acc = (x0, z0, x1, z1) => { minX = Math.min(minX, x0); maxX = Math.max(maxX, x1); minZ = Math.min(minZ, z0); maxZ = Math.max(maxZ, z1); };
     sc.rooms.forEach(r => acc(r.x, r.y, r.x + r.w, r.y + r.d));
     sc.walls.forEach(w => acc(Math.min(w.x1, w.x2), Math.min(w.y1, w.y2), Math.max(w.x1, w.x2), Math.max(w.y1, w.y2)));
-    sc.props.forEach(p => acc(p.x, p.y, p.x + (p.w || 1), p.y + (p.d || 1)));
+    sc.props.forEach(p => {
+      const b = (window.MN_propAABB ? window.MN_propAABB(p) : { x: p.x, y: p.y, w: +p.w || 1, d: +p.d || 1 });
+      acc(b.x, b.y, b.x + b.w, b.y + b.d);
+    });
     sc.persons.forEach(p => acc(p.x - 0.6, p.y - 0.6, p.x + 0.6, p.y + 0.6));
     sc.lights.forEach(l => acc(l.x - 0.4, l.y - 0.4, l.x + 0.4, l.y + 0.4));
     if (!isFinite(minX)) { minX = 0; maxX = 14; minZ = 0; maxZ = 14; }
@@ -450,34 +498,161 @@
     return [eye[0] + dir[0] * t, eye[2] + dir[2] * t];
   }
 
+  /* 屏幕点 → 射线（原点到方向），供 3D 拾取使用 */
+  function rayFromScreen(cv, clientX, clientY) {
+    const rect = cv.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
+    const eye = eyeOf();
+    const zAxis = norm(sub(eye, [cam.tx, cam.ty, cam.tz]));
+    const upv = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
+    const xAxis = norm(cross(upv, zAxis));
+    const yAxis = cross(zAxis, xAxis);
+    const fwd = [-zAxis[0], -zAxis[1], -zAxis[2]];
+    const tanH = Math.tan((45 * Math.PI / 180) / 2);
+    const aspect = rect.width / rect.height;
+    return {
+      o: eye,
+      d: norm([
+        fwd[0] + xAxis[0] * ndcX * tanH * aspect + yAxis[0] * ndcY * tanH,
+        fwd[1] + xAxis[1] * ndcX * tanH * aspect + yAxis[1] * ndcY * tanH,
+        fwd[2] + xAxis[2] * ndcX * tanH * aspect + yAxis[2] * ndcY * tanH,
+      ]),
+    };
+  }
+  /* 射线 vs AABB（slab），返回最近命中距离或 null */
+  function rayAABB(o, d, b) {
+    let tmin = -Infinity, tmax = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const inv = 1 / (Math.abs(d[i]) < 1e-9 ? 1e-9 : d[i]);
+      let t1 = (b[i] - o[i]) * inv, t2 = (b[i + 3] - o[i]) * inv;
+      if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; }
+      tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+      if (tmin > tmax) return null;
+    }
+    if (tmax < 0) return null;
+    return tmin > 0 ? tmin : tmax;
+  }
+  /* 各类物体的包围盒 [x0,y0,z0,x1,y1,z1] */
+  function objBox(kind, o) {
+    if (kind === 'person') return [o.x - 0.32, 0, o.y - 0.32, o.x + 0.32, 1.78, o.y + 0.32];
+    if (kind === 'prop') {
+      /* 道具现在会真的转起来：拾取盒用旋转后的外接矩形，不然转 90° 后点不准 */
+      const b = (window.MN_propAABB ? window.MN_propAABB(o)
+        : { x: o.x, y: o.y, w: +o.w || 1, d: +o.d || 1 });
+      return [b.x, 0, b.y, b.x + b.w, +o.h || 1, b.y + b.d];
+    }
+    if (kind === 'wall') {
+      const th = (o.th || 0.2) / 2 + 0.08;
+      return [Math.min(o.x1, o.x2) - th, 0, Math.min(o.y1, o.y2) - th, Math.max(o.x1, o.x2) + th, o.h || 2.6, Math.max(o.y1, o.y2) + th];
+    }
+    if (kind === 'light') { const h = o.h || 2.5; return [o.x - 0.22, h - 0.22, o.y - 0.22, o.x + 0.22, h + 0.22, o.y + 0.22]; }
+    if (kind === 'room') return [o.x, 0, o.y, o.x + o.w, 0.07, o.y + o.d];
+    return null;
+  }
+  /* 拾取最近的可操作物体 */
+  function pick(state, cv, clientX, clientY) {
+    const r = rayFromScreen(cv, clientX, clientY); if (!r) return null;
+    const sc = state.scene, cands = [];
+    const add = (kind, arr) => (arr || []).forEach(o => {
+      if (o.hidden) return;
+      const b = objBox(kind, o); if (!b) return;
+      const t = rayAABB(r.o, r.d, b);
+      if (t != null) cands.push({ kind, id: o.id, t });
+    });
+    add('person', sc.persons); add('prop', sc.props); add('wall', sc.walls); add('light', sc.lights); add('room', sc.rooms);
+    if (!cands.length) return null;
+    cands.sort((a, b) => a.t - b.t);
+    return cands[0];
+  }
+
   function bindControls(cv) {
     let drag = null;
     cv.addEventListener('contextmenu', e => e.preventDefault());
-    cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, btn: e.button, moved: 0 }; });
+    cv.addEventListener('pointerdown', e => {
+      cv.setPointerCapture(e.pointerId);
+      const st = M._last;
+      const spaceHeld = !!(window.MN && window.MN.spaceDown);
+      const hit = (e.button === 0 && !spaceHeld && st && typeof M.onSelect === 'function') ? pick(st, cv, e.clientX, e.clientY) : null;
+      if (e.button === 0 && hit) {
+        /* 命中物体 → 拖动移动（记住抓取偏移，避免瞬移） */
+        const o = findObjById(st, hit.kind, hit.id);
+        const f = screenToFloor(cv, e.clientX, e.clientY);
+        drag = { mode: 'move', kind: hit.kind, id: hit.id, btn: 0, moved: 0, x: e.clientX, y: e.clientY,
+          offX: f ? (o.x != null ? o.x : 0) - f[0] : 0, offZ: f ? (o.y != null ? o.y : 0) - f[1] : 0, sx: e.clientX, sy: e.clientY };
+      } else {
+        drag = { mode: (e.button === 2 || spaceHeld) ? 'pan' : 'orbit', btn: e.button, moved: 0, x: e.clientX, y: e.clientY };
+      }
+    });
     cv.addEventListener('pointermove', e => {
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
       drag.moved += Math.abs(dx) + Math.abs(dy);
-      if (drag.btn === 2 || e.shiftKey) {
+      if (drag.mode === 'move') {
+        const st = M._last; if (!st) return;
+        const f = screenToFloor(cv, e.clientX, e.clientY); if (!f) return;
+        const o = findObjById(st, drag.kind, drag.id); if (!o) return;
+        const nx = f[0] + drag.offX, nz = f[1] + drag.offZ;
+        if (drag.kind === 'wall') {
+          const cx0 = (o.x1 + o.x2) / 2, cz0 = (o.y1 + o.y2) / 2;
+          const ddx = nx - cx0, ddz = nz - cz0;
+          o.x1 += ddx; o.x2 += ddx; o.y1 += ddz; o.y2 += ddz;
+          drag.offX = (o.x1 + o.x2) / 2 - f[0]; drag.offZ = (o.y1 + o.y2) / 2 - f[1];
+        } else {
+          o.x = nx; o.y = nz;
+        }
+        if (typeof M.onMove === 'function') M.onMove();
+        else if (M._last) draw(M._last);
+      } else if (drag.mode === 'pan' || e.shiftKey) {
+        cv.style.cursor = 'grabbing';
         const eye = eyeOf(), view = lookAt(eye, [cam.tx, cam.ty, cam.tz], [0, 1, 0]);
         const right = [view[0], view[4], view[8]], upv = [view[1], view[5], view[9]], k = cam.r * 0.0016;
         cam.tx -= (right[0] * dx - upv[0] * dy) * k; cam.ty -= (right[1] * dx - upv[1] * dy) * k; cam.tz -= (right[2] * dx - upv[2] * dy) * k;
-      } else if (drag.btn === 0) { cam.theta -= dx * 0.01; cam.phi = Math.max(0.02, Math.min(1.52, cam.phi - dy * 0.01)); }
-      if (M._last) draw(M._last);
+        if (M._last) draw(M._last);
+      } else {
+        cam.theta -= dx * 0.01; cam.phi = Math.max(0.02, Math.min(1.52, cam.phi - dy * 0.01));
+        if (M._last) draw(M._last);
+      }
     });
     const end = e => {
       if (!drag) return;
-      const wasClick = drag.btn === 0 && drag.moved < 5;   // 没拖动 = 单击
+      const d0 = drag; drag = null;
       try { cv.releasePointerCapture(e.pointerId); } catch (_) { }
-      drag = null;
-      if (wasClick && typeof M.onPlace === 'function') {
-        const hit = screenToFloor(cv, e.clientX, e.clientY);
-        if (hit) M.onPlace(hit[0], hit[1]);
+      cv.style.cursor = '';
+      const wasClick = d0.moved < 5;
+      const st = M._last;
+      if (d0.mode === 'move') {
+        if (typeof M.onMoveEnd === 'function') M.onMoveEnd();
+        if (wasClick && typeof M.onSelect === 'function') M.onSelect(d0.kind, d0.id);
+        return;
+      }
+      if (d0.btn === 2 && wasClick) {
+        /* 右键单击：命中物体 → 弹菜单；空白 → 空白菜单 */
+        const hit = st ? pick(st, cv, e.clientX, e.clientY) : null;
+        if (typeof M.onContext === 'function') M.onContext(hit ? hit.kind : null, hit ? hit.id : null, e.clientX, e.clientY);
+        return;
+      }
+      if (d0.btn === 0 && wasClick) {
+        const hit = st ? pick(st, cv, e.clientX, e.clientY) : null;
+        if (hit) { if (typeof M.onSelect === 'function') M.onSelect(hit.kind, hit.id); return; }
+        /* 空白处单击：放置模式优先，否则取消选中 */
+        if (typeof M.onPlace === 'function') {
+          const f = screenToFloor(cv, e.clientX, e.clientY);
+          if (f && typeof M.isPlacing === 'function' && M.isPlacing()) { M.onPlace(f[0], f[1]); return; }
+        }
+        if (typeof M.onSelect === 'function') M.onSelect(null, null);
       }
     };
     cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
     cv.addEventListener('wheel', e => { e.preventDefault(); cam.r = Math.max(4, Math.min(120, cam.r * (1 + (e.deltaY > 0 ? 0.1 : -0.1)))); if (M._last) draw(M._last); }, { passive: false });
     cv.addEventListener('dblclick', () => { frame(); if (M._last) draw(M._last); });
+  }
+  /* 按 kind/id 找对象 */
+  function findObjById(state, kind, id) {
+    const sc = state && state.scene; if (!sc) return null;
+    const arr = kind === 'person' ? sc.persons : kind === 'prop' ? sc.props : kind === 'wall' ? sc.walls : kind === 'light' ? sc.lights : kind === 'room' ? sc.rooms : null;
+    return (arr || []).find(o => o.id === id) || null;
   }
 
   /* ---------- 公共 API ---------- */
@@ -496,5 +671,6 @@
   M.setCamera = function (c) { if (!c) return; cam.theta = c.theta; cam.phi = c.phi; cam.r = c.r; cam.tx = c.tx; cam.ty = (c.ty != null ? c.ty : 1.5); cam.tz = c.tz; cam.inited = true; if (M._last) draw(M._last); };
   M.capture = function () { if (!gl) return null; if (M._last) draw(M._last); try { return canvas.toDataURL('image/png'); } catch (e) { return null; } };
   M._debugGeo = function (state) { return buildGeo(state); };
+  M.setSel = function (s) { M._sel = s; if (M._last) draw(M._last); };
   M._reset = function () { cam.inited = false; };
 })();
