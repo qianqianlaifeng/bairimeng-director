@@ -198,6 +198,45 @@
   function fitR() { return Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) * 0.9 + 8; }
   function frame() { cam.tx = (bounds.minX + bounds.maxX) / 2; cam.tz = (bounds.minZ + bounds.maxZ) / 2; cam.ty = 1.5; cam.r = fitR(); }
 
+  /* ---------- 人物头顶名牌（DOM 覆盖层，按 VP 矩阵实时投影） ---------- */
+  let labelLayer = null;
+  function ensureLabelLayer() {
+    if (labelLayer && labelLayer.isConnected) return labelLayer;
+    const host = canvas && canvas.parentElement;
+    if (!host) return null;
+    labelLayer = document.createElement('div');
+    labelLayer.className = 'mn3d-labels';
+    host.appendChild(labelLayer);
+    return labelLayer;
+  }
+  function projToScreen(vp, x, y, z) {
+    const cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
+    if (cw <= 0.02) return null;  // 在相机背后
+    const cx = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
+    const cy = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
+    return { x: (cx / cw * 0.5 + 0.5) * canvas.clientWidth, y: (1 - (cy / cw * 0.5 + 0.5)) * canvas.clientHeight };
+  }
+  function updateLabels(state, vp) {
+    const layer = ensureLabelLayer();
+    if (!layer) return;
+    const on = state.view && state.view.mode === '3d';
+    layer.style.display = on ? '' : 'none';
+    if (!on) return;
+    const persons = (state.scene.persons || []).filter(p => !p.hidden && (p.name || '').trim());
+    while (layer.children.length > persons.length) layer.removeChild(layer.lastChild);
+    persons.forEach((p, i) => {
+      let el = layer.children[i];
+      if (!el) { el = document.createElement('div'); el.className = 'mn3d-label'; layer.appendChild(el); }
+      const sp = projToScreen(vp, p.x, 1.55, p.y);  // 头顶略上方
+      if (!sp) { el.style.display = 'none'; return; }
+      el.style.display = '';
+      if (el.textContent !== p.name) el.textContent = p.name;
+      el.style.left = sp.x.toFixed(1) + 'px';
+      el.style.top = sp.y.toFixed(1) + 'px';
+      el.style.setProperty('--lb', p.color || '#2e7cf6');
+    });
+  }
+
   /* ---------- 绘制 ---------- */
   function draw(state) {
     if (!gl) return;
@@ -246,6 +285,9 @@
     gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, 'uVP'), false, new Float32Array(vp));
     gl.uniform3fv(gl.getUniformLocation(lineProg, 'uCol'), new Float32Array(dark ? [0.30, 0.28, 0.25] : [0.62, 0.58, 0.50]));
     gl.drawArrays(gl.LINES, 0, lp.length / 3);
+
+    /* 人物名牌：DOM 覆盖层跟随相机（2D 模式自动隐藏） */
+    updateLabels(state, vp);
   }
 
   /* ---------- 交互 ---------- */

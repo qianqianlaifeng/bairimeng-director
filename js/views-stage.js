@@ -177,6 +177,8 @@ export function renderPreview(container, payload = {}) {
   const p = store.active;
   const initShot = payload?.shotId ? p?.shots.find(s => s.id === payload.shotId) : null;
   let curMove = initShot?.cameraMove || 'slowPush';
+  /* 本镜如果在场景搭建里搭过，预演默认直接用搭好的场景（而不是通用白模舞台） */
+  const builtScene = (initShot && initShot.scene && typeof initShot.scene === 'object' && Array.isArray(initShot.scene.objects)) ? initShot.scene : null;
 
   container.innerHTML = `
     <div class="page-head">
@@ -213,7 +215,10 @@ export function renderPreview(container, payload = {}) {
         <div class="card">
           <div class="card-title">舞台设置</div>
           <div class="form-row"><label>人物动作</label><select id="pvAction" class="input">${opts(ACTOR_ACTIONS, 'stand')}</select></div>
-          <div class="form-row"><label>布景</label><select id="pvScene" class="input">${opts(STAGE_SCENES, 'plain')}</select></div>
+          <div class="form-row"><label>布景</label><select id="pvScene" class="input">
+            ${builtScene ? '<option value="__shot__" selected>🏗 本镜场景（搭建）</option>' : ''}
+            ${opts(STAGE_SCENES, builtScene ? '' : 'plain')}
+          </select></div>
           <div class="form-row"><label>景别（真实距离）</label><select id="pvSize" class="input">${opts(SHOT_SIZES, 'MS')}</select></div>
           <div class="form-row"><label>拍摄角度（直观可见）</label><select id="pvAngle" class="input">${opts(ANGLES, 'eye')}</select></div>
           <div class="form-row"><label>看向高度（拍哪里）</label><select id="pvAim" class="input">
@@ -284,7 +289,8 @@ export function renderPreview(container, payload = {}) {
     setLabel();
     player.speed = +container.querySelector('#pvSpeed').value;
     const action = container.querySelector('#pvAction').value;
-    const scene = container.querySelector('#pvScene').value;
+    const sceneV = container.querySelector('#pvScene').value;
+    const scene = sceneV === '__shot__' ? builtScene : sceneV;
     const dur = +container.querySelector('#pvDur').value;
     const aimV = container.querySelector('#pvAim').value, camHV = container.querySelector('#pvCamH').value;
     player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value, size: container.querySelector('#pvSize').value, aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV });
@@ -322,7 +328,7 @@ export function renderPreview(container, payload = {}) {
     const aimV = container.querySelector('#pvAim').value, camHV = container.querySelector('#pvCamH').value;
     player.seek(mv.sim, t, {
       action: container.querySelector('#pvAction').value,
-      scene: container.querySelector('#pvScene').value,
+      scene: (() => { const v = container.querySelector('#pvScene').value; return v === '__shot__' ? builtScene : v; })(),
       duration: +durInput.value,
       angle: container.querySelector('#pvAngle').value,
       moveSpeed: container.querySelector('#pvMoveSpeed').value,

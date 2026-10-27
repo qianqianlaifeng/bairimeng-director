@@ -493,6 +493,26 @@ export function openShotEditor(shot, idx) {
           <div class="form-row"><label>角度</label><select id="edAngle" class="input">${opts(ANGLES, shot.angle)}</select></div>
         </div>
         <div class="editor-3col">
+          <div class="form-row"><label>看向高度</label><select id="edAim" class="input">
+            <option value="auto" ${!shot.aimY ? 'selected' : ''}>自动（跟景别）</option>
+            <option value="1.66" ${shot.aimY == 1.66 ? 'selected' : ''}>脸 · 1.66m</option>
+            <option value="1.45" ${shot.aimY == 1.45 ? 'selected' : ''}>眼 · 1.45m</option>
+            <option value="1.30" ${shot.aimY == 1.3 ? 'selected' : ''}>胸 · 1.30m</option>
+            <option value="1.00" ${shot.aimY == 1.0 ? 'selected' : ''}>腰 · 1.00m</option>
+            <option value="0.75" ${shot.aimY == 0.75 ? 'selected' : ''}>膝 · 0.75m</option>
+            <option value="0.15" ${shot.aimY == 0.15 ? 'selected' : ''}>地面 · 0.15m</option>
+          </select></div>
+          <div class="form-row"><label>机位高度</label><select id="edCamH" class="input">
+            <option value="auto" ${!shot.camH ? 'selected' : ''}>自动（跟运镜）</option>
+            <option value="0.5" ${shot.camH == 0.5 ? 'selected' : ''}>低机位 · 0.5m</option>
+            <option value="1.2" ${shot.camH == 1.2 ? 'selected' : ''}>腰平 · 1.2m</option>
+            <option value="1.7" ${shot.camH == 1.7 ? 'selected' : ''}>眼平 · 1.7m</option>
+            <option value="2.6" ${shot.camH == 2.6 ? 'selected' : ''}>高机位 · 2.6m</option>
+            <option value="4.5" ${shot.camH == 4.5 ? 'selected' : ''}>俯视 · 4.5m</option>
+          </select></div>
+          <div></div>
+        </div>
+        <div class="editor-3col">
           <div class="form-row"><label>时长（秒）</label><input id="edDur" class="input" type="number" min="1" max="20" step="0.5" value="${shot.duration}"></div>
           <div class="form-row"><label>转场（到下一镜）</label><select id="edTrans" class="input">${opts(TRANSITIONS, shot.transition, t => t.icon + ' ' + t.name)}</select></div>
           <div class="form-row"><label>运镜速度</label><select id="edSpeed" class="input">
@@ -543,7 +563,8 @@ export function openShotEditor(shot, idx) {
     const loopFn = (now) => {
       if (!document.body.contains(cv)) return;
       const t = Math.min(1, (now - t0) / dur);
-      renderer.render(mv.sim, t, action, { duration: dur / 1000, hud: true, letterbox: true, angle: m.body.querySelector('#edAngle').value, moveSpeed: m.body.querySelector('#edSpeed').value, size: m.body.querySelector('#edSize').value, scene: shot.scene });
+      const aimV = m.body.querySelector('#edAim')?.value ?? 'auto', camHV = m.body.querySelector('#edCamH')?.value ?? 'auto';
+      renderer.render(mv.sim, t, action, { duration: dur / 1000, hud: true, letterbox: true, angle: m.body.querySelector('#edAngle').value, moveSpeed: m.body.querySelector('#edSpeed').value, size: m.body.querySelector('#edSize').value, scene: shot.scene, aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV });
       if (t < 1) player.raf = requestAnimationFrame(loopFn);
       else setTimeout(() => { if (document.body.contains(cv)) playMove(); }, 600);
     };
@@ -646,12 +667,16 @@ export function openShotEditor(shot, idx) {
   m.body.querySelector('#edCopy').onclick = () => copyText(m.body.querySelector('#edPrompt').value);
 
   function readForm() {
+    const aimV = m.body.querySelector('#edAim')?.value ?? 'auto';
+    const camHV = m.body.querySelector('#edCamH')?.value ?? 'auto';
     return {
       desc: m.body.querySelector('#edDesc').value.trim(),
       dialogue: m.body.querySelector('#edDlg').value.trim(),
       cameraMove: m.body.querySelector('#edMove').value,
       shotSize: m.body.querySelector('#edSize').value,
       angle: m.body.querySelector('#edAngle').value,
+      aimY: aimV === 'auto' ? null : +aimV,
+      camH: camHV === 'auto' ? null : +camHV,
       duration: clampNum(+m.body.querySelector('#edDur').value || 3, 1, 20),
       transition: m.body.querySelector('#edTrans').value,
       moveSpeed: m.body.querySelector('#edSpeed').value,

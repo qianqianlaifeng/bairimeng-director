@@ -148,6 +148,20 @@
 /* ---- 舞台 ---- */
 .mn-stage{flex:1;min-width:0;position:relative;overflow:hidden;background:var(--canvas)}
 .mn-stage canvas.mn-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+/* 常驻快捷按钮（放人物 / 放光源 / 物件库） */
+.mn-quickadd{display:flex;gap:6px;padding:8px 10px 0}
+.mn-quickadd .mn-chip{flex:1;justify-content:center;font-size:12px}
+/* 3D 人物头顶名牌（DOM 覆盖层，由 miaoning3d.js 按相机投影定位） */
+.mn3d-labels{position:absolute;inset:0;pointer-events:none;z-index:4;overflow:hidden}
+.mn3d-label{position:absolute;transform:translate(-50%,-100%);white-space:nowrap;
+  font-size:11px;line-height:1.6;padding:1px 7px;border-radius:5px;
+  background:rgba(24,26,32,.74);color:#fff;border-left:3px solid var(--lb,#2e7cf6);
+  box-shadow:0 2px 8px rgba(0,0,0,.28);letter-spacing:.02em;font-weight:600}
+/* 人物自定义取色 */
+.mn-color-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.mn-color{width:56px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--soft);cursor:pointer}
+.mn-color::-webkit-color-swatch-wrapper{padding:2px}
+.mn-color::-webkit-color-swatch{border:none;border-radius:4px}
 .mn-stage-topbar{position:absolute;top:20px;left:20px;right:20px;display:flex;align-items:flex-start;
   justify-content:space-between;pointer-events:none;z-index:5}
 .mn-stage-label{display:flex;align-items:center;gap:10px;background:var(--floating);backdrop-filter:blur(8px);

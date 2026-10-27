@@ -1,4 +1,5 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.11.2（2026-10-27）：人物命名 + 自定义取色 + 3D 头顶名牌；常驻「＋人物/＋光源/物件库」；连续放置不再抢占选中；Esc 一律取消选中。
    v1.11.1（2026-10-26）：全站换年轻化蓝调主题（晴空蓝 #2e7cf6），画布/3D/人物默认色同步。
    v1.11.0（2026-10-26）：右键菜单 / 右键平移 / 框选多选 / 物件库 / 对齐参考线 / 撤销粒度修复。
    v1.10.28：仿 B 站玩具页 MiorningDYT（v0.6.17）原生重制 —— M1 里程碑：
@@ -323,6 +324,7 @@ function setMode(mode) {
   if (mode === '3d') {
     if (c2) c2.style.display = 'none';
     if (c3) c3.style.display = 'block';
+    const lb = document.querySelector('.mn3d-labels'); if (lb) lb.style.display = '';
     $('#mnModeBadge').textContent = '3D';
     $('#mnStageName').textContent = '立体布景';
     $('#mnStageSub').textContent = '左拖转视角 · 滚轮缩放 · 右键平移 · 双击聚焦';
@@ -331,6 +333,7 @@ function setMode(mode) {
   } else {
     if (c3) c3.style.display = 'none';
     if (c2) c2.style.display = 'block';
+    const lb = document.querySelector('.mn3d-labels'); if (lb) lb.style.display = 'none';
     $('#mnModeBadge').textContent = '2D';
     $('#mnStageName').textContent = '空间草图';
     $('#mnStageSub').textContent = '先让故事有个地方待着。';
@@ -684,6 +687,11 @@ function renderRight() {
   else if (tab === 'sun') body = renderSunPanel();
   else body = renderGroundPanel();
   box.innerHTML = `
+    <div class="mn-quickadd">
+      <button class="mn-chip" data-quick="person">＋ 人物</button>
+      <button class="mn-chip" data-quick="light">＋ 光源</button>
+      <button class="mn-chip" data-quick="lib">物件库</button>
+    </div>
     <div class="mn-panel-tabs">
       <button class="${tab === 'obj' ? 'active' : ''}" data-tab="obj">物体</button>
       <button class="${tab === 'sun' ? 'active' : ''}" data-tab="sun">光影</button>
@@ -708,6 +716,14 @@ function renderRight() {
     <div class="mn-sc-row"><span>平移画布</span><kbd class="mn-kbd">空格 + 拖动</kbd></div>
     <div class="mn-sc-row" style="margin-bottom:14px"><span>反悔</span><kbd class="mn-kbd">Ctrl + Z</kbd></div>`;
   $$('[data-tab]', box).forEach(b => b.onclick = () => { MN._tab = b.dataset.tab; renderRight(); });
+  /* 常驻快捷按钮：不用先取消选中也能直接放人物/光源、回物件库 */
+  $$('[data-quick]', box).forEach(b => b.onclick = () => {
+    const q = b.dataset.quick;
+    if (q === 'lib') { MN.pending = null; clearSel(); refreshSel(); return; }
+    MN.pending = { kind: q, preset: { name: q === 'person' ? '人物' : '光源', w: 0.9, d: 0.9, color: '' } };
+    clearSel(); refreshSel();
+    toast(q === 'person' ? '在画布上点一下放人物（可连点）' : '在画布上点一下放光源（可连点）');
+  });
   const cam = MN.state.camera;
   $('#mnCamSize').onchange = e => { cam.size = e.target.value; saveSoon(); };
   $('#mnCamFrame').onchange = e => { cam.frame = e.target.checked; paint(); saveSoon(); };
@@ -775,11 +791,13 @@ function renderObjPanel() {
       <button class="mn-chip" data-act="rotate">${icon('rotate-3d', 's12')}旋转</button>
       <button class="mn-chip" data-act="scale">${icon('scan-line', 's12')}缩放</button>
     </div>
+    <label class="mn-field"><span>人物名称</span><input type="text" data-f="name" value="${esc(o.name || '')}" placeholder="给这个角色起个名字（3D 里显示在头顶）" /></label>
     <label class="mn-field"><span>人物姿态</span>
       <select data-f="pose">${['站立', '走路', '坐下', '招手', '躺下', '运动'].map(p => `<option ${o.pose === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
     </label>
     <label class="mn-field"><span>人脸大小<strong>${o.face || 1} 倍</strong></span><input type="range" class="mn-range" data-f="face" min="0.5" max="2" step="0.1" value="${o.face || 1}" /></label>
     <label class="mn-field"><span>人物颜色</span></label>${swatches(PERSON_COLORS, o.color, 'color')}
+    <label class="mn-field mn-color-row"><span>自定义颜色</span><input type="color" class="mn-color" data-f="color" value="${o.color || '#2e7cf6'}" /></label>
     <div class="mn-num3">
       <label class="mn-field"><span>位置 X</span><input type="number" step="0.5" data-f="x" value="${o.x}" /></label>
       <label class="mn-field"><span>位置 Y</span><input type="number" step="0.5" data-f="y" value="${o.y}" /></label>
@@ -978,7 +996,13 @@ function resizeCanvas() {
 let paintRaf = null;
 function paint() {
   if (paintRaf) return;
-  paintRaf = requestAnimationFrame(() => { paintRaf = null; doPaint(); });
+  paintRaf = requestAnimationFrame(() => {
+    paintRaf = null; doPaint();
+    /* 3D 模式下同步重绘（改颜色/改名/移动要立刻在立体视图里看到） */
+    if (MN.state && MN.state.view.mode === '3d' && window.MN3D && MN3D.ok) {
+      try { MN3D.render(MN.state); } catch (e) { }
+    }
+  });
 }
 function doPaint() {
   if (!cv || !ctx || !MN.state) return;
@@ -1264,16 +1288,18 @@ function objectsInRect(x0, y0, x1, y1) {
 function placePending(wx, wy) {
   const p = MN.pending; if (!p) return;
   pushUndo();
+  /* 放置后「不选中」新物体：右侧继续留在物件库，方便接着换下一个预设连放
+     （之前会选中刚放的东西，物件库被属性面板顶掉，想再放别的东西就点不到了） */
   if (p.kind === 'person') {
     const o = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: snap(wx), y: snap(wy), rot: 0, color: p.preset.color || '#2e7cf6', pose: '站立', face: 1, faceDir: 0, jump: 0 };
-    MN.state.scene.persons.push(o); selectOnly('person', o.id);
+    MN.state.scene.persons.push(o);
   } else if (p.kind === 'light') {
     const o = { id: uid(), name: '光源 ' + (MN.state.scene.lights.length + 1), x: snap(wx), y: snap(wy), color: '#ffe9b0', intensity: 1, h: 2.5 };
-    MN.state.scene.lights.push(o); selectOnly('light', o.id);
+    MN.state.scene.lights.push(o);
   } else {
     const pr = p.preset;
     const o = { id: uid(), name: pr.name, x: snap(wx - pr.w / 2), y: snap(wy - pr.d / 2), w: pr.w, d: pr.d, h: pr.h, color: pr.color || '' };
-    MN.state.scene.props.push(o); selectOnly('prop', o.id);
+    MN.state.scene.props.push(o);
   }
   renderAll(); saveSoon();
 }
@@ -2018,7 +2044,7 @@ function onKeyDown(e) {
   if (e.key === 'Escape') {
     if ($('.mn-modal-back')) { closeModal(); return; }
     if ($('#mnCtx')) { closeCtx(); return; }
-    if (MN.pending) { MN.pending = null; renderRight(); paint(); toast('退出放置'); return; }
+    if (MN.pending) { MN.pending = null; clearSel(); refreshSel(); toast('退出放置'); return; }
     if (MN.immersive) { toggleImmersive(); return; }
     if (MN.wallDraft) { MN.wallDraft = null; paint(); return; }
     if (selList().length) { clearSel(); refreshSel(); return; }

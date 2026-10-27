@@ -54,6 +54,8 @@ function newShot(partial = {}) {
     image: null,        // IndexedDB key（参考图）
     sketch: null,       // IndexedDB key（手绘分镜稿）
     moveSpeed: 'std',   // 运镜速度 slow/std/fast
+    aimY: null,         // 看向高度（m，null=自动跟景别）：1.66 脸 / 1.45 眼 / 1.3 胸 …
+    camH: null,         // 机位高度（m，null=自动跟运镜）：0.5 低机位 / 1.7 眼平 / 4.5 俯视
     scene: null,        // 场景搭建 {objects:[], cam:}
     mnState: null,      // 导演台原生场景快照（房间/墙/道具，重开时无损还原）
     note: '',

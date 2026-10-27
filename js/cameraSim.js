@@ -444,6 +444,17 @@ function solveCamera(sim, t, actor, opts = {}) {
     cam._tgt = tg;
     reaim(tg);   // 只调整取景距离/高度，保留 pan/tilt 的角偏移
     if (cfg.fov) cam.fov = cfg.fov;
+    /* 头部保帧：镜头推得越近画框越小，瞄准点自动向头部抬（头顶≈1.8m、脸≈1.66m），
+     * 否则近距离下脸会从画框上沿出画——表现为「推镜只拍到上半身」。
+     * 画框半高 hh = 距离×tan(fov/2)，要求 画框上沿 = 瞄准点+hh ≥ 1.8m。 */
+    const distNow = Math.hypot(cam.pos[0] - tg[0], cam.pos[1] - tg[1], cam.pos[2] - tg[2]) || 0.6;
+    const hh = distNow * Math.tan(((cam.fov || 55) * DEG) / 2);
+    const wantAim = Math.min(1.66, Math.max(aimY, 1.8 - hh));
+    if (wantAim > aimY + 0.01) {
+      const tg2 = [tg[0], wantAim, tg[2]];
+      cam._tgt = tg2;
+      reaim(tg2);
+    }
   }
 
   /* 角度叠加：在运镜机位基础上抬高/压低/偏移/转屏 */
@@ -596,6 +607,9 @@ class WhiteModelRenderer {
       .map(o => ({ ...o, x: +o.x || 0, z: +o.z || 0, rot: +o.rot || 0, scale: Math.min(3, Math.max(0.3, +o.scale || 1)) }))
       .filter(o => isFinite(o.x) && isFinite(o.z));
     const sceneActors = objs.filter(o => o.type === 'actor');
+    /* 用户搭建的场景（对象形式的 opts.scene）里没摆人物 → 空镜，
+     * 不再硬塞默认白模人；只有通用舞台（street/room/stage 字符串布景）才保留默认演员 */
+    const builtScene = opts.scene != null && typeof opts.scene === 'object';
     let actorDefs = sceneActors.length
       ? sceneActors.map((o, i) => {
           let x = o.x, z = o.z, yaw = (o.rot || 0) * DEG;
@@ -611,7 +625,7 @@ class WhiteModelRenderer {
             pose: { phase: t * Math.PI * 6 * (o.action === 'run' ? 1.7 : 1) + i * 1.7, walk: moving ? (o.action === 'run' ? 0.95 : 0.55) : 0, sit: o.action === 'sit' },
           };
         })
-      : [{ x: actor.x, z: actor.z, yaw: actor.yaw, scale: 1, pose: { phase: actor.phase, walk: actor.walk, sit: actor.sit } }];
+      : (builtScene ? [] : [{ x: actor.x, z: actor.z, yaw: actor.yaw, scale: 1, pose: { phase: actor.phase, walk: actor.walk, sit: actor.sit } }]);
     if (opts.angle === 'ots' && !(opts.hideActor || sim.type === 'pov')) {
       const fx0 = (cam._tgt ? cam._tgt[0] - cam.pos[0] : 0), fz0 = (cam._tgt ? cam._tgt[2] - cam.pos[2] : -1);
       const fl = Math.hypot(fx0, fz0) || 1;

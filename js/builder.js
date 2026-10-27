@@ -67,7 +67,7 @@ function shotSceneToMn(scene, shot) {
       st.scene.persons.push({
         id: uid(), name: '人物', x: o.x, y: o.z,
         rot: ((90 - (+o.rot || 0)) % 360 + 360) % 360,
-        color: '#2e7cf6', pose: P2A[o.action] || '站立', face: 1, faceDir: 0, jump: 0, hidden: false,
+        color: o.color || '#2e7cf6', pose: P2A[o.action] || '站立', face: 1, faceDir: 0, jump: 0, hidden: false,
       });
     }
   }
@@ -108,13 +108,27 @@ function mnToShotScene(st) {
   });
   (sc.props || []).forEach(p => {
     if (p.hidden) return;
-    const s = Math.min(3, Math.max(0.3, Math.max(+p.w || 1, +p.d || 1, +p.h || 1) / 0.8));
-    push({ type: 'prop', shape: 'box', x: (+p.x || 0) + (+p.w || 1) / 2, z: (+p.y || 0) + (+p.d || 1) / 2, rot: 0, scale: s });
+    const w = Math.max(0.05, +p.w || 1), d = Math.max(0.05, +p.d || 1), h = Math.max(0.05, +p.h || 1);
+    /* 按长宽高比例认回原始形状：桌/沙发/门/窗/树/柱 —— 预演时还原真实家具，
+     * 否则所有造物一律渲染成方块，「用场景预演」等于白搭 */
+    const CAND = [
+      ['door', 1.24, 0.3, 2.1], ['window', 2.4, 0.3, 2.4], ['table', 1.3, 0.85, 0.75],
+      ['sofa', 1.6, 0.85, 0.78], ['pillar', 0.4, 0.4, 2.4], ['tree', 1.2, 1.2, 2.8], ['lamp', 0.3, 0.3, 2.0],
+    ];
+    let best = null, bestErr = Infinity;
+    for (const [shape, cw, cd, ch] of CAND) {
+      const err = (Math.abs(w - cw) + Math.abs(d - cd) + Math.abs(h - ch)) / (cw + cd + ch);
+      if (err < bestErr) { bestErr = err; best = [shape, cw]; }
+    }
+    const shape = (bestErr < 0.3) ? best[0] : 'box';
+    const base = shape === 'box' ? 0.8 : best[1];
+    const s = Math.min(3, Math.max(0.3, w / base));
+    push({ type: 'prop', shape, x: (+p.x || 0) + w / 2, z: (+p.y || 0) + d / 2, rot: 0, scale: s });
   });
   (sc.persons || []).forEach(pe => {
     if (pe.hidden) return;
     const A2P = { '站立': 'stand', '走路': 'walk', '运动': 'walk', '坐下': 'sit', '招手': 'stand', '躺下': 'sit' };
-    push({ type: 'actor', x: +pe.x || 0, z: +pe.y || 0, rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: 1, action: A2P[pe.pose] || 'stand' });
+    push({ type: 'actor', x: +pe.x || 0, z: +pe.y || 0, rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: 1, action: A2P[pe.pose] || 'stand', color: pe.color || '#2e7cf6', name: pe.name || '' });
   });
   (sc.lights || []).forEach(l => {
     if (l.hidden) return;

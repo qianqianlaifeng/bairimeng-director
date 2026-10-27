@@ -144,8 +144,8 @@ export function renderAnimatic(container) {
     } else {
       canvas.style.display = '';
       imgEl.style.display = 'none';
-      if (s.scene?.floor) renderer.setTheme({ ground: s.scene.floor });
-      renderer.render(mv.sim, t, 'stand', { duration: s.duration, hud: false, letterbox: true, angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize, scene: s.scene });
+      renderer.setTheme({ ground: (s.scene && s.scene.floor) || '#d9dde5' });
+      renderer.render(mv.sim, t, 'stand', { duration: s.duration, hud: false, letterbox: true, angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize, scene: s.scene, aimY: s.aimY ?? undefined, camH: s.camH ?? undefined });
     }
     /* 转场淡入 */
     if (transitionAlpha > 0.001) {
