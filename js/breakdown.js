@@ -71,6 +71,7 @@ function localBreakdown(script, opts = {}) {
     moveIdx++;
     shots.push({
       title: sceneLabel ? `${sceneLabel}·${shots.length + 1}` : '',
+      sceneKey: sceneLabel || '',
       desc: partial.desc,
       dialogue: partial.dialogue || '',
       duration: partial.duration || estDuration(partial.desc, partial.dialogue),
