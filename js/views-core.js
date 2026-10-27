@@ -463,7 +463,7 @@ export function openShotEditor(shot, idx) {
         <div class="editor-stage-opts">
           <label class="dim">人物动作</label>
           <select id="edAction" class="input">${opts(ACTOR_ACTIONS, 'stand')}</select>
-          <label class="dim">布景</label>
+          <label class="dim">布景预设</label>
           <select id="edScene" class="input">${opts(STAGE_SCENES, 'plain')}</select>
           <button class="btn btn-magic btn-sm" id="edSceneBtn">🏗 场景搭建</button>
         </div>
@@ -520,6 +520,15 @@ export function openShotEditor(shot, idx) {
             <option value="std" ${(!shot.moveSpeed || shot.moveSpeed === 'std') ? 'selected' : ''}>标准</option>
             <option value="fast" ${shot.moveSpeed === 'fast' ? 'selected' : ''}>快 · 有力</option>
           </select></div>
+        </div>
+        <div class="form-row"><label>场景（场景库 · 一套景可多镜复用）</label>
+          <div style="display:flex;gap:6px">
+            <select id="edSceneLib" class="input">
+              <option value="">不用场景库（本镜独立）</option>
+              ${(store.scenes || []).map(it => `<option value="${it.id}" ${shot.sceneId === it.id ? 'selected' : ''}>${esc(it.name)}${shot.sceneId === it.id ? ' · 使用中' : ''}</option>`).join('')}
+            </select>
+            <button class="btn btn-ghost btn-sm" id="edSceneBuild" title="打开场景搭建">🏗 搭建</button>
+          </div>
         </div>
         <div class="form-row">
           <label>提示词 <span class="dim">（喂给 AI 视频/图片工具的成品句）</span></label>
@@ -596,6 +605,28 @@ export function openShotEditor(shot, idx) {
     imgEl.style.display = 'none'; imgDel.style.display = '';
     cv.style.display = '';
     playMove();
+  };
+
+  /* 场景库：一键套用 / 直达搭建 */
+  const sceneSel = m.body.querySelector('#edSceneLib');
+  if (sceneSel) sceneSel.onchange = () => {
+    const id = sceneSel.value;
+    if (!id) { store.updateShot(shot.id, { sceneId: null }); shot.sceneId = null; return; }
+    const n = store.applySceneToShots(id, [shot.id]);
+    const s2 = store.active.shots.find(x => x.id === shot.id);
+    if (s2) { shot.scene = s2.scene; shot.sceneId = s2.sceneId; shot.cameraMove = s2.cameraMove; }
+    toast(n ? '已套用场景库里的景' : '套用失败', n ? 'ok' : 'warn');
+    playMove();
+  };
+  const sceneBuildBtn = m.body.querySelector('#edSceneBuild');
+  if (sceneBuildBtn) sceneBuildBtn.onclick = async () => {
+    const { openSceneBuilder } = await import('./builder.js');
+    const s2 = store.active.shots.find(x => x.id === shot.id) || shot;
+    openSceneBuilder(s2, () => {
+      const s3 = store.active.shots.find(x => x.id === shot.id);
+      if (s3) { shot.scene = s3.scene; shot.sceneId = s3.sceneId; shot.cameraMove = s3.cameraMove; }
+      playMove();
+    });
   };
 
   /* 手绘分镜稿画板 */
