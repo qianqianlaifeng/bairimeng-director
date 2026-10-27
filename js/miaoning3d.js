@@ -280,12 +280,18 @@
     }
     return g;
   }
-  function buildLines() {
-    const lp = [], y = 0.06;
+  function buildLines(state) {
+    const lp = [], paths = [], y = 0.06;
     const x0 = Math.floor(bounds.minX) - 2, x1 = Math.ceil(bounds.maxX) + 2, z0 = Math.floor(bounds.minZ) - 2, z1 = Math.ceil(bounds.maxZ) + 2;
     for (let x = x0; x <= x1; x++) lp.push(x, y, z0, x, y, z1);
     for (let z = z0; z <= z1; z++) lp.push(x0, y, z, x1, y, z);
-    return lp;
+    /* 人物运动轨迹：贴地画折线，让 3D 里也能看到走位线 */
+    for (const pe of ((state && state.scene && state.scene.persons) || [])) {
+      const pts = pe.path || [];
+      if (pts.length < 2) continue;
+      for (let i = 1; i < pts.length; i++) paths.push(pts[i - 1].x, y + 0.03, pts[i - 1].y, pts[i].x, y + 0.03, pts[i].y);
+    }
+    return { grid: lp, paths };
   }
 
   /* ---------- 相机 ---------- */
@@ -361,7 +367,7 @@
   /* ---------- 绘制 ---------- */
   function draw(state) {
     if (!gl) return;
-    const g = buildGeo(state), lp = buildLines();
+    const g = buildGeo(state), L = buildLines(state), lp = L.grid;
     const eye = eyeOf(), up = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
     const view = lookAt(eye, [cam.tx, cam.ty, cam.tz], up);
     const proj = perspective(45 * Math.PI / 180, aspect || 1, 0.1, 1000);
@@ -406,6 +412,12 @@
     gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, 'uVP'), false, new Float32Array(vp));
     gl.uniform3fv(gl.getUniformLocation(lineProg, 'uCol'), new Float32Array(dark ? [0.30, 0.28, 0.25] : [0.62, 0.58, 0.50]));
     gl.drawArrays(gl.LINES, 0, lp.length / 3);
+    /* 人物运动轨迹单独用蓝色画一遍，和网格区分开 */
+    if (L.paths && L.paths.length) {
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(L.paths), gl.DYNAMIC_DRAW);
+      gl.uniform3fv(gl.getUniformLocation(lineProg, 'uCol'), new Float32Array([0.18, 0.49, 0.96]));
+      gl.drawArrays(gl.LINES, 0, L.paths.length / 3);
+    }
 
     /* 人物名牌：DOM 覆盖层跟随相机（2D 模式自动隐藏） */
     updateLabels(state, vp);
