@@ -107,10 +107,27 @@ function pathPosAt(obj, t) {
 }
 
 /* ---------- 场景道具（世界坐标烘焙） ---------- */
+/* 道具库多部件：与 3D 编辑器共用 mn-props.js 的 parts()，一张桌子在预演里也是「桌面 + 围板 + 四条腿」 */
+const KIND_SHADE = { main: 0.9, dark: 0.6, light: 0.97, accent: 0.55 };
+function kindPropPolys(o) {
+  const KINDS = (typeof window !== 'undefined' && window.MN_PROP_KINDS) || null;
+  const K = KINDS && KINDS[o.kind];
+  if (!K || !K.parts) return null;
+  const pw = Math.abs(+o.w || K.w || 1), pd = Math.abs(+o.d || K.d || 1), ph = Math.abs(+o.h || K.h || 1);
+  const sx = K.w ? pw / K.w : 1, sy = K.h ? ph / K.h : 1, sz = K.d ? pd / K.d : 1;
+  let polys = [];
+  for (const pt of K.parts()) {
+    const w = Math.max(0.008, pt.w * sx), h = Math.max(0.008, pt.h * sy), d = Math.max(0.008, pt.d * sz);
+    polys = polys.concat(boxPolys(pt.x * sx, (pt.y * sy) + h / 2, pt.z * sz, w, h, d, KIND_SHADE[pt.c] || 0.9));
+  }
+  return polys;
+}
 function propPart(o) {
   let polys = [];
   const sc = o.scale || 1;
-  if (o.shape === 'box') polys = boxPolys(0, 0.4, 0, 0.8, 0.8, 0.8, 0.85);
+  const fromKind = o.kind ? kindPropPolys(o) : null;
+  if (fromKind) polys = fromKind;
+  else if (o.shape === 'box') polys = boxPolys(0, 0.4, 0, 0.8, 0.8, 0.8, 0.85);
   else if (o.shape === 'pillar') polys = frustumPolys(0, 0, 0, 0.16, 0.2, 2.4, 8, 0.88);
   else if (o.shape === 'table') polys = [...boxPolys(0, 0.72, 0, 1.3, 0.08, 0.85, 0.92), ...boxPolys(0, 0.36, 0, 0.18, 0.72, 0.7, 0.78)];
   else if (o.shape === 'wall') { const wh = o.h || 2.4; polys = boxPolys(0, wh / 2, 0, o.w || 3, wh, 0.24, 0.8); }
@@ -840,6 +857,10 @@ class MovePlayer {
     this.extra = { angle, moveSpeed, size, aimY, camH };
     this.sim = sim; this.duration = duration;
     this.action = action; this.loop = loop;
+    /* ⚠ 2026-10-27 修：以前只把 scene 交给 renderer.scene（只当舞台底用），
+       render 的 opts.scene 一直是 undefined → 道具/人物/光照/自由机位全都没进预演，
+       「本镜场景（搭建）」在运镜预演里等于没生效。这里必须原样传进 opts.scene。 */
+    this.scene = scene;
     this.renderer.scene = scene;
     this.playing = true;
     this._start = performance.now() - fromT * duration * 1000 / this.speed;
@@ -849,9 +870,9 @@ class MovePlayer {
     this.sim = sim; this.action = opts?.action || this.action || 'stand';
     if (opts?.angle !== undefined) this.extra = { angle: opts.angle, moveSpeed: opts.moveSpeed, size: opts.size, aimY: opts.aimY, camH: opts.camH };
     else if (opts?.aimY !== undefined || opts?.camH !== undefined) this.extra = { ...(this.extra || {}), aimY: opts.aimY, camH: opts.camH };
-    this.renderer.scene = opts?.scene || this.renderer.scene;
+    if (opts && opts.scene !== undefined) { this.scene = opts.scene; this.renderer.scene = opts.scene; }
     this.duration = opts?.duration || this.duration;
-    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH });
+    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene });
   }
   stop() { this.playing = false; }
   destroy() { this.playing = false; if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
@@ -865,7 +886,7 @@ class MovePlayer {
         else { t = 1; this.playing = false; if (this.onEnd) this.onEnd(); }
       }
       this.t = t;
-      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH });
+      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene });
       if (this.onTick) this.onTick(t);
       this._raf = requestAnimationFrame(this._frame.bind(this));
     }
