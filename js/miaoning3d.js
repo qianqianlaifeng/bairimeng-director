@@ -139,6 +139,48 @@
     const p = [[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]], n = [0, 1, 0];
     for (const k of [0, 1, 2, 0, 2, 3]) { const q = p[k]; g.pos.push(q[0], q[1], q[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]); }
   }
+  /* 绕局部 z 轴（侧向轴）旋转：四肢前后摆动都在这条轴上 */
+  const rotZp = (pt, pv, ang) => {
+    if (!ang) return pt;
+    const dx = pt[0] - pv[0], dy = pt[1] - pv[1], c = Math.cos(ang), s = Math.sin(ang);
+    return [pv[0] + dx * c - dy * s, pv[1] + dx * s + dy * c, pt[2]];
+  };
+  /* 带关节链的盒子：joints 从近端到远端，先算远端 → 再算近端（正向动力学）
+     ctr = 部件在「人物局部空间」的中心（x=前, y=上, z=侧）；(tx,ty,tz) = 人物世界原点 */
+  function pushBoxJ(g, hw, hh, hd, ctr, joints, yaw, tx, ty, tz, col, bodyRz, bodyDy) {
+    const C = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]];
+    const faces = [
+      { n: [0, 0, 1], c: [4, 5, 6, 7] }, { n: [0, 0, -1], c: [1, 0, 3, 2] },
+      { n: [1, 0, 0], c: [5, 1, 2, 6] }, { n: [-1, 0, 0], c: [0, 4, 7, 3] },
+      { n: [0, 1, 0], c: [3, 2, 6, 7] }, { n: [0, -1, 0], c: [4, 5, 1, 0] }];
+    const jt = joints || [];
+    for (const f of faces) {
+      let n = f.n.slice();
+      for (let i = jt.length - 1; i >= 0; i--) n = rotZp(n, [0, 0, 0], jt[i].angle);
+      if (bodyRz) n = rotZp(n, [0, 0, 0], bodyRz);
+      n = tfDir(yaw, n);
+      const wp = f.c.map(idx => {
+        let v = [C[idx][0] * hw + ctr[0], C[idx][1] * hh + ctr[1], C[idx][2] * hd + ctr[2]];
+        for (let i = jt.length - 1; i >= 0; i--) v = rotZp(v, jt[i].pivot, jt[i].angle);
+        if (bodyRz) v = rotZp(v, [0, 0, 0], bodyRz);
+        if (bodyDy) v = [v[0], v[1] + bodyDy, v[2]];
+        return tfPoint(yaw, tx, ty, tz, v);
+      });
+      for (const k of [0, 1, 2, 0, 2, 3]) { const p = wp[k]; g.pos.push(p[0], p[1], p[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]); }
+    }
+  }
+  /* 姿势表：hip/sh 正 = 向前摆；knee/el 负 = 向后弯（膝盖生理方向）
+     dy = 整体升降（实测校准，保证脚底贴地不穿模） */
+  function poseOf(name) {
+    switch (name) {
+      case '走路': return { hipL: 0.48, hipR: -0.48, kneeL: -0.30, kneeR: -0.05, shL: -0.34, shR: 0.34, elL: -0.28, elR: -0.28, dy: -0.04 };
+      case '运动': return { hipL: 0.85, hipR: -0.85, kneeL: -0.95, kneeR: -0.25, shL: -0.75, shR: 0.75, elL: -0.85, elR: -0.85, lean: 0.14, dy: -0.10 };
+      case '招手': return { shR: 2.05, elR: 0.75, shL: 0.12, elL: -0.2 };
+      case '坐下': return { sit: true, hipL: 1.45, hipR: 1.45, kneeL: -1.42, kneeR: -1.42, shL: 0.55, shR: 0.55, elL: -0.5, elR: -0.5, dy: -0.28 };
+      case '躺下': return { lie: true, hipL: 0.06, hipR: -0.06, dy: 0.18 };
+      default: return { shL: 0.04, shR: 0.04, elL: -0.06, elR: -0.06 };
+    }
+  }
   function buildGeo(state) {
     const g = { pos: [], nrm: [], col: [] };
     const sc = state.scene, material = (state.view && state.view.material) || 'original', dark = isDark();
@@ -154,9 +196,28 @@
     for (const w of sc.walls) {
       if (w.hidden) continue;
       const dx = w.x2 - w.x1, dy = w.y2 - w.y1, L = Math.hypot(dx, dy) || 0.01, a = Math.atan2(-dy, dx);
-      const th = w.th || 0.2, h = w.h || 2.6, cx = (w.x1 + w.x2) / 2, cz = (w.y1 + w.y2) / 2;
+      const th = w.th || 0.2, h = w.h || 2.6;
       const col = material === 'random' ? hashColor(vi++) : wallCol;
-      pushBox(g, L / 2, h / 2, th / 2, a, cx, h / 2, cz, col);
+      const ux = dx / L, uz = dy / L;
+      /* 门洞：把墙切成「洞左段 / 洞右段 / 洞上方门楣」，真正镂空 */
+      const holes = (w.holes || []).map(hp => {
+        const half = Math.max(0.15, (hp.w || 1) / 2);
+        return { ta: Math.max(0, hp.t - half / L), tb: Math.min(1, hp.t + half / L) };
+      }).filter(hp => hp.tb - hp.ta > 0.002).sort((m, n) => m.ta - n.ta);
+      const doorH = Math.min(h * 0.84, 2.05);
+      const seg = (t0, t1, y0, y1) => {
+        if (t1 - t0 < 0.001 || y1 - y0 < 0.02) return;
+        const tm = (t0 + t1) / 2, len = (t1 - t0) * L;
+        pushBox(g, len / 2, (y1 - y0) / 2, th / 2, a, w.x1 + ux * L * tm, (y0 + y1) / 2, w.y1 + uz * L * tm, col);
+      };
+      let cur = 0;
+      for (const hp of holes) {
+        if (hp.ta > cur) seg(cur, hp.ta, 0, h);
+        if (doorH < h - 0.02) seg(hp.ta, hp.tb, doorH, h);   // 门楣
+        cur = Math.max(cur, hp.tb);
+      }
+      if (cur < 1) seg(cur, 1, 0, h);
+      if (!holes.length) seg(0, 1, 0, h);
     }
     for (const p of sc.props) {
       if (p.hidden) continue;
@@ -168,33 +229,42 @@
       const col = material === 'random' ? hashColor(vi++) : hex2rgb(p.color || '#2e7cf6');
       const a = ((p.rot || 0) * Math.PI) / 180, cx = p.x, cz = p.y;
       const fd = a + ((p.faceDir || 0) * Math.PI) / 180;      // 头部朝向（相对身体）
-      const P = (lx, ly, lz) => tfPoint(a, cx, 0, cz, [lx, ly, lz]);
-      const PF = (lx, ly, lz) => tfPoint(fd, cx, 0, cz, [lx, ly, lz]);
-      const skin = [0.99, 0.93, 0.87], hair = col.map(v => v * 0.45), shoe = col.map(v => v * 0.7);
       const fs = Math.min(1.8, Math.max(0.6, p.face || 1));   // 人脸大小也影响 3D 头
-      const bx = (hw, hh, hd, w, c) => pushBox(g, hw, hh, hd, a, w[0], w[1], w[2], c);
-      /* 腿：大腿 / 小腿 / 脚（分开站，别并成一根柱子） */
-      for (const s of [-1, 1]) {
-        bx(0.07, 0.20, 0.07, P(0, 0.72, s * 0.112), col);
-        bx(0.058, 0.19, 0.058, P(0, 0.33, s * 0.112), col);
-        bx(0.09, 0.045, 0.055, P(0.04, 0.045, s * 0.112), shoe);
+      const skin = [0.99, 0.93, 0.87], hair = col.map(v => v * 0.45), shoe = col.map(v => v * 0.7);
+      const P0 = poseOf(p.pose);
+      /* 全身变换：躺下 = 整体后仰 90°，其余按姿势校准的升降量；跳跃再抬高 */
+      const bodyRz = P0.lie ? -Math.PI / 2 : 0;
+      const bodyDy = (P0.dy || 0) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22;
+      const leanJ = P0.lean ? [{ pivot: [0, 0.84, 0], angle: P0.lean }] : [];
+      const hip = s => ({ pivot: [0, 0.84, s * 0.112], angle: (s > 0 ? P0.hipL : P0.hipR) || 0 });
+      const knee = s => ({ pivot: [0, 0.52, s * 0.112], angle: (s > 0 ? P0.kneeL : P0.kneeR) || 0 });
+      const sh = s => ({ pivot: [0, 1.32, s * 0.205], angle: (s > 0 ? P0.shL : P0.shR) || 0 });
+      const el = s => ({ pivot: [0, 1.10, s * 0.205], angle: (s > 0 ? P0.elL : P0.elR) || 0 });
+      const put = (c, ctr, half, jt, yaw) => pushBoxJ(g, half[0], half[1], half[2], ctr, jt, yaw == null ? a : yaw, cx, 0, cz, c, bodyRz, bodyDy);
+      /* 腿：大腿 / 小腿 / 脚（s>0 = 左） */
+      for (const s of [1, -1]) {
+        const hj = hip(s), kj = knee(s), jtLeg = [hj, kj];
+        put(col, [0, 0.72, s * 0.112], [0.07, 0.20, 0.07], [hj], null);        // 大腿
+        put(col, [0, 0.33, s * 0.112], [0.058, 0.19, 0.058], jtLeg, null);     // 小腿
+        put(shoe, [0.04, 0.045, s * 0.112], [0.09, 0.045, 0.055], jtLeg, null); // 脚
       }
-      /* 髋 / 腹 / 胸 */
-      bx(0.14, 0.085, 0.095, P(0, 0.88, 0), col);
-      bx(0.125, 0.085, 0.085, P(0, 1.03, 0), col);
-      bx(0.17, 0.115, 0.10, P(0, 1.22, 0), col);
-      /* 肩 + 上臂 / 前臂 / 手（略外展，不贴身体） */
-      for (const s of [-1, 1]) {
-        bx(0.06, 0.055, 0.06, P(0, 1.315, s * 0.205), col);
-        bx(0.045, 0.105, 0.045, P(0.01, 1.165, s * 0.252), col);
-        bx(0.038, 0.10, 0.038, P(0.035, 0.945, s * 0.252), col);
-        bx(0.048, 0.042, 0.042, P(0.045, 0.828, s * 0.252), skin);
+      /* 躯干：髋 / 腹 / 胸（跟随前倾） */
+      put(col, [0, 0.88, 0], [0.14, 0.085, 0.095], [], null);
+      put(col, [0, 1.03, 0], [0.125, 0.085, 0.085], leanJ, null);
+      put(col, [0, 1.22, 0], [0.17, 0.115, 0.10], leanJ, null);
+      /* 肩 / 上臂 / 前臂 / 手 */
+      for (const s of [1, -1]) {
+        const sj = sh(s), ej = el(s);
+        put(col, [0, 1.315, s * 0.205], [0.06, 0.055, 0.06], [...leanJ, sj], null);
+        put(col, [0.01, 1.165, s * 0.252], [0.045, 0.105, 0.045], [...leanJ, sj], null);
+        put(col, [0.035, 0.945, s * 0.252], [0.038, 0.10, 0.038], [...leanJ, sj, ej], null);
+        put(skin, [0.045, 0.828, s * 0.252], [0.048, 0.042, 0.042], [...leanJ, sj, ej], null);
       }
-      /* 颈 / 头 / 鼻尖 / 头发 */
-      bx(0.042, 0.032, 0.042, P(0, 1.40, 0), skin);
-      pushBox(g, 0.098 * fs, 0.112 * fs, 0.098 * fs, fd, ...PF(0, 1.545, 0), skin);
-      pushBox(g, 0.032, 0.030, 0.026, fd, ...PF(0.112 * fs, 1.545, 0), [0.34, 0.29, 0.27]);
-      pushBox(g, 0.104 * fs, 0.028, 0.104 * fs, fd, ...PF(0, 1.638, 0), hair);
+      /* 颈 / 头 / 鼻尖 / 头发（跟人脸朝向） */
+      put(skin, [0, 1.40, 0], [0.042, 0.032, 0.042], leanJ, null);
+      put(skin, [0, 1.545, 0], [0.098 * fs, 0.112 * fs, 0.098 * fs], leanJ, fd);
+      put([0.34, 0.29, 0.27], [0.112 * fs, 1.545, 0], [0.032, 0.030, 0.026], leanJ, fd);
+      put(hair, [0, 1.638, 0], [0.104 * fs, 0.028, 0.104 * fs], leanJ, fd);
     }
     for (const l of sc.lights) {
       if (l.hidden) continue;
@@ -267,7 +337,10 @@
     persons.forEach((p, i) => {
       let el = layer.children[i];
       if (!el) { el = document.createElement('div'); el.className = 'mn3d-label'; layer.appendChild(el); }
-      const sp = projToScreen(vp, p.x, 1.82, p.y);  // 头顶略上方（头顶约 1.67m）
+      /* 名牌高度跟着姿势走：躺下贴地、坐着在头顶、站立在头顶上方 */
+      const pose = p.pose || '站立';
+      const topY = (pose === '躺下' ? 0.55 : pose === '坐下' ? 1.62 : 1.82) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22;
+      const sp = projToScreen(vp, p.x, topY, p.y);
       if (!sp) { el.style.display = 'none'; return; }
       el.style.display = '';
       if (el.textContent !== p.name) el.textContent = p.name;
