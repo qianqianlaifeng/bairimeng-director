@@ -1,4 +1,5 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.11.3（2026-10-27）：2D 俯视人形（肩宽/头/鼻尖/手臂，朝向与脸朝向都可见）；3D 精细人偶（21 部件）+ 修 pushBox 尺寸语义（墙/道具此前只有 3/4 高且悬空）；3D 包围盒自适应。
    v1.11.2（2026-10-27）：人物命名 + 自定义取色 + 3D 头顶名牌；常驻「＋人物/＋光源/物件库」；连续放置不再抢占选中；Esc 一律取消选中。
    v1.11.1（2026-10-26）：全站换年轻化蓝调主题（晴空蓝 #2e7cf6），画布/3D/人物默认色同步。
    v1.11.0（2026-10-26）：右键菜单 / 右键平移 / 框选多选 / 物件库 / 对齐参考线 / 撤销粒度修复。
@@ -20,6 +21,14 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const snap = v => Math.round(v * 2) / 2;                 // 半格吸附
 const CELL = 44;                                          // 1 网格 = 44px（k=1）
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/* 颜色混合：k=0 原色，k=1 纯白（用于头/皮肤的提亮） */
+function tint(hex, k) {
+  const h = String(hex || '#2e7cf6').replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const m = v => Math.round(v + (255 - v) * k);
+  return `rgb(${m(r)},${m(g)},${m(b)})`;
+}
 
 function icon(name, cls) {
   const d = (window.MN_ICONS || {})[name];
@@ -1089,21 +1098,56 @@ function doPaint() {
     if (isSel('prop', p.id)) selRect(q.x, q.y, w, h);
   }
 
-  /* 人物（火柴人） */
+  /* 人物（俯视人形：肩宽椭圆 + 头 + 鼻尖朝向 + 手臂 + 名字）
+     —— 身体跟「旋转 Z」转，头/鼻尖跟「人脸朝向」转，两个朝向都能一眼看出来 */
   for (const p of sc.persons) {
     if (p.hidden) continue;
-    const q = w2s(p.x, p.y), r = Math.max(5, 0.45 * C);
-    ctx.fillStyle = p.color || '#2e7cf6';
-    ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, 7); ctx.fill();
-    ctx.strokeStyle = p.color || '#2e7cf6'; ctx.lineWidth = 2;
-    const rot = (p.rot || 0) * Math.PI / 180;
-    ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(q.x + Math.cos(rot) * r * 1.7, q.y + Math.sin(rot) * r * 1.7); ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,.85)';
-    ctx.beginPath(); ctx.arc(q.x + Math.cos(rot) * r * 0.4, q.y + Math.sin(rot) * r * 0.4, Math.max(1.5, r * 0.22 * (p.face || 1)), 0, 7); ctx.fill();
+    const q = w2s(p.x, p.y);
+    const R = Math.max(9, 0.6 * C);                          // 肩宽半径
+    const rot = (p.rot || 0) * Math.PI / 180;                 // 身体朝向
+    const fd = rot + (p.faceDir || 0) * Math.PI / 180;        // 人脸朝向（头相对身体可转）
+    const bodyCol = p.color || '#2e7cf6';
+    const headR = Math.max(3.6, R * 0.42 * (p.face || 1));
+    ctx.save();
+    ctx.translate(q.x, q.y);
+    /* 落地阴影 */
+    ctx.fillStyle = 'rgba(30,36,52,.12)';
+    ctx.beginPath(); ctx.ellipse(1.5, 2.5, R * 1.02, R * 0.8, 0, 0, 7); ctx.fill();
+    /* 身体：肩宽横向、前后薄（局部 x = 正面） */
+    ctx.save(); ctx.rotate(rot);
+    ctx.fillStyle = bodyCol;
+    ctx.beginPath(); ctx.ellipse(0, 0, R * 0.5, R * 0.92, 0, 0, 7); ctx.fill();
+    /* 两条手臂：肩端小椭圆 */
+    ctx.fillStyle = tint(bodyCol, 0.18);
+    for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(0, s * R * 1.02, R * 0.24, R * 0.36, 0, 0, 7); ctx.fill(); }
+    ctx.strokeStyle = 'rgba(10,14,24,.30)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.ellipse(0, 0, R * 0.5, R * 0.95, 0, 0, 7); ctx.stroke();
+    ctx.restore();
+    /* 头 + 鼻尖（跟人脸朝向） */
+    ctx.save(); ctx.rotate(fd);
+    ctx.fillStyle = tint(bodyCol, 0.62);
+    ctx.beginPath(); ctx.arc(R * 0.16, 0, headR, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(10,14,24,.34)'; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.fillStyle = 'rgba(20,24,34,.72)';
+    ctx.beginPath();
+    ctx.moveTo(R * 0.16 + headR * 1.02, 0);
+    ctx.lineTo(R * 0.16 + headR * 0.42, -headR * 0.4);
+    ctx.lineTo(R * 0.16 + headR * 0.42, headR * 0.4);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+    /* 名字 */
+    if (R > 6 && p.name) {
+      ctx.fillStyle = 'rgba(28,34,48,.78)';
+      ctx.font = '11px "PingFang SC","Microsoft YaHei",sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(p.name, 0, R * 1.5 + 9);
+      ctx.textAlign = 'left';
+    }
     if (isSel('person', p.id)) {
       ctx.strokeStyle = PAL.accent; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(q.x, q.y, r + 5, 0, 7); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(0, 0, R * 1.06, R * 1.28, 0, 0, 7); ctx.stroke();
     }
+    ctx.restore();
   }
 
   /* 光源 */

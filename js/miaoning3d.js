@@ -118,8 +118,12 @@
   };
 
   /* ---------- 几何构建 ---------- */
+  /* ⚠️ hw/hh/hd 是「半尺寸」（半宽/半高/半深）—— 2026-10-27 修正：
+     原来单位立方体顶点取 ±0.5×hw，等于把 hw 当全尺寸，而所有调用方（墙/道具/人物）
+     都按半尺寸传，导致墙只有设计高度的 3/4 且离地悬空、道具整体缩水。
+     现在顶点取 ±1×hw，语义与调用方一致。 */
   function pushBox(g, hw, hh, hd, a, tx, ty, tz, col) {
-    const C = [[-.5, -.5, -.5], [.5, -.5, -.5], [.5, .5, -.5], [-.5, .5, -.5], [-.5, -.5, .5], [.5, -.5, .5], [.5, .5, .5], [-.5, .5, .5]];
+    const C = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]];
     const faces = [
       { n: [0, 0, 1], c: [4, 5, 6, 7] }, { n: [0, 0, -1], c: [1, 0, 3, 2] },
       { n: [1, 0, 0], c: [5, 1, 2, 6] }, { n: [-1, 0, 0], c: [0, 4, 7, 3] },
@@ -163,12 +167,38 @@
       if (p.hidden) continue;
       const col = material === 'random' ? hashColor(vi++) : hex2rgb(p.color || '#2e7cf6');
       const a = ((p.rot || 0) * Math.PI) / 180, cx = p.x, cz = p.y;
-      pushBox(g, 0.22, 0.55, 0.15, a, cx, 0.55, cz, col);
-      pushBox(g, 0.16, 0.16, 0.16, a, cx, 1.18, cz, col);
+      const fd = a + ((p.faceDir || 0) * Math.PI) / 180;      // 头部朝向（相对身体）
+      const P = (lx, ly, lz) => tfPoint(a, cx, 0, cz, [lx, ly, lz]);
+      const PF = (lx, ly, lz) => tfPoint(fd, cx, 0, cz, [lx, ly, lz]);
+      const skin = [0.99, 0.93, 0.87], hair = col.map(v => v * 0.45), shoe = col.map(v => v * 0.7);
+      const fs = Math.min(1.8, Math.max(0.6, p.face || 1));   // 人脸大小也影响 3D 头
+      const bx = (hw, hh, hd, w, c) => pushBox(g, hw, hh, hd, a, w[0], w[1], w[2], c);
+      /* 腿：大腿 / 小腿 / 脚（分开站，别并成一根柱子） */
+      for (const s of [-1, 1]) {
+        bx(0.07, 0.20, 0.07, P(0, 0.72, s * 0.112), col);
+        bx(0.058, 0.19, 0.058, P(0, 0.33, s * 0.112), col);
+        bx(0.09, 0.045, 0.055, P(0.04, 0.045, s * 0.112), shoe);
+      }
+      /* 髋 / 腹 / 胸 */
+      bx(0.14, 0.085, 0.095, P(0, 0.88, 0), col);
+      bx(0.125, 0.085, 0.085, P(0, 1.03, 0), col);
+      bx(0.17, 0.115, 0.10, P(0, 1.22, 0), col);
+      /* 肩 + 上臂 / 前臂 / 手（略外展，不贴身体） */
+      for (const s of [-1, 1]) {
+        bx(0.06, 0.055, 0.06, P(0, 1.315, s * 0.205), col);
+        bx(0.045, 0.105, 0.045, P(0.01, 1.165, s * 0.252), col);
+        bx(0.038, 0.10, 0.038, P(0.035, 0.945, s * 0.252), col);
+        bx(0.048, 0.042, 0.042, P(0.045, 0.828, s * 0.252), skin);
+      }
+      /* 颈 / 头 / 鼻尖 / 头发 */
+      bx(0.042, 0.032, 0.042, P(0, 1.40, 0), skin);
+      pushBox(g, 0.098 * fs, 0.112 * fs, 0.098 * fs, fd, ...PF(0, 1.545, 0), skin);
+      pushBox(g, 0.032, 0.030, 0.026, fd, ...PF(0.112 * fs, 1.545, 0), [0.34, 0.29, 0.27]);
+      pushBox(g, 0.104 * fs, 0.028, 0.104 * fs, fd, ...PF(0, 1.638, 0), hair);
     }
     for (const l of sc.lights) {
       if (l.hidden) continue;
-      pushBox(g, 0.18, 0.18, 0.18, 0, l.x, (l.h || 2.5), l.y, hex2rgb(l.color || '#ffe9b0'));
+      pushBox(g, 0.09, 0.09, 0.09, 0, l.x, (l.h || 2.5), l.y, hex2rgb(l.color || '#ffe9b0'));
     }
     return g;
   }
@@ -186,16 +216,26 @@
     return [cam.tx + r * sp * ct, cam.ty + r * cp, cam.tz + r * sp * st];
   }
   function computeBounds(state) {
-    const sc = state.scene; let minX = 0, maxX = 14, minZ = 0, maxZ = 14;
+    const sc = state.scene;
+    /* 从实际内容算包围盒：以前默认撑满 0..14 网格，只有一个角色时相机会退到 20m 外，
+       人物在画面里只有一个小点（看起来就像「模型很简陋」） */
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     const acc = (x0, z0, x1, z1) => { minX = Math.min(minX, x0); maxX = Math.max(maxX, x1); minZ = Math.min(minZ, z0); maxZ = Math.max(maxZ, z1); };
     sc.rooms.forEach(r => acc(r.x, r.y, r.x + r.w, r.y + r.d));
     sc.walls.forEach(w => acc(Math.min(w.x1, w.x2), Math.min(w.y1, w.y2), Math.max(w.x1, w.x2), Math.max(w.y1, w.y2)));
     sc.props.forEach(p => acc(p.x, p.y, p.x + (p.w || 1), p.y + (p.d || 1)));
-    sc.persons.forEach(p => acc(p.x - 0.3, p.y - 0.3, p.x + 0.3, p.y + 0.3));
-    if (maxX - minX < 2) maxX = minX + 2; if (maxZ - minZ < 2) maxZ = minZ + 2;
+    sc.persons.forEach(p => acc(p.x - 0.6, p.y - 0.6, p.x + 0.6, p.y + 0.6));
+    sc.lights.forEach(l => acc(l.x - 0.4, l.y - 0.4, l.x + 0.4, l.y + 0.4));
+    if (!isFinite(minX)) { minX = 0; maxX = 14; minZ = 0; maxZ = 14; }
+    if (maxX - minX < 2) { const c = (minX + maxX) / 2; minX = c - 1; maxX = c + 1; }
+    if (maxZ - minZ < 2) { const c = (minZ + maxZ) / 2; minZ = c - 1; maxZ = c + 1; }
     bounds = { minX, maxX, minZ, maxZ };
   }
-  function fitR() { return Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) * 0.9 + 8; }
+  function fitR() {
+    /* 同时考虑高度：至少框住一个 1.8m 的人，别让单人场景被拉到天边 */
+    const span = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 3);
+    return span * 0.9 + 3;
+  }
   function frame() { cam.tx = (bounds.minX + bounds.maxX) / 2; cam.tz = (bounds.minZ + bounds.maxZ) / 2; cam.ty = 1.5; cam.r = fitR(); }
 
   /* ---------- 人物头顶名牌（DOM 覆盖层，按 VP 矩阵实时投影） ---------- */
@@ -227,7 +267,7 @@
     persons.forEach((p, i) => {
       let el = layer.children[i];
       if (!el) { el = document.createElement('div'); el.className = 'mn3d-label'; layer.appendChild(el); }
-      const sp = projToScreen(vp, p.x, 1.55, p.y);  // 头顶略上方
+      const sp = projToScreen(vp, p.x, 1.82, p.y);  // 头顶略上方（头顶约 1.67m）
       if (!sp) { el.style.display = 'none'; return; }
       el.style.display = '';
       if (el.textContent !== p.name) el.textContent = p.name;
@@ -326,5 +366,6 @@
   M.getCamera = function () { return { theta: cam.theta, phi: cam.phi, r: cam.r, tx: cam.tx, ty: cam.ty, tz: cam.tz }; };
   M.setCamera = function (c) { if (!c) return; cam.theta = c.theta; cam.phi = c.phi; cam.r = c.r; cam.tx = c.tx; cam.ty = (c.ty != null ? c.ty : 1.5); cam.tz = c.tz; cam.inited = true; if (M._last) draw(M._last); };
   M.capture = function () { if (!gl) return null; if (M._last) draw(M._last); try { return canvas.toDataURL('image/png'); } catch (e) { return null; } };
+  M._debugGeo = function (state) { return buildGeo(state); };
   M._reset = function () { cam.inited = false; };
 })();
