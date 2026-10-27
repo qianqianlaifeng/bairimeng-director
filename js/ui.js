@@ -12,6 +12,24 @@ function el(html) {
 }
 
 /* 通用弹窗。返回 { close, body } */
+/* 应用内文本输入弹窗：window.prompt 在部分浏览器/无头环境会被屏蔽，统一用这个 */
+function askText({ title = '请输入', label = '', value = '', placeholder = '', okText = '确定' } = {}) {
+  return new Promise(resolve => {
+    let settled = false;
+    const m = modal({
+      title,
+      body: `<div class="form-row"><label>${esc(label)}</label><input id="askInput" class="input" value="${esc(value)}" placeholder="${esc(placeholder)}"></div>
+        <div class="modal-actions"><div class="spacer"></div><button class="btn btn-ghost" id="askCancel">取消</button><button class="btn btn-primary" id="askOk">${esc(okText)}</button></div>`,
+      onClose: (r) => { if (!settled) { settled = true; resolve(typeof r === 'string' && r.trim() ? r.trim() : null); } },
+    });
+    const inp = m.body.querySelector('#askInput');
+    setTimeout(() => { inp.focus(); inp.select(); }, 60);
+    m.body.querySelector('#askOk').onclick = () => m.close(inp.value.trim() || null);
+    m.body.querySelector('#askCancel').onclick = () => m.close(null);
+    inp.onkeydown = e => { if (e.key === 'Enter') m.close(inp.value.trim() || null); };
+  });
+}
+
 function modal({ title = '', body = '', wide = false, onClose = null } = {}) {
   const ov = el(`<div class="modal-ov">
     <div class="modal ${wide ? 'modal-wide' : ''}" role="dialog">
@@ -107,4 +125,4 @@ function opts(list, val, labelFn = x => x.name, groupFn = null) {
   ).join('');
 }
 
-export { esc, el, modal, confirmDlg, toast, copyText, pickFile, fmtDur, opts };
+export { esc, el, modal, confirmDlg, toast, copyText, pickFile, fmtDur, opts, askText };
