@@ -531,6 +531,9 @@ export function openShotEditor(shot, idx) {
           </div>
         </div>
         <div class="form-row">
+          <button class="btn btn-ghost btn-sm" id="edInherit" style="width:100%">⤵ 沿用上一镜镜头（运镜 / 景别 / 角度 / 看向 / 速度）</button>
+        </div>
+        <div class="form-row">
           <label>提示词 <span class="dim">（喂给 AI 视频/图片工具的成品句）</span></label>
           <div class="prompt-ops">
             <button class="btn btn-ghost btn-sm" id="edGenPrompt">🪄 按模板生成</button>
@@ -627,6 +630,27 @@ export function openShotEditor(shot, idx) {
       if (s3) { shot.scene = s3.scene; shot.sceneId = s3.sceneId; shot.cameraMove = s3.cameraMove; }
       playMove();
     });
+  };
+
+  const inheritBtn = m.body.querySelector('#edInherit');
+  if (inheritBtn) inheritBtn.onclick = () => {
+    const prev = store.inheritShotSetup(shot.id);
+    if (!prev) { toast('这是第一镜，没有上一镜可沿用', 'warn'); return; }
+    const s2 = store.active.shots.find(x => x.id === shot.id);
+    ['cameraMove', 'shotSize', 'angle', 'aimY', 'camH', 'moveSpeed', 'scene'].forEach(k => { shot[k] = s2[k]; });
+    m.body.querySelector('#edMove').value = shot.cameraMove;
+    m.body.querySelector('#edSize').value = shot.shotSize;
+    m.body.querySelector('#edAngle').value = shot.angle;
+    m.body.querySelector('#edSpeed').value = shot.moveSpeed || 'std';
+    const setNum = (sel, v) => {
+      const el2 = m.body.querySelector(sel); if (!el2) return;
+      const match = Array.from(el2.options).find(o => o.value !== 'auto' && Math.abs(+o.value - (+v)) < 0.001);
+      el2.value = (v == null || !match) ? 'auto' : match.value;
+    };
+    setNum('#edAim', shot.aimY);
+    setNum('#edCamH', shot.camH);
+    toast('已沿用上一镜的镜头设置 ⤵', 'ok');
+    playMove();
   };
 
   /* 手绘分镜稿画板 */
