@@ -1,10 +1,30 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.13.0（2026-10-28）：座位系统 —— 人物终于能真的「坐上」椅子/沙发/长凳/床：
+                          ① 道具定义里加了座位点（MN_PROP_KINDS[kind].seats：局部位置 + 坐面高度 + 坐下朝向）；
+                          ② 入口三个：右键椅子「请人坐下」/ 人物面板「坐到最近的座位」/ 直接把人物拖到椅子上松手；
+                          ③ 坐下后位置·朝向·坐面高度由座位算出来，椅子挪动/旋转/缩放人会跟着落座，拖离椅子自动起身；
+                          ④ 删掉椅子坐着的人自动起身；⑤ 坐着的人不再被判成「和家具穿模」，自动摆好也不会把他从椅子上推开；
+                          ⑥ 3D 按坐面高度把人整体抬起，白模预演/动态分镜/导出 mp4 同样带 sitH（不会再陷进椅子或浮在半空）；
+                          ⑦ 俯视图坐着的人脚下有虚线座标圈；⑧ AI 搭景写了「坐下」的人会真的吸附到座位面上。
+   v1.12.9（2026-10-28）：全站体检 —— 修掉一批「一直没生效 / 会累积 / 会丢数据」的真 bug：
+                          ① 复制镜头的 id 变成 undefined（删一个会删错）；② 一键拆分镜的景别/角度提示
+                          全用 \b 包中文，永远不匹配 → 所有镜头恒为「中景+平视」，现在能分出大远景/特写/仰拍等；
+                          ③ 剧本里 “…” 弯引号的台词提不出来（只认 ASCII 引号）；④ 「📦 导出项目 → 项目 JSON」
+                          写着可再导入，实际导入只认整站备份、还提示成功（现在两种都认）；⑤ 弹窗按 ✕/遮罩 关闭时
+                          Esc 监听器不解绑（开多少个就留多少个）；⑥ 运镜词典每点一次分类就多一条 rAF 渲染循环
+                          且观察器不断新建（点 5 次 = 5 条循环同时刷）；⑦ 重传参考图/手绘稿/截图时旧图不删（越存越多）；
+                          ⑧ 删镜头只清参考图不清手绘稿；⑨ 老存档缺新字段没有补齐；⑩ 签到连签判断被自己的赋值顺序写死；
+                          ⑪ 预演次数在「进入页面」就计（反复切页可刷等级）；⑫ 9:16 项目在项目台仍显示 16:9 封面；
+                          ⑬ 离线缓存漏了连戏检查模块；⑭ 成就里运镜总数写死 36（实际 37）；⑮ 「把这一镜预演一遍」
+                          不带该镜的景别/角度/时长。
+                          另外：删/清空/替换导入 60 秒内可撤销（撤销条）；批量管理加「景别 / 角度 / 转场」；
+                          卡片加「🏗」直达场景搭建；资料库勾选的规范现在会真的带给 AI 拆分镜。
    v1.12.8（2026-10-28）：分镜板批量管理 ——「🧹 清空」一键清掉全部残留分镜（弹窗确认，和导出按钮放一起）；
                           「📤 导出」把分镜板存成 CSV（和导入同一套表头，导出→同学改→再导回来）；
                           「☑ 批量」多选卡片：全选 / 批量删除 / 批量改时长 / 批量设运镜，不用再一个个删；
                           卡片新增「＋」= 在此镜后插一镜（自动沿用这个镜的场景，连戏）；台词太长念不完的镜
                           自动亮黄灯（按中文 5 字/秒估），提醒加时长或删台词。
-   v1.12.8（2026-10-28）：分镜导入（新增 js/import-shots.js）—— 同学把自己写的分镜表直接导进分镜板：
+   v1.12.7（2026-10-28）：分镜导入（新增 js/import-shots.js）—— 同学把自己写的分镜表直接导进分镜板：
                           CSV / TSV / Markdown 表格 / 每行一条的纯文本 / JSON 都认；表头可写「镜号 画面 台词 时长
                           景别 运镜 角度 场次 备注」，没有表头按顺序猜；中文景别运镜角度自动映射
                           （远景/特写/缓推/过肩…），没写就从画面描述里推断；Excel 存的 GBK 乱码自动兜底；
@@ -382,13 +402,17 @@ function bindShell() {
     window.MN3D.onMoveStart = () => { pushUndo(); };
     window.MN3D.onMove = () => { saveSoon(); paint3D(); };
     window.MN3D.onMoveEnd = (kind, id, dragged) => {
-      /* 3D 里拖完也自动让开（只挪这一件） */
-      if (dragged && (kind === 'prop' || kind === 'person')) settleOne(kind, id, false);
+      /* 3D 里拖完也自动让开（只挪这一件）；座位联动和 2D 一致 */
+      if (dragged && (kind === 'prop' || kind === 'person')) {
+        if (kind === 'person') seatAfterDrop([{ kind: 'person', id }]);
+        else refitSeats(id);
+        settleOne(kind, id, false);
+      }
       saveSoon(); paint(); renderTree();
     };
     window.MN3D.onRotateStart = () => { pushUndo(); };
     window.MN3D.onRotate = () => { };
-    window.MN3D.onRotateEnd = () => { refreshSel(); renderAll(); saveSoon(); toast('已旋转（Ctrl+Z 可撤销）'); };
+    window.MN3D.onRotateEnd = () => { refitSeats(); refreshSel(); renderAll(); saveSoon(); toast('已旋转（Ctrl+Z 可撤销）'); };
     window.MN3D.onContext = (kind, id, x, y) => {
       if (kind) { selectOnly(kind, id); refreshSel(); }
       openCtx(x, y, kind ? { kind, id } : null);
@@ -866,7 +890,11 @@ function renderObjPanel() {
     <div class="mn-chip-row"><span style="font-size:12.5px;color:var(--muted)">门洞 ${(o.holes || []).length} 个</span>
       <button class="mn-chip" data-act="addhole">${icon('plus', 's12')}墙上加洞</button></div>
   </section>`;
-  if (sel.kind === 'prop') return `<section class="mn-prop">${head}
+  if (sel.kind === 'prop') {
+    const L = window.MN_LAYOUT;
+    const nSeats = L && L.seatsOf(o) ? L.seatsOf(o).length : 0;
+    const sitters = nSeats ? (MN.state.scene.persons || []).filter(p => p.sitOn && p.sitOn.id === o.id).length : 0;
+    return `<section class="mn-prop">${head}
     <label class="mn-field"><span>名称</span><input type="text" data-f="name" value="${esc(o.name)}" /></label>
     <div class="mn-num3">
       <label class="mn-field"><span>宽 X</span><input type="number" step="0.5" data-f="w" value="${o.w}" /></label>
@@ -878,8 +906,12 @@ function renderObjPanel() {
       <label class="mn-field"><span>模型</span><input type="text" value="${(window.MN_PROP_KINDS[o.kind] || {}).name || o.kind || '方块'}" disabled /></label>
     </div>
     <label class="mn-field"><span>颜色</span></label>${swatches(PROP_COLORS, o.color, 'color')}
+    ${nSeats ? `<div class="mn-chip-row">
+      <button class="mn-chip" data-act="seat" title="让离这把椅子最近的人物坐上来（坐好后椅子挪动他会跟着走）">${icon('armchair', 's12')}请人坐下 · ${nSeats} 个座位 · 已坐 ${sitters}</button>
+    </div>` : ''}
     <div class="mn-chip-row"><button class="mn-chip" data-act="autolayout" title="把重叠的家具/人物排开，墙和房间不动">${icon('sparkles', 's12')}自动摆好</button></div>
   </section>`;
+  }
   if (sel.kind === 'person') return `<section class="mn-prop">${head}
     <div class="mn-chip-row">
       <button class="mn-chip" data-act="copy">${icon('copy', 's12')}复制</button>
@@ -893,6 +925,12 @@ function renderObjPanel() {
     <label class="mn-field"><span>人物姿态</span>
       <select data-f="pose">${['站立', '走路', '坐下', '招手', '躺下', '运动'].map(p => `<option ${o.pose === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
     </label>
+    <label class="mn-field"><span>座位<strong>${o.sitOn ? ('已坐上「' + esc((findProp(o.sitOn.id) || {}).name || '家具') + '」· 坐面 ' + ((o.sitH || 0) * 100).toFixed(0) + 'cm') : '未入座'}</strong></span></label>
+    <div class="mn-chip-row">
+      ${o.sitOn
+        ? `<button class="mn-chip" data-act="unsit">${icon('log-out', 's12')}起身</button>`
+        : `<button class="mn-chip" data-act="seatnear" title="就近找一把空椅子坐下">${icon('armchair', 's12')}坐到最近的座位</button>`}
+    </div>
     <label class="mn-field"><span>人脸大小<strong>${o.face || 1} 倍</strong></span><input type="range" class="mn-range" data-f="face" min="0.5" max="2" step="0.1" value="${o.face || 1}" /></label>
     <label class="mn-field"><span>人物颜色</span></label>${swatches(PERSON_COLORS, o.color, 'color')}
     <label class="mn-field mn-color-row"><span>人物颜色 <b class="mn-color-now" style="background:${o.color || '#2e7cf6'}"></b><code>${esc(o.color || '#2e7cf6')}</code></span><input type="color" class="mn-color" data-f="color" value="${o.color || '#2e7cf6'}" /></label>
@@ -976,6 +1014,17 @@ function bindObjPanel() {
       let v = inp.type === 'number' || inp.type === 'range' ? +inp.value : inp.value;
       if (f === 'name') v = String(v).slice(0, 20);
       o[f] = v;
+      /* 座位联动：椅子转了/大了/挪了，坐在上面的人要跟着重新落座；
+         人物面板把姿势改成「坐下」= 就近找空位坐下，改成别的 = 起身。 */
+      if (MN.sel.kind === 'prop' && ['rot', 'w', 'd', 'h', 'x', 'y'].includes(f)) refitSeats(o.id);
+      if (MN.sel.kind === 'person' && f === 'pose') {
+        const L = window.MN_LAYOUT;
+        if (v === '坐下') {
+          if (o.sitOn) { const pr = findProp(o.sitOn.id); const sw = pr && L.seatWorld(pr, o.sitOn.seat || 0); if (sw) sitOn(o, sw); }
+          else { const sw = L && L.nearestSeat(MN.state.scene, o.x, o.y, { radius: 2.6 }); if (sw) sitOn(o, sw); }
+        } else if (o.sitOn) standUp(o);
+        renderRight();
+      }
       if (f === 'range' && inp.previousElementSibling) { const s = inp.previousElementSibling.querySelector('strong'); if (s) s.textContent = (f === 'fov' ? '' : '') + v + (f === 'faceDir' ? '°' : f === 'face' ? ' 倍' : f === 'jump' ? '' : f === 'intensity' ? '' : ''); }
       renderTree(); paint(); saveSoon();
       /* 换色时把「当前色」色块也刷一下（不然面板上还是旧颜色，看着像没生效） */
@@ -995,6 +1044,9 @@ function bindObjPanel() {
     const a = b.dataset.act;
     if (a === 'del') { delSel(); }
     else if (a === 'hide') { hideSel(); }
+    else if (a === 'seat') { seatSomeoneOn(o.id); }
+    else if (a === 'seatnear') { sitSelToNearestSeat(); }
+    else if (a === 'unsit') { pushUndo(); standUp(o); renderAll(); saveSoon(); toast('已起身', 'ok'); }
     else if (a === 'drawpath') {
       MN.tool = 'path'; renderToolList(); buildFloatTools();
       MN.pathDraft = { id: o.id, pts: (o.path || []).map(p => ({ x: p.x, y: p.y })) };
@@ -1268,6 +1320,13 @@ function doPaint() {
     /* 落地阴影 */
     ctx.fillStyle = 'rgba(30,36,52,.12)';
     ctx.beginPath(); ctx.ellipse(1.5, 2.5, R * 1.02, R * 0.8, 0, 0, 7); ctx.fill();
+    /* 坐在家具上：脚下画一圈虚线座标，俯视图能一眼看出「这个是坐着的」 */
+    if (p.sitOn) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(176,116,32,.8)'; ctx.lineWidth = 1.4; ctx.setLineDash([3.5, 3]);
+      ctx.beginPath(); ctx.arc(0, 0, R * 1.42, 0, 7); ctx.stroke();
+      ctx.restore();
+    }
     /* 身体：肩宽横向、前后薄（局部 x = 正面） */
     ctx.save(); ctx.rotate(rot);
     ctx.fillStyle = bodyCol;
@@ -1551,6 +1610,8 @@ function finishPath() {
 function settleOne(kind, id, quiet) {
   if (!window.MN_LAYOUT || !MN.state || !MN.state.scene) return false;
   const o = findObj(kind, id); if (!o) return false;
+  /* 坐着的人不自动让位 —— 他的位置是座位说了算，否则会被从椅子上推开 */
+  if (kind === 'person' && o.sitOn) return false;
   const r = window.MN_LAYOUT.settle(MN.state.scene, kind, o);
   if (r.moved) { if (!quiet) toast('已自动让开 ' + r.dist + 'm（不穿模）', 'ok'); return true; }
   if (r.failed && !quiet) toast('这附近放不下，先挪开别的家具吧', 'warn');
@@ -1568,8 +1629,114 @@ function autoLayout() {
   if (!window.MN_LAYOUT || !MN.state) return;
   pushUndo();
   const moved = window.MN_LAYOUT.resolveScene(MN.state.scene, { maxR: 3 });
+  /* 排完顺手把「站在椅子上」和「姿势写了坐下」的人真正落到座位面上 */
+  const seated = window.MN_LAYOUT.autoSeatAll(MN.state.scene, { radius: 0.45 });
   renderAll(); saveSoon();
-  toast(moved.length ? '已排开 ' + moved.length + ' 件（Ctrl+Z 可撤销）' : '场上没有重叠，不用排', moved.length ? 'ok' : undefined);
+  toast([moved.length ? '排开 ' + moved.length + ' 件' : '', seated ? '安排 ' + seated + ' 人入座' : '']
+    .filter(Boolean).join(' · ') + '（Ctrl+Z 可撤销）', moved.length || seated ? 'ok' : undefined);
+}
+
+/* ---------- 座位：让人真的「坐到」椅子 / 沙发 / 长凳 / 床上 ----------
+   原来只有「坐下」这个姿势，人只会原地屈腿，不会落到家具上。
+   现在：座位点写在道具定义里（MN_PROP_KINDS[kind].seats），
+   坐下 = 绑定 sitOn + 位置/朝向/坐面高度由座位算出来，椅子挪动人也跟着挪。 */
+function seatableProps() {
+  const L = window.MN_LAYOUT; if (!L || !MN.state) return [];
+  return (MN.state.scene.props || []).filter(o => !o.hidden && L.seatsOf(o));
+}
+function findProp(id) { return (MN.state.scene.props || []).find(o => o.id === id) || null; }
+/* 把某个人安到某个座位上 */
+function sitOn(person, seat) {
+  const L = window.MN_LAYOUT;
+  if (!person || !seat || !L) return false;
+  L.seatPerson(person, seat);
+  return true;
+}
+/* 起身（pose 传空 = 站回去） */
+function standUp(person) {
+  const L = window.MN_LAYOUT;
+  if (!person || !L) return false;
+  if (!person.sitOn) { if (person.pose === '坐下') person.pose = '站立'; return true; }
+  L.unseatPerson(person);
+  return true;
+}
+/* 让「当前选中的人」坐到离他最近的空座位上 */
+function sitSelToNearestSeat(radius) {
+  const L = window.MN_LAYOUT; if (!L) return 0;
+  const items = selList().filter(x => x.kind === 'person');
+  if (!items.length) { toast('先选中一个人物，再点椅子右键「让人坐下」', 'warn'); return 0; }
+  let n = 0;
+  pushUndo();
+  const taken = L.occupiedSeats(MN.state.scene);
+  items.forEach(it => {
+    const p = findObj('person', it.id); if (!p) return;
+    const seat = L.nearestSeat(MN.state.scene, p.x, p.y, { radius: radius == null ? 2.6 : radius });
+    if (seat && !taken.has(seat.propId + ':' + seat.seat)) { sitOn(p, seat); taken.add(seat.propId + ':' + seat.seat); n++; }
+  });
+  renderAll(); saveSoon();
+  toast(n ? `已让 ${n} 个人坐下去（椅子挪动他们会跟着走）` : '附近没有空座位，先摆把椅子', n ? 'ok' : 'warn');
+  return n;
+}
+/* 右键椅子：把离这把椅子最近的人请过来坐下（没选人时也能用） */
+function seatSomeoneOn(propId) {
+  const L = window.MN_LAYOUT; if (!L) return 0;
+  const prop = findProp(propId); if (!prop) return 0;
+  const seats = L.seatsOf(prop) || [];
+  const taken = L.occupiedSeats(MN.state.scene);
+  let target = null, targetSeat = -1;
+  for (let i = 0; i < seats.length; i++) {
+    if (taken.has(propId + ':' + i)) continue;
+    const sw = L.seatWorld(prop, i); if (!sw) continue;
+    const cand = (MN.state.scene.persons || []).filter(p => !p.hidden && !p.sitOn)
+      .map(p => ({ p, d: Math.hypot(p.x - sw.x, p.y - sw.y) })).sort((a, b) => a.d - b.d)[0];
+    if (cand && (!target || cand.d < target.d)) target = { p: cand.p, d: cand.d }, targetSeat = i;
+  }
+  if (!target) { toast('这把已经坐满了 / 附近没有可坐的人', 'warn'); return 0; }
+  pushUndo();
+  sitOn(target.p, L.seatWorld(prop, targetSeat));
+  selectOnly('person', target.p.id); refreshSel();
+  renderAll(); saveSoon();
+  toast(`${target.p.name || '人物'} 已坐上「${prop.name || '椅子'}」`, 'ok');
+  return 1;
+}
+/* 选中的人起身 */
+function standSel() {
+  const items = selList().filter(x => x.kind === 'person');
+  if (!items.length) { toast('先选中一个坐着的人物', 'warn'); return 0; }
+  pushUndo();
+  let n = 0;
+  items.forEach(it => { const p = findObj('person', it.id); if (p && standUp(p)) n++; });
+  renderAll(); saveSoon();
+  toast(n ? `已起身 ${n} 人` : '没有坐着的人', n ? 'ok' : undefined);
+  return n;
+}
+/* 椅子被挪动 / 旋转 / 缩放 / 删除后，让坐在上面的人跟着走（面板上的「座位」一行也要跟着刷） */
+function refitSeats(propId) {
+  const L = window.MN_LAYOUT; if (!L || !MN.state) return 0;
+  const before = (MN.state.scene.persons || []).filter(p => p.sitOn).length;
+  const n = L.refitSitters(MN.state.scene, propId || null);
+  const after = (MN.state.scene.persons || []).filter(p => p.sitOn).length;
+  if (before !== after) renderRight();       // 有人被「起身」了，属性面板别再说他还坐着
+  return n;
+}
+/* 拖动松手后：拖到座位上就坐下，拖离座位就起身 */
+function seatAfterDrop(items) {
+  const L = window.MN_LAYOUT; if (!L || !items || !items.length) return 0;
+  let changed = 0;
+  items.forEach(it => {
+    if (it.kind !== 'person') return;
+    const p = findObj('person', it.id); if (!p) return;
+    if (p.sitOn) {
+      const prop = findProp(p.sitOn.id);
+      const sw = prop && L.seatWorld(prop, p.sitOn.seat || 0);
+      if (!sw || Math.hypot(p.x - sw.x, p.y - sw.y) > 0.45) { L.unseatPerson(p); changed++; }
+      else { p.x = sw.x; p.y = sw.y; p.rot = sw.rot; p.sitH = sw.h; }
+      return;
+    }
+    const under = L.nearestSeat(MN.state.scene, p.x, p.y, { radius: 0.5 });
+    if (under) { sitOn(p, under); changed++; }
+  });
+  return changed;
 }
 
 function placePending(wx, wy) {  const p = MN.pending; if (!p) return;
@@ -1722,7 +1889,13 @@ function onPtrUp(e) {
   }
   if (d.kind === 'pan') { paint(); return; }
   if (d.kind === 'move') {
-    if (d.moved) { settleSel(false); renderTree(); renderRight(); saveSoon(); }
+    if (d.moved) {
+      /* 先处理座位：拖到椅子上就坐下、拖离椅子就起身；挪了家具则让坐在上面的人跟着走 */
+      const sat = seatAfterDrop(d.items);
+      d.items.filter(x => x.kind === 'prop').forEach(x => refitSeats(x.id));
+      settleSel(false);
+      renderTree(); renderRight(); saveSoon();
+    }
     paint(); return;
   }
   if (d.kind === 'marquee') {
@@ -1780,6 +1953,15 @@ function openCtx(x, y, hit) {
     items.push({ icon: 'pencil-line', label: '重命名', hint: 'F2', fn: renameSel });
     items.push({ icon: 'arrow-up-right', label: '置顶（盖住别的）', fn: bringFront });
     if (kind === 'person' || kind === 'prop') items.push({ icon: 'rotate-3d', label: '旋转 90°', fn: rotateSel });
+    /* 座位：椅子右键「请人坐下」，人物右键「坐到最近座位 / 起身」 */
+    if (kind === 'prop' && window.MN_LAYOUT && window.MN_LAYOUT.seatsOf(o)) {
+      const n = (window.MN_LAYOUT.seatsOf(o) || []).length;
+      items.push({ icon: 'armchair', label: `请人坐下（${n} 个座位）`, fn: () => seatSomeoneOn(o.id) });
+    }
+    if (kind === 'person') {
+      if (o.sitOn) items.push({ icon: 'log-out', label: '起身', fn: () => { pushUndo(); standUp(o); renderAll(); saveSoon(); } });
+      else items.push({ icon: 'armchair', label: '坐到最近的座位', fn: () => sitSelToNearestSeat() });
+    }
     if (kind === 'wall') items.push({ icon: 'door-open', label: '在点击处打洞', fn: () => holeAt(hit.id, hit.t) });
     sep();
     items.push({ icon: 'trash-2', label: n > 1 ? `删除选中的 ${n} 个` : '删除', hint: 'Del', danger: true, fn: delSel });
@@ -1824,6 +2006,8 @@ function delSel() {
   const list = selList(); if (!list.length) return toast('先选中要删的东西');
   pushUndo();
   list.forEach(s => delObj(s.kind, s.id));
+  /* 椅子被删了，坐在上面的人要起身（undo 时随快照一起回来） */
+  refitSeats();
   clearSel(); renderAll(); saveSoon();
   toast('删了 ' + list.length + ' 个（Ctrl+Z 可撤销）', 'ok');
 }
@@ -1903,6 +2087,7 @@ function rotateSel() {
     if (s.kind === 'person') o.rot = ((o.rot || 0) + 90) % 360;
     else o.rot = ((o.rot || 0) + 90) % 360;      // 造物：用旋转角，宽深不变
   });
+  refitSeats();          // 椅子转了方向，坐着的人要跟着转
   renderAll(); saveSoon();
 }
 function holeAt(id, t) {
@@ -3353,6 +3538,10 @@ window.MN = MN;
 Object.assign(window, {
   toast, saveSoon, pushUndo, undo, redo, renderAll, paint, icon, openModal, closeModal, setMode, fitView, setTool,
   mnSel: selectOnly, mnRefresh: refreshSel, mnDel: delSel, mnCtxClose: closeCtx,
+  /* 座位 API（builder / ai-scene / 测试都用得到） */
+  mnSitOn: sitOn, mnStandUp: standUp, mnSitSelToNearestSeat: sitSelToNearestSeat,
+  mnSeatSomeoneOn: seatSomeoneOn, mnStandSel: standSel, mnRefitSeats: refitSeats,
+  mnSeatAfterDrop: seatAfterDrop, mnFindProp: findProp, mnSeatableProps: seatableProps,
 });
 
 /* ---------- bairimeng-director 集成钩子（2026-10-25 移植时新增） ----------
