@@ -146,7 +146,7 @@ export function renderAnimatic(container) {
       canvas.style.display = '';
       imgEl.style.display = 'none';
       renderer.setTheme({ ground: (s.scene && s.scene.floor) || '#d9dde5' });
-      renderer.render(mv.sim, t, 'stand', { duration: s.duration, hud: false, letterbox: true, angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize, scene: s.scene, aimY: s.aimY ?? undefined, camH: s.camH ?? undefined, focus: focusPointOf(s.scene, s.focusKind, s.focusId, s.aimY), focusKind: s.focusKind || 'auto' });
+      renderer.render(mv.sim, t, 'stand', { duration: s.duration, hud: false, letterbox: true, angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize, scene: s.scene, aimY: s.aimY ?? undefined, camH: s.camH ?? undefined, focus: focusPointOf(s.scene, s.focusKind, s.focusId, s.aimY), focusKind: s.focusKind || 'auto', showPaths: !!s.showPath });
     }
     /* 转场淡入 */
     if (transitionAlpha > 0.001) {
@@ -283,7 +283,7 @@ export function renderAnimatic(container) {
             duration: s.duration, hud: false, letterbox: false,   // 交付物不要上下黑边
             angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize,
             scene: s.scene, aimY: s.aimY ?? undefined, camH: s.camH ?? undefined,
-            focus: focusPointOf(s.scene, s.focusKind, s.focusId, s.aimY), focusKind: s.focusKind || 'auto',
+            focus: focusPointOf(s.scene, s.focusKind, s.focusId, s.aimY), focusKind: s.focusKind || 'auto', showPaths: !!s.showPath,
           });
           ctx.drawImage(oc, 0, 0);
         }
