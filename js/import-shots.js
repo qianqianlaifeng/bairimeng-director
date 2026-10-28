@@ -152,18 +152,77 @@
   ];
   function headerMap(row) {
     const map = {};
+    const cols = [];
     row.forEach((cell, i) => {
       const s = String(cell || '');
+      let hitKey = null;
       for (const [key, re] of COLS) {
-        if (map[key] == null && re.test(s)) { map[key] = i; break; }
+        if (map[key] == null && re.test(s)) { map[key] = i; hitKey = key; break; }
       }
+      cols.push({ key: hitKey || 'extra', i });
     });
+    map.cols = cols;
     return map;
   }
   const isHeader = row => {
     const s = row.join(' ');
     return /镜号|画面|描述|台词|时长|景别|运镜|角度|场景|场次|备注|shot|duration/i.test(s) && !/^\d+$/.test(s.trim());
   };
+
+  /* ---------- 列对齐：同学手写的表常常少一列（最常见是漏了「台词」空列），
+     直接按列号对位会把「时长 2」塞进「台词」。这里按每列的“形状”打分，
+     用动态规划挑最合理的一种对位（允许某列留空 / 某个格丢掉，丢格要扣分）。 ---------- */
+  function scoreCell(key, cell) {
+    const v = String(cell == null ? '' : cell).trim();
+    if (v === '') return key === 'desc' ? -4 : 0;
+    if (key === 'duration') return numDur(v) != null ? 4 : -3;
+    if (key === 'size') return keyOf(SIZES, v, KEY_SIZE) ? 4 : -2;
+    if (key === 'move') return keyOf(MOVES, v, KEY_MOVE) ? 4 : -2;
+    if (key === 'angle') return keyOf(ANGLES, v, KEY_ANGLE) ? 4 : -2;
+    if (key === 'no') return /^\d+$/.test(v) ? 3 : -1;
+    if (key === 'desc') return /^\d+(\.\d+)?$/.test(v) ? -3 : 3;
+    if (key === 'dialogue') return /^\d+(\.\d+)?\s*s?$/i.test(v) ? -3 : 2;
+    if (key === 'extra') return 1;
+    return 1;
+  }
+  function alignRow(cols, cells) {
+    const H = cols.length, R = cells.length;
+    if (!H || !R) return cells.slice();
+    const NEG = -1e9;
+    const dp = [], back = [];
+    for (let i = 0; i <= H; i++) { dp.push(new Array(R + 1).fill(NEG)); back.push(new Array(R + 1).fill(null)); }
+    dp[0][0] = 0;
+    for (let i = 1; i <= H; i++) {
+      for (let j = 0; j <= R; j++) {
+        /* 跳过这一列（该列没填） */
+        if (dp[i - 1][j] > NEG / 2) { dp[i][j] = dp[i - 1][j]; back[i][j] = { type: 'skipCol', i: i - 1, j }; }
+        /* 把第 j-1 个格丢掉（内容丢失，扣分） */
+        if (j >= 1 && dp[i][j - 1] > NEG / 2) {
+          const v = dp[i][j - 1] - 3;
+          if (v > dp[i][j]) { dp[i][j] = v; back[i][j] = { type: 'drop', i: i - 1, j }; }
+        }
+        /* 第 j-1 个格给第 i-1 列 */
+        if (j >= 1 && dp[i - 1][j - 1] > NEG / 2) {
+          const key = cols[i - 1].key;
+          const v = dp[i - 1][j - 1] + scoreCell(key, cells[j - 1]);
+          if (v > dp[i][j]) { dp[i][j] = v; back[i][j] = { type: 'assign', i: i - 1, j }; }
+        }
+      }
+    }
+    if (dp[H][R] <= NEG / 2) return cells.slice(0, H);
+    /* 回溯：结果按「原表头列号」对齐 */
+    const total = cols[cols.length - 1].i + 1;
+    const assign = new Array(total).fill(null);
+    let i = H, j = R;
+    while (i > 0 && j > 0) {
+      const b = back[i][j];
+      if (!b) break;
+      if (b.type === 'assign') { assign[cols[b.i].i] = cells[b.j - 1]; i--; j--; }
+      else if (b.type === 'drop') { j--; }
+      else { i--; }
+    }
+    return assign;
+  }
 
   /* ---------- 单行 → 分镜字段 ---------- */
   function numDur(v) {
@@ -239,15 +298,20 @@
       if (!cells.length || cells.every(c => !String(c).trim())) { skipped++; return; }
       let cell;
       if (map && map.desc != null) {
+        const row = alignRow(map.cols, cells);
+        const at = (key) => {
+          const idx = map[key];
+          return idx == null ? '' : (row[idx] == null ? '' : row[idx]);
+        };
         cell = {
-          desc: cells[map.desc],
-          dialogue: map.dialogue != null ? cells[map.dialogue] : '',
-          durationNum: map.duration != null ? numDur(cells[map.duration]) : null,
-          sizeKey: map.size != null ? keyOf(SIZES, cells[map.size], KEY_SIZE) : null,
-          moveKey: map.move != null ? keyOf(MOVES, cells[map.move], KEY_MOVE) : null,
-          angleKey: map.angle != null ? keyOf(ANGLES, cells[map.angle], KEY_ANGLE) : null,
-          scene: map.scene != null ? cells[map.scene] : '',
-          note: map.note != null ? cells[map.note] : '',
+          desc: at('desc'),
+          dialogue: at('dialogue'),
+          durationNum: map.duration != null ? numDur(at('duration')) : null,
+          sizeKey: map.size != null ? keyOf(SIZES, at('size'), KEY_SIZE) : null,
+          moveKey: map.move != null ? keyOf(MOVES, at('move'), KEY_MOVE) : null,
+          angleKey: map.angle != null ? keyOf(ANGLES, at('angle'), KEY_ANGLE) : null,
+          scene: at('scene'),
+          note: at('note'),
         };
       } else {
         /* 没有表头：先按位置猜（镜号|画面|台词|时长），再退化到「整行就是画面」 */
