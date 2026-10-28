@@ -1,4 +1,7 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.13.1（2026-10-28）：导入/导出补两处丢字段 —— ① 人物的 sitOn/sitH（坐在哪把椅子、坐面多高）以前过一遍 normPerson 就被抹掉，
+                          导进来的「坐下」会瘫在地板上；现在保留，并在导入后按现场椅子重算落座（椅子不在就自动起身）。
+                          ② 光源的 h/intensity 也会被 normScene 抹掉，导致壁炉暖光、吊灯顶光、窗外月光全挤在同一高度同一亮度；现在跟着走。
    v1.13.0（2026-10-28）：座位系统 —— 人物终于能真的「坐上」椅子/沙发/长凳/床：
                           ① 道具定义里加了座位点（MN_PROP_KINDS[kind].seats：局部位置 + 坐面高度 + 坐下朝向）；
                           ② 入口三个：右键椅子「请人坐下」/ 人物面板「坐到最近的座位」/ 直接把人物拖到椅子上松手；
@@ -2204,6 +2207,8 @@ function normPerson(p, i, center) {
     color: p.color || '#2e7cf6',
     pose: path.length >= 2 ? '走路' : (POSES.indexOf(p.pose) >= 0 ? p.pose : '站立'),
     face: clamp(numOr(p.face, 1), 0.5, 2), faceDir: numOr(p.faceDir, 0), jump: clamp(numOr(p.jump, 0), 0, 3),
+    /* 座位绑定要能跟着导入导出走（否则导进来的「坐下」会瘫在地板上） */
+    ...(p.sitOn && p.sitOn.id ? { sitOn: { id: String(p.sitOn.id), seat: Math.max(0, Math.round(numOr(p.sitOn.seat, 0)) ) }, sitH: clamp(numOr(p.sitH, 0), 0, 1.6) } : {}),
     ...(path.length >= 2 ? { path, speed: clamp(numOr(p.speed, 1.2), 0.3, 3) } : {}),
     hidden: !!p.hidden,
   };
@@ -2231,6 +2236,9 @@ function normScene(sc) {
   arrOf(sc.lights).forEach((l, i) => out.lights.push({
     id: l.id || uid(), name: strOr(l.name, '光源 ' + (i + 1), 12),
     x: numOr(l.x, 4), y: numOr(l.y, 4), color: l.color || '#ffe9b0', hidden: !!l.hidden,
+    /* 高度和强度也要跟着导入走，否则壁炉的暖光、吊灯的顶光、窗外的月光全是一个高度一个亮度 */
+    h: clamp(numOr(l.h, 2.5), 0.05, 6), intensity: clamp(numOr(l.intensity, 1), 0, 3),
+    light: true,
   }));
   return out;
 }
@@ -2286,6 +2294,10 @@ function importAiData(data, mode) {
   if (hasScene) {
     pushUndo();
     const sc = normScene(data.scene);
+    /* 导入完按现场的真实座位重算一遍：坐面高度/朝向以道具当前位置为准，
+       座位道具不在（或被换 id）就自动起身，不会把人悬在半空。
+       注意：这里只「重算已绑定的」，不做自动吸附 —— 站着说话的人本来就该站在椅子旁边。 */
+    if (window.MN_LAYOUT) window.MN_LAYOUT.refitSitters(sc);
     if (mode === 'model') {
       st.scene = sc;
       if (data.sun) st.sun = Object.assign(st.sun || {}, data.sun);
