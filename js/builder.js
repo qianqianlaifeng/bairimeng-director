@@ -132,7 +132,7 @@ function mnToShotScene(st) {
     const kind = window.MN_kindOf ? window.MN_kindOf(p) : (p.kind || null);
     if (kind && window.MN_PROP_KINDS && window.MN_PROP_KINDS[kind] && window.MN_propCenter) {
       const ct = window.MN_propCenter(p);
-      push({ type: 'prop', shape: 'kind', kind, x: ct.x, z: ct.y, w, d, h, rot: -((+p.rot || 0)), scale: 1 });
+      push({ type: 'prop', shape: 'kind', kind, id: p.id, name: p.name || '', x: ct.x, z: ct.y, w, d, h, rot: -((+p.rot || 0)), scale: 1 });
       return;
     }
     /* 按长宽高比例认回原始形状：桌/沙发/门/窗/树/柱 —— 预演时还原真实家具，
@@ -149,7 +149,7 @@ function mnToShotScene(st) {
     const shape = (bestErr < 0.3) ? best[0] : 'box';
     const base = shape === 'box' ? 0.8 : best[1];
     const s = Math.min(3, Math.max(0.3, w / base));
-    push({ type: 'prop', shape, x: (+p.x || 0) + w / 2, z: (+p.y || 0) + d / 2, rot: 0, scale: s });
+    push({ type: 'prop', shape, id: p.id, name: p.name || '', x: (+p.x || 0) + w / 2, z: (+p.y || 0) + d / 2, rot: 0, scale: s });
   });
   (sc.persons || []).forEach(pe => {
     if (pe.hidden) return;
@@ -158,7 +158,7 @@ function mnToShotScene(st) {
     const pathPts = (pe.path || []).map(q => ({ x: +q.x || 0, z: +q.y || 0 }));
     const hasPath = pathPts.length >= 2;
     push({
-      type: 'actor', x: +pe.x || 0, z: +pe.y || 0,
+      type: 'actor', id: pe.id, name: pe.name || '', x: +pe.x || 0, z: +pe.y || 0,
       rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: 1,
       action: hasPath ? 'walk' : (A2P[pe.pose] || 'stand'),
       color: pe.color || '#2e7cf6', name: pe.name || '',
@@ -168,7 +168,7 @@ function mnToShotScene(st) {
   (sc.lights || []).forEach(l => {
     if (l.hidden) return;
     /* light:true → 白模里只在灯的高度画一颗小光球，不要变成一根立在画面中间的落地灯 */
-    push({ type: 'prop', shape: 'lamp', light: true, h: Math.max(0.6, Math.min(6, +l.h || 2.5)), x: +l.x || 0, z: +l.y || 0, rot: 0, scale: 1 });
+    push({ type: 'prop', shape: 'lamp', light: true, id: l.id, name: l.name || '', h: Math.max(0.6, Math.min(6, +l.h || 2.5)), x: +l.x || 0, z: +l.y || 0, rot: 0, scale: 1 });
   });
 
   const sun = st.sun || {};
