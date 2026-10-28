@@ -2,7 +2,7 @@
  * 白日梦导演台 · 运镜词典 + 运镜预演
  * ============================================================ */
 import { CAMERA_MOVES, MOVE_CATS, ACTOR_ACTIONS, STAGE_SCENES, ANGLES, SHOT_SIZES } from './data.js';
-import { MovePlayer, solveCamera, solveActor, clamp } from './cameraSim.js';
+import { MovePlayer, solveCamera, solveActor, clamp, focusPointOf } from './cameraSim.js';
 import { moveByKey } from './breakdown.js';
 import { esc, el, modal, toast, copyText, opts, askText, confirmDlg } from './ui.js';
 
@@ -173,6 +173,20 @@ function assignMove(moveKey) {
 /* ============================================================
  * 运镜预演（大舞台）
  * ============================================================ */
+/* 焦点下拉的选项：自动（主体）/ 每个人物 / 每个道具 / 画面中心 */
+function focusOptions(scene) {
+  const list = ['<option value="auto">自动 · 主体人物</option>'];
+  const objs = (scene && scene.objects) || [];
+  objs.filter(o => o.type === 'actor').forEach(o => list.push(`<option value="person:${esc(o.id || '')}">人物 · ${esc(o.name || '未命名')}</option>`));
+  objs.filter(o => o.type === 'prop' && !o.light && o.kind).forEach(o => list.push(`<option value="prop:${esc(o.id || '')}">道具 · ${esc(o.name || o.kind)}</option>`));
+  list.push('<option value="center">画面中心（场景中轴）</option>');
+  return list.join('');
+}
+function focusValue(v, scene, aimY) {
+  const parts = String(v || 'auto').split(':');
+  return focusPointOf(scene, parts[0] === 'auto' ? 'auto' : parts[0], parts[1] || '', aimY);
+}
+
 export function renderPreview(container, payload = {}) {
   const p = store.active;
   const initShot = payload?.shotId ? p?.shots.find(s => s.id === payload.shotId) : null;
@@ -218,6 +232,9 @@ export function renderPreview(container, payload = {}) {
           <div class="form-row"><label>布景</label><select id="pvScene" class="input">
             ${builtScene ? '<option value="__shot__" selected>🏗 本镜场景（搭建）</option>' : ''}
             ${opts(STAGE_SCENES, builtScene ? '' : 'plain')}
+          </select></div>
+          <div class="form-row"><label>焦点（摇 / 俯仰落点）</label><select id="pvFocus" class="input">
+            ${focusOptions(builtScene)}
           </select></div>
           <div class="form-row"><label>景别（真实距离）</label><select id="pvSize" class="input">${opts(SHOT_SIZES, 'MS')}</select></div>
           <div class="form-row"><label>拍摄角度（直观可见）</label><select id="pvAngle" class="input">${opts(ANGLES, 'eye')}</select></div>
@@ -293,7 +310,10 @@ export function renderPreview(container, payload = {}) {
     const scene = sceneV === '__shot__' ? builtScene : sceneV;
     const dur = +container.querySelector('#pvDur').value;
     const aimV = container.querySelector('#pvAim').value, camHV = container.querySelector('#pvCamH').value;
-    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value, size: container.querySelector('#pvSize').value, aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV });
+    const focusScene = sceneV === '__shot__' ? builtScene : scene;
+    const fRaw = container.querySelector('#pvFocus').value;
+    const focus = focusValue(fRaw, focusScene, aimV === 'auto' ? undefined : +aimV);
+    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value, size: container.querySelector('#pvSize').value, aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV, focus, focusKind: fRaw.split(':')[0] });
     drawMap();
     playBtn.textContent = '⏸ 暂停';
     player.onEnd = () => { playBtn.textContent = '▶ 播放'; };
@@ -314,6 +334,7 @@ export function renderPreview(container, payload = {}) {
   container.querySelector('#pvSize').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvAim').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvCamH').onchange = () => startPlay(player.t || 0);
+  container.querySelector('#pvFocus').onchange = () => startPlay(0);
   container.querySelector('#pvMoveSpeed').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvScene').onchange = () => startPlay(0);
   const durInput = container.querySelector('#pvDur');
@@ -335,6 +356,8 @@ export function renderPreview(container, payload = {}) {
       size: container.querySelector('#pvSize').value,
       aimY: aimV === 'auto' ? undefined : +aimV,
       camH: camHV === 'auto' ? undefined : +camHV,
+      focus: focusValue(container.querySelector('#pvFocus').value, (() => { const v2 = container.querySelector('#pvScene').value; return v2 === '__shot__' ? builtScene : v2; })(), aimV === 'auto' ? undefined : +aimV),
+      focusKind: container.querySelector('#pvFocus').value.split(':')[0],
     });
     drawMap();
     timeEl.textContent = `${(t * +durInput.value).toFixed(1)}s / ${durInput.value}s`;
