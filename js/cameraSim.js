@@ -107,6 +107,7 @@ function pathPosAt(obj, t) {
 }
 
 /* ---------- 场景道具（世界坐标烘焙） ---------- */
+let _wgSeq = 1;      // 墙段分组号：同一面墙的各段共享雾浓度，避免出现明暗竖缝
 /* 道具库多部件：与 3D 编辑器共用 mn-props.js 的 parts()，一张桌子在预演里也是「桌面 + 围板 + 四条腿」 */
 const KIND_SHADE = { main: 0.9, dark: 0.6, light: 0.97, accent: 0.55 };
 function kindPropPolys(o) {
@@ -134,7 +135,10 @@ function propPart(o) {
   else if (o.shape === 'box') polys = boxPolys(0, 0.4, 0, 0.8, 0.8, 0.8, 0.85);
   else if (o.shape === 'pillar') polys = frustumPolys(0, 0, 0, 0.16, 0.2, 2.4, 8, 0.88);
   else if (o.shape === 'table') polys = [...boxPolys(0, 0.72, 0, 1.3, 0.08, 0.85, 0.92), ...boxPolys(0, 0.36, 0, 0.18, 0.72, 0.7, 0.78)];
-  else if (o.shape === 'wall') { const wh = o.h || 2.4; polys = boxPolys(0, wh / 2, 0, o.w || 3, wh, 0.24, 0.8); }
+  else if (o.shape === 'wall') {
+    const wh = o.h || 2.4;
+    polys = boxPolys(0, wh / 2, 0, o.w || 3, wh, 0.24, 0.8);
+  }
   else if (o.shape === 'door') polys = [...boxPolys(-0.55, 1.05, 0, 0.14, 2.1, 0.14, 0.82), ...boxPolys(0.55, 1.05, 0, 0.14, 2.1, 0.14, 0.82), ...boxPolys(0, 2.15, 0, 1.24, 0.14, 0.16, 0.82)];
   else if (o.shape === 'window') polys = [...boxPolys(-0.9, 1.2, 0, 0.6, 2.4, 0.2, 0.82), ...boxPolys(0.9, 1.2, 0, 0.6, 2.4, 0.2, 0.82), ...boxPolys(0, 2.05, 0, 1.2, 0.7, 0.2, 0.82), ...boxPolys(0, 0.75, 0, 1.2, 0.3, 0.26, 0.86)];
   else if (o.shape === 'sofa') polys = [...boxPolys(0, 0.3, 0.15, 1.6, 0.35, 0.85, 0.9), ...boxPolys(0, 0.68, -0.28, 1.6, 0.75, 0.24, 0.88), ...boxPolys(-0.72, 0.52, 0.08, 0.18, 0.6, 0.85, 0.86), ...boxPolys(0.72, 0.52, 0.08, 0.18, 0.6, 0.85, 0.86)];
@@ -751,7 +755,13 @@ class WhiteModelRenderer {
         if (pts2.some(p2 => !isFinite(p2.x) || !isFinite(p2.y) || !isFinite(p2.d))) continue;
         let wcx = 0, wcy = 0, wcz = 0;
         for (const w of pts3) { wcx += w[0]; wcy += w[1]; wcz += w[2]; }
-        polys.push({ pts: pts2, n, shade: poly.shade, d: pts2.reduce((a, p2) => a + p2.d, 0) / pts2.length, wc: [wcx / pts3.length, wcy / pts3.length, wcz / pts3.length] });
+        /* d = 平均深度（雾、光照回退用），dmax = 最远顶点深度（排序键）。
+       画家算法按平均深度排序时，一整面 5~9m 的墙平均深度会算得比它前面的人更远/更近而排错，
+       实测出现过「墙盖住人」。按最远顶点排序：墙/地这类大面永远先画，小物体后画，遮挡就对了。 */
+        const dm = pts2.reduce((a, p2) => a + p2.d, 0) / pts2.length;
+        let dmax = 0;
+        for (const p2 of pts2) if (p2.d > dmax) dmax = p2.d;
+        polys.push({ pts: pts2, n, shade: poly.shade, d: dm, dmax, wc: [wcx / pts3.length, wcy / pts3.length, wcz / pts3.length] });
       }
     };
     for (const part of buildScene((opts.scene && opts.scene.base) || this.scene)) collectPart(part, 0, 0, 0, 0, 1);
@@ -834,7 +844,19 @@ class WhiteModelRenderer {
     }
 
     /* ---- 画家算法绘制 ---- */
-    polys.sort((a, b) => b.d - a.d);
+    polys.sort((a, b) => (b.dmax || b.d) - (a.dmax || a.d));
+    /* 同一面墙的各段用「整面墙的平均深度」算雾，否则每段深浅不一，看上去像一道道竖缝 */
+    const wallFog = new Map();
+    {
+      const acc = new Map();
+      for (const p2 of polys) {
+        if (!p2.wseg) continue;
+        const o = acc.get(p2.wg) || { s: 0, n: 0 };
+        o.s += p2.d; o.n++;
+        acc.set(p2.wg, o);
+      }
+      acc.forEach((o, k) => wallFog.set(k, o.s / Math.max(1, o.n)));
+    }
     let L = [0.45, 0.8, 0.4], lightInt = 1; // 光方向
     const lamps = objs.filter(o => o.type === 'prop' && o.shape === 'lamp').slice(0, 3);
     if (opts.scene && opts.scene.light) {
@@ -857,14 +879,15 @@ class WhiteModelRenderer {
       }
       const litAdj = Math.max(0, Math.min(1, lightInt * litL + (1 - lightInt) * 0.5));
       const v = this._shadeLo + (this._shadeHi - this._shadeLo) * litAdj * (poly.shade || 0.9);
-      const fog = clamp(1 - poly.d / 30, 0.25, 1);
+      const fogD = poly.wseg && wallFog.has(poly.wg) ? wallFog.get(poly.wg) : poly.d;
+      const fog = clamp(1 - fogD / 30, 0.25, 1);
       const c = mixColor(th.fog, v, fog);
       ctx.fillStyle = c;
       ctx.beginPath();
       ctx.moveTo(poly.pts[0].x, poly.pts[0].y);
       for (let i = 1; i < poly.pts.length; i++) ctx.lineTo(poly.pts[i].x, poly.pts[i].y);
       ctx.closePath(); ctx.fill();
-      if (poly.d < 14) { // 近处描边
+      if (poly.d < 14 && !poly.wseg) { // 近处描边（墙段不描，免得出现竖缝）
         ctx.strokeStyle = 'rgba(255,255,255,0.10)';
         ctx.stroke();
       }
