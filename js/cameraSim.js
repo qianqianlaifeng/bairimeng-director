@@ -126,7 +126,11 @@ function propPart(o) {
   let polys = [];
   const sc = o.scale || 1;
   const fromKind = o.kind ? kindPropPolys(o) : null;
-  if (fromKind) polys = fromKind;
+  if (o.light) {
+    /* 光源只参与打光，不画实体：以前这里会渲染成一根立在画面中间的落地灯，
+       后来又改成天上飘一颗球，都碍事 —— 白模预演里直接不画。 */
+    polys = [];
+  } else if (fromKind) polys = fromKind;
   else if (o.shape === 'box') polys = boxPolys(0, 0.4, 0, 0.8, 0.8, 0.8, 0.85);
   else if (o.shape === 'pillar') polys = frustumPolys(0, 0, 0, 0.16, 0.2, 2.4, 8, 0.88);
   else if (o.shape === 'table') polys = [...boxPolys(0, 0.72, 0, 1.3, 0.08, 0.85, 0.92), ...boxPolys(0, 0.36, 0, 0.18, 0.72, 0.7, 0.78)];
@@ -659,14 +663,24 @@ class WhiteModelRenderer {
     const parts = (opts.hideActor || sim.type === 'pov') ? [] : actorDefs.map(d => ({ d, parts: buildActor(d.pose) }));
     let propObjs = (opts.hideActor ? [] : objs.filter(o => o.type === 'prop'));
     if (opts.scene && opts.scene.cutaway) {
-      // 剖开前方外墙：剔除面向相机的墙
+      /* 剖开前方外墙：只切「挡在机位和场景中心之间」的那几面墙。
+         以前按法线点乘判，方向是反的 —— 结果切掉了背景墙、留下机位这一侧的墙，
+         画面里就剩一块挡在前面的板子。现在直接算线段相交。 */
       const azR = ((opts.scene.cam && opts.scene.cam.az) || 0) * DEG;
-      const camX = Math.sin(azR) * (opts.scene.cam?.dist || 7), camZ = Math.cos(azR) * (opts.scene.cam?.dist || 7);
+      const camDist = (opts.scene.cam && opts.scene.cam.dist) || 7;
+      const camX = Math.sin(azR) * camDist, camZ = Math.cos(azR) * camDist;   // 场景已居中，中心在原点
+      const crosses = (ax, ay, bx, by, cx2, cy2, dx2, dy2) => {
+        const o = (px, py, qx, qy, rx, ry) => (qx - px) * (ry - py) - (qy - py) * (rx - px);
+        const d1 = o(ax, ay, bx, by, cx2, cy2), d2 = o(ax, ay, bx, by, dx2, dy2);
+        const d3 = o(cx2, cy2, dx2, dy2, ax, ay), d4 = o(cx2, cy2, dx2, dy2, bx, by);
+        return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+      };
       propObjs = propObjs.filter(o => {
         if (o.shape !== 'wall') return true;
+        const half = Math.max(0.3, (+o.w || 3) / 2);
         const rr = (o.rot || 0) * DEG;
-        const nx = Math.sin(rr), nz = Math.cos(rr);
-        return (nx * (camX - o.x) + nz * (camZ - o.z)) <= 0;
+        const ux = Math.cos(rr), uz = -Math.sin(rr);          // 白模里 rot 的方向约定
+        return !crosses(camX, camZ, 0, 0, o.x - ux * half, o.z - uz * half, o.x + ux * half, o.z + uz * half);
       });
     }
     const propParts = propObjs.map(o => propPart(o));
