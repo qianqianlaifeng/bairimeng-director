@@ -17,6 +17,14 @@
     [/(特写|大特写|细节)/, 'ECU'],
   ];
   const MOVES = [
+    /* 先放「专名」：都是通用字的超集，放后面会被 缓推/拉远/上升… 这类短词抢先吃掉 */
+    [/(变焦推近)/, 'zoomIn'],
+    [/(变焦拉远)/, 'zoomOut'],
+    [/(螺旋上升)/, 'spiralUp'],
+    [/(俯瞰旋转)/, 'topRotate'],
+    [/(越肩环绕)/, 'overShoulder'],
+    [/(拉远揭示)/, 'pullReveal'],
+    [/(急甩停顿)/, 'snapZoom'],
     [/(不变焦|固定|静止|不动|static)/i, 'static'],
     [/(缓推|慢推|慢慢推|推近)/, 'slowPush'],
     [/(急推|快推|crash)/i, 'crashZoomIn'],
@@ -62,7 +70,7 @@
   ];
   const ANGLES = [
     [/(鸟瞰|航拍|俯视|bird)/i, 'bird'],
-    [/(过肩|over\s*shoulder)/i, 'ots'],
+    [/(越肩|过肩|over\s*shoulder)/i, 'ots'],
     [/(仰拍|仰角|低角|low)/i, 'low'],
     [/(俯拍|俯角|高角|high)/i, 'high'],
     [/(斜侧|倾斜|dutch)/i, 'dutch'],
@@ -99,43 +107,61 @@
     return txt.replace(/^\uFEFF/, '');
   }
 
-  /* ---------- 文本 → 行 ---------- */
-  function splitLines(text) {
-    return String(text || '').replace(/\r\n?/g, '\n').split('\n').map(l => l.replace(/\s+$/, '')).filter(l => l.trim() !== '');
-  }
-  /* CSV 单行解析（支持引号、引号内逗号/换行） */
-  function parseCSVLine(line) {
-    const out = [];
+  /* ---------- 表格 → 行 ---------- */
+  /* 引号感知的整表扫描：Excel 里带换行的单元格是 "…" 包起来的，
+     不能先按 \n 切行（那样一条镜头会被拆成两行），要按「引号外的换行」切行。 */
+  /* 单行切格（引号内不切；句中裸引号按原样保留） */
+  function lineCells(line, delim) {
+    const cells = [];
     let cur = '', q = false;
     for (let i = 0; i < line.length; i++) {
       const ch = line[i];
       if (q) {
-        if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-        else if (ch === '"') q = false;
+        if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; }
         else cur += ch;
-      } else if (ch === '"') q = true;
-      else if (ch === ',') { out.push(cur); cur = ''; }
+      } else if (ch === '"' && cur.trim() === '') q = true;
+      else if (ch === delim) { cells.push(cur); cur = ''; }
       else cur += ch;
     }
-    out.push(cur);
-    return out.map(s => s.trim());
+    cells.push(cur);
+    return cells.map(s => s.trim());
+  }
+  function scanRows(text, delim) {
+    const rows = [];
+    let row = [], cell = '', inQ = false;
+    const pushCell = () => { row.push(cell); cell = ''; };
+    const pushRow = () => { pushCell(); rows.push(row); row = []; };
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQ) {
+        if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false; }
+        else cell += ch;                       /* 引号内的换行/逗号原样保留 */
+        continue;
+      }
+      if (ch === '"') { if (cell.trim() === '') { inQ = true; } else cell += ch; continue; }  /* 只在「字段开头」当引号，句中裸引号按原样保留 */
+      if (ch === delim) { pushCell(); continue; }
+      if (ch === '\n' || ch === '\r') { pushRow(); continue; }
+      cell += ch;
+    }
+    if (inQ) {
+      /* 引号到文末都没闭合（同学手打的引号漏了）→ 退回按行切，不把后面整段吞进一个格 */
+      return text.split('\n').map(l => lineCells(l, delim)).filter(r => r.some(c => c !== ''));
+    }
+    if (cell !== '' || row.length) pushRow();
+    let out = rows
+      .map(r => r.map(s => s.trim()))
+      .filter(r => r.some(c => c !== ''));
+    /* markdown 表格的首尾竖线会各造出一个空边格，去掉 */
+    if (delim === '|') out = out.map(r => (r.length > 2 && r[0] === '' && r[r.length - 1] === '' ? r.slice(1, -1) : r));
+    return out;
   }
   function parseDelimited(text) {
-    const lines = splitLines(text);
-    if (!lines.length) return [];
-    const sample = lines[0];
-    const delim = sample.indexOf('\t') >= 0 ? '\t' : sample.indexOf('|') >= 0 ? '|' : ',';
-    const rows = [];
-    for (const line of lines) {
-      if (delim === '|') {
-        /* markdown 表格：去掉首尾竖线，跳过 |---| 分隔行 */
-        if (/^\s*\|?[\s:-]+\|[\s:|-]*$/.test(line)) continue;
-        const cells = line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(s => s.trim());
-        rows.push(cells);
-      } else if (delim === '\t') rows.push(line.split('\t').map(s => s.trim()));
-      else rows.push(parseCSVLine(line));
-    }
-    return rows;
+    const t = String(text || '').replace(/\r\n?/g, '\n');
+    const firstLine = t.split('\n')[0] || '';
+    const delim = firstLine.indexOf('\t') >= 0 ? '\t' : firstLine.indexOf('|') >= 0 ? '|' : ',';
+    const rows = scanRows(t, delim);
+    /* markdown 的 |---|:-:|--:| 分隔行丢掉 */
+    return rows.filter(r => !r.every(c => /^:?-{1,}:?$/.test(c) || c === ''));
   }
 
   /* ---------- 表头识别 ---------- */
@@ -330,6 +356,8 @@
       shots.push(shot);
     });
     if (map && map.desc == null) warnings.push('表头里没找到「画面/描述」列，可能认错了');
+    if (map && !dataRows.length) warnings.push('只读到表头，下面没有数据行');
+    if (!map && shots.length && !dataRows.some(r => String(r[0] || '').trim())) warnings.push('没解析到有效镜头');
     return { shots, stats: { rows: dataRows.length, used: shots.length, skipped }, warnings: warnings.slice(0, 3) };
   }
 
@@ -344,5 +372,5 @@
     return '\uFEFF' + rows.map(r => r.map(c => /[",\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c).join(',')).join('\n');
   }
 
-  window.SHOT_IMPORT = { parse, parseDelimited, decodeBuffer, templateCSV, numDur, hit, keyOf, SIZES, MOVES, ANGLES };
+  window.SHOT_IMPORT = { parse, parseDelimited, decodeBuffer, templateCSV, numDur, hit, keyOf, SIZES, MOVES, ANGLES, KEY_SIZE, KEY_MOVE, KEY_ANGLE };
 })();
