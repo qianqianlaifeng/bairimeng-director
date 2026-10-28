@@ -30,7 +30,7 @@ const uid = () => 'x' + Math.random().toString(36).slice(2, 9);
  * 墙：白模 rot=0 时长边沿 X；喵咛墙角 θ=atan2(dy,dx)，两者互为反向。
  * 人：白模 yaw=0 面朝 +z；喵咛 rot=0 面朝 +x → yaw = 90 - rot。
  * ============================================================ */
-function shotSceneToMn(scene, shot) {
+export function shotSceneToMn(scene, shot) {
   const st = {
     format: 'aistudio-director', version: 1, updatedAt: Date.now(),
     scene: {
@@ -76,7 +76,7 @@ function shotSceneToMn(scene, shot) {
     } else if (o.type === 'actor') {
       const P2A = { stand: '站立', walk: '走路', run: '运动', turn: '站立', sit: '坐下' };
       st.scene.persons.push({
-        id: uid(), name: '人物', x: o.x, y: o.z,
+        id: uid(), name: o.name || '人物', x: o.x, y: o.z, sitH: Math.max(0, Math.min(1.6, +o.sitH || 0)),
         rot: ((90 - (+o.rot || 0)) % 360 + 360) % 360,
         color: o.color || '#2e7cf6', pose: P2A[o.action] || '站立', face: 1, faceDir: 0, jump: 0, hidden: false,
       });
@@ -106,7 +106,7 @@ function shotSceneToMn(scene, shot) {
  * 房间 → 四面墙；墙 → 墙（rot = -θ）；造物 → box（等比缩放）；
  * 人物 → actor（yaw = 90 - rot）；光源 → lamp；太阳 → light。
  * ============================================================ */
-function mnToShotScene(st) {
+export function mnToShotScene(st) {
   const sc = (st && st.scene) || {};
   const objects = [];
   const push = (o) => { if (o && isFinite(o.x) && isFinite(o.z)) objects.push(o); };
@@ -161,6 +161,8 @@ function mnToShotScene(st) {
       type: 'actor', id: pe.id, name: pe.name || '', x: +pe.x || 0, z: +pe.y || 0,
       rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: 1,
       action: hasPath ? 'walk' : (A2P[pe.pose] || 'stand'),
+      /* 坐在家具上：把坐面高度带给白模，预演里人才不会陷进椅子 */
+      sitH: pe.sitOn ? Math.max(0, Math.min(1.6, +pe.sitH || 0)) : 0,
       color: pe.color || '#2e7cf6', name: pe.name || '',
       ...(hasPath ? { path: pathPts, speed: +pe.speed || 1.2 } : {}),
     });
