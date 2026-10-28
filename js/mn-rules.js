@@ -52,7 +52,7 @@ ${F}
 | rooms[] | id, name, x, y, w, d, h, color | 是 | 地面分区（只铺地，不立墙）。h 是层高，默认 4 |
 | walls[] | id, name, x1, y1, x2, y2, h, holes[] | 是 | 真正立起来的墙。h 默认 2.6，holes 可为空数组 |
 | props[] | id, name, x, y, w, d, h, color, hidden | 是 | 家具 / 箱体。color 用 #rrggbb，写 "" 表示随机 |
-| persons[] | id, name, x, y, rot, color, pose, face, faceDir, jump, hidden | 是 | pose 只能取「站立 / 走路 / 坐下 / 招手 / 躺下 / 运动」；face 是脸大小倍数 0.5~2；faceDir 是脸朝向偏移 0~360；jump 是起跳高度 0~3；可选 path 是走位途经点 [{x,y}…]（2~6 个、落在房间里），配 speed 步行速度 0.3~3 |
+| persons[] | id, name, x, y, rot, color, pose, face, faceDir, jump, hidden | 是 | pose 只能取「站立 / 走路 / 坐下 / 招手 / 躺下 / 运动」；face 是脸大小倍数 0.5~2；faceDir 是脸朝向偏移 0~360；jump 是起跳高度 0~3；可选 path 是走位途经点 [{x,y}…]（2~6 个、落在房间里、不穿过家具与墙，门洞可过），配 speed 步行速度 0.3~3 |
 | lights[] | id, name, x, y, color, hidden | 是 | 额外点光源，最多 4 个，color 建议暖白 #ffe9b0 |
 | ground | color, grid | 是 | 地面底色 + 是否显示网格 |
 
