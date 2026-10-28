@@ -55,6 +55,8 @@ function newShot(partial = {}) {
     sketch: null,       // IndexedDB key（手绘分镜稿）
     moveSpeed: 'std',   // 运镜速度 slow/std/fast
     aimY: null,         // 看向高度（m，null=自动跟景别）：1.66 脸 / 1.45 眼 / 1.3 胸 …
+    focusKind: 'auto',  // 焦点类型：auto=主体人物 / person / prop / center
+    focusId: '',        // 焦点对象 id（person/prop 时有效）
     camH: null,         // 机位高度（m，null=自动跟运镜）：0.5 低机位 / 1.7 眼平 / 4.5 俯视
     scene: null,        // 场景搭建 {objects:[], cam:}
     mnState: null,      // 导演台原生场景快照（房间/墙/道具，重开时无损还原）
