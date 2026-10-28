@@ -523,12 +523,16 @@ export function renderScenes(container) {
         const n = (a) => (a || []).length;
         const use = store.sceneUsage(it.id);
         return `<div class="sc-card" data-id="${it.id}">
-          <div class="sc-thumb">${it.thumb ? `<img src="${it.thumb}" alt="">` : `<span class="sc-thumb-ph">🏗</span>`}</div>
+          <div class="sc-thumb sc-thumb-btn" data-act="open" title="点开直接进导演台编辑这套景">
+            ${it.thumb ? `<img src="${it.thumb}" alt="">` : `<span class="sc-thumb-ph">🏗</span>`}
+            <span class="sc-thumb-open">✏️ 打开编辑</span>
+          </div>
           <div class="sc-body">
             <div class="sc-name">${esc(it.name)}</div>
             <div class="sc-meta dim">房 ${n(st.rooms)} · 墙 ${n(st.walls)} · 道具 ${n(st.props)} · 人物 ${n(st.persons)} · 用在 <b>${use}</b> 镜</div>
             <div class="sc-ops">
-              <button class="btn btn-primary btn-sm" data-act="apply">套用到镜头…</button>
+              <button class="btn btn-primary btn-sm" data-act="open2">✏️ 打开编辑</button>
+              <button class="btn btn-ghost btn-sm" data-act="apply">套用到镜头…</button>
               <button class="btn btn-ghost btn-sm" data-act="rename">重命名</button>
               <button class="btn btn-ghost btn-sm" data-act="del">删除</button>
             </div>
@@ -560,6 +564,13 @@ export function renderScenes(container) {
     container.querySelectorAll('.sc-card').forEach(card => {
       const id = card.dataset.id;
       const it = store.findScene(id);
+      /* 「打开编辑」：把这套景装进导演台，改完点「保存到场景库」覆盖这一条 */
+      const openEdit = async () => {
+        const { openSceneBuilder } = await import('./builder.js');
+        openSceneBuilder(null, draw, { library: true, editId: id });
+      };
+      card.querySelector('[data-act="open"]').onclick = openEdit;
+      card.querySelector('[data-act="open2"]').onclick = openEdit;
       card.querySelector('[data-act="apply"]').onclick = () => openApply(id, draw);
       card.querySelector('[data-act="rename"]').onclick = async () => {
         const nm = await askText({ title: '重命名场景', label: '场景名称', value: it.name, okText: '保存' });
