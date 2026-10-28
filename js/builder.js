@@ -167,7 +167,8 @@ function mnToShotScene(st) {
   });
   (sc.lights || []).forEach(l => {
     if (l.hidden) return;
-    push({ type: 'prop', shape: 'lamp', x: +l.x || 0, z: +l.y || 0, rot: 0, scale: 1 });
+    /* light:true → 白模里只在灯的高度画一颗小光球，不要变成一根立在画面中间的落地灯 */
+    push({ type: 'prop', shape: 'lamp', light: true, h: Math.max(0.6, Math.min(6, +l.h || 2.5)), x: +l.x || 0, z: +l.y || 0, rot: 0, scale: 1 });
   });
 
   const sun = st.sun || {};
