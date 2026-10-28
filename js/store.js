@@ -179,6 +179,20 @@ class Store {
   }
 
   /* ---------- 镜头操作 ---------- */
+  /* 批量导入分镜（同学写好的表格）：一次落库、一次重绘 */
+  importShots(list, opts = {}) {
+    const p = this.active; if (!p) return 0;
+    const arr = (list || []).filter(x => x && String(x.desc || '').trim());
+    if (!arr.length) return 0;
+    if (opts.replace) p.shots = [];
+    arr.forEach(x => p.shots.push(newShot(x)));
+    p.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+    this.achv.counts.shots += arr.length;
+    if (this._checkShotBadges) this._checkShotBadges();
+    return arr.length;
+  }
+
   addShot(partial = {}, at = -1) {
     const p = this.active; if (!p) return null;
     /* 连戏默认：新镜头自动沿用上一镜的场景（同一个景里继续拍，不用重搭） */
