@@ -183,5 +183,189 @@
     return hitsFor(b, scene, o.id, kind, o.kind).length > 0;
   }
 
-  window.MN_LAYOUT = { boxOf, mtv, hitsFor, insideRooms, findFreeSpot, resolveScene, settle, collides };
+  /* ============================================================
+   * 走位路径：绕开家具与墙
+   * ------------------------------------------------------------
+   * 路径是折线（person.path）。这里做两件事：
+   *   1) 判断某一段是否被挡（家具/墙，按人脚半径外扩）
+   *   2) 被挡就用 A* 在 0.2m 网格上绕过去，再做「视线简化」把多余拐点去掉
+   * 墙上的门洞算通路（把墙按洞切段）。
+   * ============================================================ */
+  const PATH_R = 0.34;                 // 人脚半径（比人物占地 0.3 略大，免得贴脸走）
+  const WALK_SKIP = { rug: 1, door: 1, window: 1, light: 1 };
+
+  function pointInBox(px, py, b) {
+    const c = Math.cos(-b.rot), s = Math.sin(-b.rot);
+    const dx = px - b.cx, dy = py - b.cy;
+    const lx = dx * c - dy * s, ly = dx * s + dy * c;
+    return Math.abs(lx) <= b.hw && Math.abs(ly) <= b.hd;
+  }
+
+  /* 收集挡路的东西：家具（除地毯/门窗/灯）+ 墙（按门洞切段） */
+  function pathObstacles(scene, r) {
+    const R = r == null ? PATH_R : r;
+    const out = [];
+    for (const p of (scene.props || [])) {
+      if (p.hidden || WALK_SKIP[p.kind]) continue;
+      const b = boxOf('prop', p);
+      if (b) out.push({ cx: b.cx, cy: b.cy, hw: b.hw + R, hd: b.hd + R, rot: b.rot });
+    }
+    for (const w of (scene.walls || [])) {
+      if (w.hidden) continue;
+      const x1 = +w.x1 || 0, y1 = +w.y1 || 0, x2 = +w.x2 || 0, y2 = +w.y2 || 0;
+      const L = Math.hypot(x2 - x1, y2 - y1);
+      if (L < 0.05) continue;
+      const th = Math.max(0.08, +w.th || 0.2) / 2 + 0.04 + R;
+      const ux = (x2 - x1) / L, uy = (y2 - y1) / L;
+      const rot = Math.atan2(uy, ux);
+      const holes = (w.holes || []).map(hp => {
+        const half = Math.max(0.12, (+hp.w || 1) / 2) / L;
+        return [Math.max(0, +hp.t - half), Math.min(1, +hp.t + half)];
+      }).sort((a, b) => a[0] - b[0]);
+      let cur = 0;
+      const spans = [];
+      for (const hp of holes) { if (hp[0] > cur) spans.push([cur, hp[0]]); cur = Math.max(cur, hp[1]); }
+      if (cur < 1) spans.push([cur, 1]);
+      for (const sp of spans) {
+        const len = (sp[1] - sp[0]) * L;
+        if (len < 0.06) continue;
+        const t = (sp[0] + sp[1]) / 2;
+        out.push({ cx: x1 + ux * L * t, cy: y1 + uy * L * t, hw: len / 2, hd: th, rot });
+      }
+    }
+    return out;
+  }
+
+  /* 线段是否被挡（每 0.12m 采样，够用且便宜） */
+  function segBlocked(ax, ay, bx, by, boxes) {
+    const d = Math.hypot(bx - ax, by - ay);
+    const n = Math.max(2, Math.ceil(d / 0.12));
+    for (let i = 0; i <= n; i++) {
+      const t = i / n, px = ax + (bx - ax) * t, py = ay + (by - ay) * t;
+      for (const b of boxes) if (pointInBox(px, py, b)) return true;
+    }
+    return false;
+  }
+
+  /* A* 绕行（0.2m 网格），返回折线点（含起终点） */
+  function detour(ax, ay, bx, by, boxes, step) {
+    const S = step || 0.2;
+    let x0 = Math.min(ax, bx), x1 = Math.max(ax, bx), y0 = Math.min(ay, by), y1 = Math.max(ay, by);
+    for (const b of boxes) {
+      const rr = Math.hypot(b.hw, b.hd);
+      if (b.cx + rr < x0 - 2 || b.cx - rr > x1 + 2 || b.cy + rr < y0 - 2 || b.cy - rr > y1 + 2) continue;
+      x0 = Math.min(x0, b.cx - rr); x1 = Math.max(x1, b.cx + rr);
+      y0 = Math.min(y0, b.cy - rr); y1 = Math.max(y1, b.cy + rr);
+    }
+    x0 -= 1.2; y0 -= 1.2; x1 += 1.2; y1 += 1.2;
+    const NX = Math.min(260, Math.ceil((x1 - x0) / S) + 1), NY = Math.min(260, Math.ceil((y1 - y0) / S) + 1);
+    if (NX * NY > 40000) return null;
+    const toCell = (x, y) => [clamp(Math.round((x - x0) / S), 0, NX - 1), clamp(Math.round((y - y0) / S), 0, NY - 1)];
+    const center = (ix, iy) => [x0 + ix * S, y0 + iy * S];
+    const blocked = new Uint8Array(NX * NY);
+    for (let ix = 0; ix < NX; ix++) for (let iy = 0; iy < NY; iy++) {
+      const c = center(ix, iy);
+      for (const b of boxes) if (pointInBox(c[0], c[1], b)) { blocked[iy * NX + ix] = 1; break; }
+    }
+    const nearFree = (x, y) => {
+      const cell = toCell(x, y);
+      if (!blocked[cell[1] * NX + cell[0]]) return cell;
+      for (let r = 1; r <= 8; r++) for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) {
+        const jx = cell[0] + dx, jy = cell[1] + dy;
+        if (jx < 0 || jy < 0 || jx >= NX || jy >= NY) continue;
+        if (!blocked[jy * NX + jx]) return [jx, jy];
+      }
+      return null;
+    };
+    const s0 = nearFree(ax, ay), s1 = nearFree(bx, by);
+    if (!s0 || !s1) return null;
+    const key = (ix, iy) => iy * NX + ix;
+    const open = [{ ix: s0[0], iy: s0[1], g: 0, f: Math.hypot(s0[0] - s1[0], s0[1] - s1[1]) }];
+    const gScore = new Map(), came = new Map();
+    gScore.set(key(s0[0], s0[1]), 0);
+    let found = false, guard = 0;
+    while (open.length && guard++ < 200000) {
+      let bi = 0;
+      for (let i = 1; i < open.length; i++) if (open[i].f < open[bi].f) bi = i;
+      const cur = open.splice(bi, 1)[0];
+      const ck = key(cur.ix, cur.iy);
+      if (cur.ix === s1[0] && cur.iy === s1[1]) { found = true; break; }
+      if (cur.g > (gScore.get(ck) == null ? Infinity : gScore.get(ck))) continue;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        if (!dx && !dy) continue;
+        const jx = cur.ix + dx, jy = cur.iy + dy;
+        if (jx < 0 || jy < 0 || jx >= NX || jy >= NY) continue;
+        if (blocked[jy * NX + jx]) continue;
+        const diag = dx && dy;
+        if (diag && (blocked[cur.iy * NX + jx] || blocked[jy * NX + cur.ix])) continue;   // 不切角
+        const ng = cur.g + (diag ? 1.414 : 1);
+        const jk = key(jx, jy);
+        const old = gScore.get(jk);
+        if (old != null && ng >= old) continue;
+        gScore.set(jk, ng); came.set(jk, ck);
+        open.push({ ix: jx, iy: jy, g: ng, f: ng + Math.hypot(jx - s1[0], jy - s1[1]) });
+      }
+    }
+    if (!found) return null;
+    const cells = [];
+    let ck = key(s1[0], s1[1]);
+    for (let guard2 = 0; guard2 < 20000; guard2++) {
+      const ix = ck % NX, iy = Math.floor(ck / NX);
+      cells.push(center(ix, iy));
+      if (!came.has(ck)) break;
+      ck = came.get(ck);
+    }
+    cells.reverse();
+    cells[0] = [ax, ay];
+    cells[cells.length - 1] = [bx, by];
+    return cells;
+  }
+
+  /* 视线简化：能直连就删掉中间点 */
+  function simplify(pts, boxes) {
+    if (pts.length <= 2) return pts;
+    const out = [pts[0]];
+    let i = 0;
+    while (i < pts.length - 1) {
+      let j = pts.length - 1;
+      for (; j > i + 1; j--) if (!segBlocked(pts[i][0], pts[i][1], pts[j][0], pts[j][1], boxes)) break;
+      out.push(pts[j]);
+      i = j;
+    }
+    return out;
+  }
+
+  /* 整条路径绕障：返回 {pts, changed, added} */
+  function routePath(scene, path, opts) {
+    const list = (path || []).map(p => ({ x: +p.x || 0, y: +p.y || 0 }));
+    if (list.length < 2) return { pts: list, changed: false, added: 0 };
+    const boxes = pathObstacles(scene, (opts && opts.radius) || PATH_R);
+    const out = [];
+    let changed = false;
+    for (let i = 0; i < list.length - 1; i++) {
+      const a = list[i], b = list[i + 1];
+      if (i === 0) out.push([a.x, a.y]);
+      if (!segBlocked(a.x, a.y, b.x, b.y, boxes)) { out.push([b.x, b.y]); continue; }
+      const det = detour(a.x, a.y, b.x, b.y, boxes, (opts && opts.step) || 0.2);
+      if (det) { changed = true; for (let k = 1; k < det.length; k++) out.push(det[k]); }
+      else out.push([b.x, b.y]);            // 绕不过去就保留直连，至少不比原来差
+    }
+    const simp = simplify(out, boxes);
+    const pts = simp.map(p => ({ x: +p[0].toFixed(2), y: +p[1].toFixed(2) }));
+    return { pts, changed, added: Math.max(0, pts.length - list.length) };
+  }
+
+  /* 整场：所有带路径的人都绕一遍 */
+  function routeAllPaths(scene) {
+    let n = 0, added = 0;
+    for (const pe of (scene.persons || [])) {
+      if (!pe.path || pe.path.length < 2) continue;
+      const r = routePath(scene, pe.path, {});
+      if (r.changed) { pe.path = r.pts; n++; added += r.added; }
+    }
+    return { count: n, added };
+  }
+
+  window.MN_LAYOUT = { boxOf, mtv, hitsFor, insideRooms, findFreeSpot, resolveScene, settle, collides,
+    pathObstacles, segBlocked, routePath, routeAllPaths };
 })();
