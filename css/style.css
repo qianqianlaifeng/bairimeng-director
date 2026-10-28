@@ -463,7 +463,8 @@ body.theme-obsidian .modal, body.theme-gilt .modal { box-shadow: 0 30px 80px rgb
 }
 .proj-card:hover { transform: translateY(-3px); border-color: var(--acc); box-shadow: var(--shadow), var(--glow); }
 .proj-aspect {
-  position: relative; aspect-ratio: 16/9;
+  position: relative;
+  aspect-ratio: 16 / 9;
   background:
     radial-gradient(80% 90% at 28% 8%, var(--glow2), transparent 60%),
     radial-gradient(70% 80% at 88% 96%, var(--glow1), transparent 60%),
@@ -471,6 +472,10 @@ body.theme-obsidian .modal, body.theme-gilt .modal { box-shadow: 0 30px 80px rgb
   display: grid; place-items: center;
   border-bottom: 1px solid var(--border);
 }
+/* 项目卡片的画幅要跟着项目走：9:16 的短剧不能用 16:9 的封面格子。
+   这条必须写在 .proj-aspect 之后（同为 0-1-0 特异度，后者覆盖前者）。 */
+.proj-aspect.aspect-9x16 { aspect-ratio: 9 / 16; max-height: 260px; margin-inline: auto; }
+.proj-aspect.aspect-1x1 { aspect-ratio: 1 / 1; }
 .proj-shotcount {
   font-size: 11.5px; font-weight: 700; color: var(--acc-hi);
   background: var(--panel); border: 1px solid var(--border);
