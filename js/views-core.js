@@ -4,7 +4,7 @@
  * ============================================================ */
 import { CAMERA_MOVES, MOVE_CATS, SHOT_SIZES, ANGLES, TRANSITIONS, PROMPT_TEMPLATES, STYLE_BANK, ACTOR_ACTIONS, STAGE_SCENES } from './data.js';
 import { localBreakdown, aiBreakdown, aiEnhancePrompt, buildPrompt, moveByKey } from './breakdown.js';
-import { WhiteModelRenderer, solveCamera } from './cameraSim.js';
+import { WhiteModelRenderer, solveCamera, focusPointOf } from './cameraSim.js';
 import { openSceneBuilder } from './builder.js';
 import { esc, el, modal, confirmDlg, toast, copyText, pickFile, fmtDur, opts } from './ui.js';
 
@@ -492,6 +492,9 @@ export function openShotEditor(shot, idx) {
           <div class="form-row"><label>景别</label><select id="edSize" class="input">${opts(SHOT_SIZES, shot.shotSize)}</select></div>
           <div class="form-row"><label>角度</label><select id="edAngle" class="input">${opts(ANGLES, shot.angle)}</select></div>
         </div>
+        <div class="form-row"><label>焦点（摇 / 俯仰落点）</label><select id="edFocus" class="input">
+          ${focusOpts(shot)}
+        </select></div>
         <div class="editor-3col">
           <div class="form-row"><label>看向高度</label><select id="edAim" class="input">
             <option value="auto" ${!shot.aimY ? 'selected' : ''}>自动（跟景别）</option>
@@ -576,7 +579,7 @@ export function openShotEditor(shot, idx) {
       if (!document.body.contains(cv)) return;
       const t = Math.min(1, (now - t0) / dur);
       const aimV = m.body.querySelector('#edAim')?.value ?? 'auto', camHV = m.body.querySelector('#edCamH')?.value ?? 'auto';
-      renderer.render(mv.sim, t, action, { duration: dur / 1000, hud: true, letterbox: true, angle: m.body.querySelector('#edAngle').value, moveSpeed: m.body.querySelector('#edSpeed').value, size: m.body.querySelector('#edSize').value, scene: shot.scene, aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV });
+      renderer.render(mv.sim, t, action, { duration: dur / 1000, hud: true, letterbox: true, angle: m.body.querySelector('#edAngle').value, moveSpeed: m.body.querySelector('#edSpeed').value, size: m.body.querySelector('#edSize').value, scene: shot.scene, aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV, focus: focusPointOf(shot.scene, focusOf().focusKind, focusOf().focusId, aimV === 'auto' ? undefined : +aimV), focusKind: focusOf().focusKind });
       if (t < 1) player.raf = requestAnimationFrame(loopFn);
       else setTimeout(() => { if (document.body.contains(cv)) playMove(); }, 600);
     };
@@ -720,6 +723,29 @@ export function openShotEditor(shot, idx) {
     finally { btn.disabled = false; btn.textContent = '✨ AI 增强'; }
   };
   m.body.querySelector('#edCopy').onclick = () => copyText(m.body.querySelector('#edPrompt').value);
+  m.body.querySelector('#edFocus').onchange = () => playMove();
+
+  /* 焦点选项：自动（主体）/ 场景里的人物 / 道具 / 画面中心 */
+  function focusOpts(sh) {
+    const cur = (sh.focusKind && sh.focusKind !== 'auto') ? sh.focusKind + ':' + (sh.focusId || '') : 'auto';
+    const objs = (sh.scene && sh.scene.objects) || [];
+    const L = [`<option value="auto" ${cur === 'auto' ? 'selected' : ''}>自动 · 主体人物</option>`];
+    objs.filter(o => o.type === 'actor').forEach(o => {
+      const v = 'person:' + (o.id || '');
+      L.push(`<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>人物 · ${esc(o.name || '未命名')}</option>`);
+    });
+    objs.filter(o => o.type === 'prop' && !o.light && o.kind).forEach(o => {
+      const v = 'prop:' + (o.id || '');
+      L.push(`<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>道具 · ${esc(o.name || o.kind)}</option>`);
+    });
+    L.push(`<option value="center" ${cur === 'center' ? 'selected' : ''}>画面中心（场景中轴）</option>`);
+    return L.join('');
+  }
+  const focusOf = () => {
+    const v = m.body.querySelector('#edFocus')?.value || 'auto';
+    const parts = v.split(':');
+    return { focusKind: parts[0] === 'auto' ? 'auto' : parts[0], focusId: parts[1] || '' };
+  };
 
   function readForm() {
     const aimV = m.body.querySelector('#edAim')?.value ?? 'auto';
@@ -732,6 +758,7 @@ export function openShotEditor(shot, idx) {
       angle: m.body.querySelector('#edAngle').value,
       aimY: aimV === 'auto' ? null : +aimV,
       camH: camHV === 'auto' ? null : +camHV,
+      ...focusOf(),
       duration: clampNum(+m.body.querySelector('#edDur').value || 3, 1, 20),
       transition: m.body.querySelector('#edTrans').value,
       moveSpeed: m.body.querySelector('#edSpeed').value,
