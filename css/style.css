@@ -1114,6 +1114,24 @@ body.sb-mn-open { overflow: hidden; }
 .sb-mn-overlay .sb-mn-dock { bottom: 196px; right: 18px; }
 .sb-mn-overlay .mn-view-controls { padding-right: 4px; }
 
+/* 停靠条收起：只留「展开 · 截图 · 机位组图 · 保存」一个小药丸，
+   并把下面那行 俯视/斜视/正视/网格… 一起藏掉，方便看画面和出图 */
+.sb-mn-fold {
+  border: 1px solid rgba(0, 0, 0, 0.12); background: rgba(0, 0, 0, 0.04);
+  color: #5f6672; width: 24px; height: 24px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; line-height: 1; cursor: pointer; padding: 0; flex: none;
+}
+.sb-mn-fold:hover { background: rgba(0, 0, 0, 0.09); color: var(--text); }
+.sb-mn-fold-only { display: none; gap: 8px; }
+.sb-mn-overlay.folded .sb-mn-dock { bottom: 18px; padding: 6px 8px; gap: 6px; }
+.sb-mn-overlay.folded .sb-mn-dock-tip,
+.sb-mn-overlay.folded #sbMnAi,
+.sb-mn-overlay.folded #sbMnLib,
+.sb-mn-overlay.folded #sbMnClose { display: none; }
+.sb-mn-overlay.folded .sb-mn-fold-only { display: inline-flex; }
+.sb-mn-overlay.folded .mn-view-controls { display: none; }
+
 /* ---------- 场景库 ---------- */
 .sc-hint{margin-bottom:14px;font-size:13px}
 .sc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:14px}
