@@ -264,6 +264,7 @@ export function renderStoryboard(container) {
     <div class="page-head">
       <h2>🎞️ 分镜板 <span class="dim">· ${esc(p.name)} · ${p.shots.length} 镜 · ${fmtDur(store.totalDuration(p))}</span></h2>
       <div class="page-head-actions">
+        <button class="btn btn-ghost" id="btnImportShots">📥 导入分镜</button>
         <button class="btn btn-ghost" id="btnSimpleMode">🧠 傻瓜模式</button>
         <button class="btn btn-ghost" id="btnPlayAll">▶ 动态预演</button>
         <button class="btn btn-primary" id="btnAddShot">＋ 加镜头</button>
@@ -278,6 +279,124 @@ export function renderStoryboard(container) {
   const grid = container.querySelector('#sbGrid');
   const simplePanel = container.querySelector('#simplePanel');
   let simpleOn = false;
+
+  /* ---------- 导入分镜（同学写好的表格/文档） ---------- */
+  container.querySelector('#btnImportShots').onclick = () => openImportShots();
+
+  function openImportShots() {
+    const SH = window.SHOT_IMPORT;
+    if (!SH) { toast('导入模块没加载上，刷新页面重试', 'warn'); return; }
+    let parsed = { shots: [], stats: { rows: 0, used: 0, skipped: 0 }, warnings: [] };
+    const m = modal({
+      title: '📥 导入分镜',
+      wide: true,
+      body: `
+        <p class="dim" style="margin-top:0">同学写好的分镜直接粘进来或选文件：Excel / 飞书 / 石墨导出的 <b>CSV</b>、<b>TSV</b>、<b>Markdown 表格</b>、每行一条的纯文本、JSON 都认。表头写「镜号 / 画面 / 台词 / 时长 / 景别 / 运镜 / 角度 / 场次 / 备注」，没有表头也没关系，会按顺序猜。</p>
+        <div class="form-row"><textarea id="impText" class="input" rows="7" placeholder="镜号,画面描述,台词,时长,景别,运镜,角度&#10;1,傍晚客厅全景，女主站在沙发前, ,4,远景,固定,平视&#10;2,中景缓推，女主坐下,茶凉了,3.5,中景,缓推,平视"></textarea></div>
+        <div class="form-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">📄 选文件
+            <input type="file" id="impFile" accept=".csv,.tsv,.txt,.md,.json,text/plain,text/csv" style="display:none">
+          </label>
+          <button class="btn btn-ghost btn-sm" id="impTpl">⬇ 下载模板 CSV（发同学）</button>
+          <button class="btn btn-ghost btn-sm" id="impDemo">用示例试一下</button>
+          <span class="dim" id="impInfo">还没解析</span>
+        </div>
+        <div id="impWarn" class="dim" style="color:var(--warning,#b98900)"></div>
+        <div id="impPreview" style="max-height:160px;overflow:auto;font:12px/1.7 ui-monospace,Menlo,monospace;white-space:pre-wrap;color:var(--muted)"></div>
+        <div class="form-row" style="display:flex;gap:16px;align-items:center;margin-top:6px">
+          <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="impMode" value="append" checked> 追加到现有分镜</label>
+          <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="impMode" value="replace"> 替换现有分镜</label>
+        </div>
+        <div id="impModeHint" class="dim" style="margin:2px 0 0"></div>
+        <div class="modal-actions">
+          <div class="spacer"></div>
+          <button class="btn btn-ghost" id="impCancel">取消</button>
+          <button class="btn btn-primary" id="impOk" disabled>导入</button>
+        </div>`,
+    });
+    const ta = m.body.querySelector('#impText');
+    const info = m.body.querySelector('#impInfo');
+    const prev = m.body.querySelector('#impPreview');
+    const warnEl = m.body.querySelector('#impWarn');
+    const okBtn = m.body.querySelector('#impOk');
+    const modeHint = m.body.querySelector('#impModeHint');
+
+    /* 追加/替换 的实时说明：让用户在模态框里就把后果看明白，不再弹浏览器原生 confirm */
+    const isReplace = () => m.body.querySelector('input[name="impMode"]:checked').value === 'replace';
+    const refreshMode = () => {
+      const rep = isReplace();
+      const cur = p.shots.length;
+      const add = parsed.shots.length;
+      if (rep) {
+        modeHint.innerHTML = cur
+          ? `⚠️ 替换会清空现有 <b>${cur}</b> 个镜头，只留下新导入的 ${add} 个。`
+          : `替换模式：当前没有分镜，等于直接导入 ${add} 个。`;
+        modeHint.style.color = 'var(--danger,#d9534f)';
+        okBtn.textContent = cur ? '清空并导入' : '导入';
+        okBtn.classList.toggle('btn-danger', cur > 0);
+      } else {
+        modeHint.textContent = cur
+          ? `追加模式：保留现有 ${cur} 个，导入后共 ${cur + add} 个。`
+          : `追加模式：当前没有分镜。`;
+        modeHint.style.color = '';
+        okBtn.textContent = '导入';
+        okBtn.classList.remove('btn-danger');
+      }
+    };
+    m.body.querySelectorAll('input[name="impMode"]').forEach(r => r.addEventListener('change', refreshMode));
+
+    const refresh = () => {
+      parsed = SH.parse(ta.value);
+      const n = parsed.shots.length;
+      okBtn.disabled = n === 0;
+      info.textContent = n ? `解析到 ${n} 镜` + (parsed.stats.skipped ? ` · 跳过 ${parsed.stats.skipped} 行` : '') : '还没解析';
+      warnEl.textContent = parsed.warnings.length ? '⚠ ' + parsed.warnings.join('；') : '';
+      prev.innerHTML = parsed.shots.slice(0, 8).map((s, i) =>
+        `${i + 1}. ${esc(s.desc.slice(0, 46))}${s.dialogue ? ' ｜💬 ' + esc(s.dialogue.slice(0, 18)) : ''} · ${s.duration}s · ${esc(nameOfSize(s.shotSize))} · ${esc(nameOfMove(s.cameraMove))}`
+      ).join('\n') + (n > 8 ? `\n… 还有 ${n - 8} 镜` : '');
+      refreshMode();
+    };
+    ta.addEventListener('input', refresh);
+    refreshMode();
+
+    m.body.querySelector('#impFile').onchange = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      try {
+        const buf = await f.arrayBuffer();
+        ta.value = SH.decodeBuffer(buf);       // Excel 存的 CSV 常是 GBK，这里自动兜底
+        refresh();
+        toast('已读取 ' + f.name, 'ok');
+      } catch (err) { toast('读文件失败：' + err.message, 'warn'); }
+    };
+    m.body.querySelector('#impTpl').onclick = () => {
+      const blob = new Blob([SH.templateCSV()], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = '分镜模板.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 20000);
+    };
+    m.body.querySelector('#impDemo').onclick = () => {
+      ta.value = `镜号,画面描述,台词,时长,景别,运镜,角度,场次,备注
+1,傍晚客厅全景，女主站在沙发前，男主从书架边走过来,,4,远景,固定,平视,第1场,建立空间
+2,中景缓推：女主坐下拿起茶几上的杯子,茶凉了,3.5,中景,缓推,平视,第1场,
+3,特写：杯口的热气慢慢散开,,2,特写,固定,低角度,第1场,插入镜`;
+      refresh();
+    };
+    m.body.querySelector('#impCancel').onclick = () => m.close();
+    okBtn.onclick = () => {
+      const replace = isReplace();
+      const n = store.importShots(parsed.shots, { replace });
+      m.close();
+      toast(`已导入 ${n} 个镜头` + (replace ? '（已替换原有分镜）' : ''), 'ok');
+      renderStoryboard(container);
+    };
+    setTimeout(() => ta.focus(), 60);
+  }
+
+  const nameOfSize = k => (SHOT_SIZES.find(x => x.key === k) || {}).name || k;
+  const nameOfMove = k => (moveByKey[k] || {}).name || k;
 
   const renderCards = () => {
     grid.innerHTML = '';
