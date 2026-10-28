@@ -240,7 +240,8 @@ export function renderScript(container) {
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = '🤖 AI 拆分中…';
     try {
-      const shots = await aiBreakdown(area.value, store.settings);
+      /* 资料库勾选的规范要一起带给 AI（aiBreakdown 一直有 refsText 形参，只是没人传过） */
+      const shots = await aiBreakdown(area.value, store.settings, store.selectedRefText());
       if (!shots.length) throw new Error('AI 返回了空结果');
       showPreview(shots, 'AI');
       store.unlock('aiUser');
@@ -274,6 +275,7 @@ export function renderStoryboard(container) {
       </div>
     </div>
     <div id="simplePanel"></div>
+    <div id="undoBar"></div>
     <div id="batchBar"></div>
     <div class="storyboard-grid" id="sbGrid"></div>
     <div class="sb-footer">
@@ -283,9 +285,31 @@ export function renderStoryboard(container) {
   const grid = container.querySelector('#sbGrid');
   const simplePanel = container.querySelector('#simplePanel');
   const batchBar = container.querySelector('#batchBar');
+  const undoBar = container.querySelector('#undoBar');
   let simpleOn = false;
   let batchOn = false;
   const selShots = new Set();
+
+  /* ---------- 删/清空之后的 60 秒撤销条（store 里留了整板快照） ---------- */
+  let undoTimer = null;
+  const renderUndoBar = () => {
+    if (!document.body.contains(undoBar)) { clearTimeout(undoTimer); return; }
+    const u = store.undoInfo ? store.undoInfo() : null;
+    if (!u) { undoBar.innerHTML = ''; return; }
+    const left = Math.max(0, Math.ceil((u.at + 60000 - Date.now()) / 1000));
+    undoBar.innerHTML = `
+      <div class="card" style="display:flex;gap:10px;align-items:center;padding:8px 14px;margin:8px 0;border-color:var(--warn,#b98900)">
+        <span>🗑 ${esc(u.label)}${u.shots.length ? `（原 ${u.shots.length} 镜）` : ''}</span>
+        <button class="btn btn-primary btn-sm" id="undoShots">↩️ 撤销</button>
+        <span class="dim">${left} 秒内可撤销</span>
+      </div>`;
+    undoBar.querySelector('#undoShots').onclick = () => {
+      const n = store.undoRemoveShots();
+      toast(n ? `已恢复 ${n} 个镜头` : '撤销失败：项目已切换', n ? 'ok' : 'warn');
+    };
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(renderUndoBar, 1000);
+  };
 
   /* ---------- 导入分镜（同学写好的表格/文档） ---------- */
   container.querySelector('#btnImportShots').onclick = () => openImportShots();
@@ -356,7 +380,9 @@ export function renderStoryboard(container) {
       parsed = SH.parse(ta.value);
       const n = parsed.shots.length;
       okBtn.disabled = n === 0;
-      info.textContent = n ? `解析到 ${n} 镜` + (parsed.stats.skipped ? ` · 跳过 ${parsed.stats.skipped} 行` : '') : '还没解析';
+      info.textContent = n
+        ? `解析到 ${n} 镜` + (parsed.stats.skipped ? ` · 跳过 ${parsed.stats.skipped} 行` : '')
+        : (ta.value.trim() ? '没解析到镜头' : '还没解析');
       warnEl.textContent = parsed.warnings.length ? '⚠ ' + parsed.warnings.join('；') : '';
       prev.innerHTML = parsed.shots.slice(0, 8).map((s, i) =>
         `${i + 1}. ${esc(s.desc.slice(0, 46))}${s.dialogue ? ' ｜💬 ' + esc(s.dialogue.slice(0, 18)) : ''} · ${s.duration}s · ${esc(nameOfSize(s.shotSize))} · ${esc(nameOfMove(s.cameraMove))}`
@@ -410,34 +436,67 @@ export function renderStoryboard(container) {
     selShots.forEach(id => { if (!p.shots.find(s => s.id === id)) selShots.delete(id); });
     if (!batchOn) { batchBar.innerHTML = ''; return; }
     const ids = Array.from(selShots);
+    const scenes = store.scenes || [];
     batchBar.innerHTML = `
-      <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;margin:10px 0">
-        <b>☑ 已选 ${ids.length} / ${p.shots.length} 镜</b>
-        <button class="btn btn-ghost btn-sm" id="bcAll">全选</button>
-        <button class="btn btn-ghost btn-sm" id="bcNone">清空选择</button>
-        <span style="width:1px;height:20px;background:var(--border)"></span>
-        <label class="dim" style="display:flex;gap:4px;align-items:center">时长 <input id="bcDur" class="input" type="number" min="1" max="20" step="0.5" value="3" style="width:64px"> 秒</label>
-        <button class="btn btn-ghost btn-sm" id="bcDurOk">应用到所选</button>
-        <label class="dim" style="display:flex;gap:4px;align-items:center">运镜 <select id="bcMove" class="input" style="width:auto">${opts(CAMERA_MOVES, 'static', m => m.name, m => m.cat)}</select></label>
-        <button class="btn btn-ghost btn-sm" id="bcMoveOk">应用到所选</button>
-        <div class="spacer"></div>
-        <button class="btn btn-danger btn-sm" id="bcDel">🗑 删除所选</button>
-        <button class="btn btn-primary btn-sm" id="bcDone">完成</button>
+      <div class="card" style="padding:10px 14px;margin:10px 0">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <b>☑ 已选 ${ids.length} / ${p.shots.length} 镜</b>
+          <button class="btn btn-ghost btn-sm" id="bcAll">全选</button>
+          <button class="btn btn-ghost btn-sm" id="bcNone">清空选择</button>
+          <div class="spacer"></div>
+          <button class="btn btn-danger btn-sm" id="bcDel">🗑 删除所选</button>
+          <button class="btn btn-primary btn-sm" id="bcDone">完成</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px;padding-top:9px;border-top:1px dashed var(--border)">
+          <span class="dim">对所选镜头批量设置：</span>
+          <label class="dim" style="display:flex;gap:4px;align-items:center">时长 <input id="bcDur" class="input" type="number" min="1" max="20" step="0.5" value="3" style="width:64px"> 秒</label>
+          <button class="btn btn-ghost btn-sm" id="bcDurOk">应用</button>
+          <label class="dim" style="display:flex;gap:4px;align-items:center">运镜 <select id="bcMove" class="input" style="width:auto">${opts(CAMERA_MOVES, 'static', m => m.name, m => m.cat)}</select></label>
+          <button class="btn btn-ghost btn-sm" id="bcMoveOk">应用</button>
+          <label class="dim" style="display:flex;gap:4px;align-items:center">景别 <select id="bcSize" class="input" style="width:auto">${opts(SHOT_SIZES, 'MS')}</select></label>
+          <button class="btn btn-ghost btn-sm" id="bcSizeOk">应用</button>
+          <label class="dim" style="display:flex;gap:4px;align-items:center">角度 <select id="bcAngle" class="input" style="width:auto">${opts(ANGLES, 'eye')}</select></label>
+          <button class="btn btn-ghost btn-sm" id="bcAngleOk">应用</button>
+          <label class="dim" style="display:flex;gap:4px;align-items:center">转场 <select id="bcTrans" class="input" style="width:auto">${opts(TRANSITIONS, 'cut', t => t.name)}</select></label>
+          <button class="btn btn-ghost btn-sm" id="bcTransOk">应用</button>
+        </div>
+        ${scenes.length ? `
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+          <label class="dim" style="display:flex;gap:4px;align-items:center">🏗 套用场景库
+            <select id="bcScene" class="input" style="width:auto">${scenes.map(sc => `<option value="${sc.id}">${esc(sc.name)}</option>`).join('')}</select>
+          </label>
+          <button class="btn btn-ghost btn-sm" id="bcSceneOk">套到所选镜头</button>
+          <span class="dim">（一套景搭一次，多个镜头直接用，之后还能各自微调）</span>
+        </div>` : ''}
       </div>`;
     batchBar.querySelector('#bcAll').onclick = () => { p.shots.forEach(s => selShots.add(s.id)); renderCards(); };
     batchBar.querySelector('#bcNone').onclick = () => { selShots.clear(); renderCards(); };
-    batchBar.querySelector('#bcDurOk').onclick = () => {
-      if (!ids.length) { toast('先勾选镜头', 'warn'); return; }
-      const v = parseFloat(batchBar.querySelector('#bcDur').value);
-      if (!(v >= 1 && v <= 20)) { toast('时长要在 1~20 秒之间', 'warn'); return; }
-      const n = store.patchShots(ids, { duration: v });
-      toast(`已把 ${n} 镜时长改成 ${v}s`, 'ok');
+    /* 一个「对所选镜头应用某个字段」的通用按钮 */
+    const applyBtn = (btnId, readVal, patchOf, labelOf) => {
+      batchBar.querySelector(btnId).onclick = () => {
+        if (!ids.length) { toast('先勾选镜头', 'warn'); return; }
+        const v = readVal();
+        if (v == null) return;
+        const n = store.patchShots(ids, patchOf(v));
+        toast(`已把 ${n} 镜${labelOf(v)}`, 'ok');
+      };
     };
-    batchBar.querySelector('#bcMoveOk').onclick = () => {
+    applyBtn('#bcDurOk', () => {
+      const v = parseFloat(batchBar.querySelector('#bcDur').value);
+      if (!(v >= 1 && v <= 20)) { toast('时长要在 1~20 秒之间', 'warn'); return null; }
+      return v;
+    }, v => ({ duration: v }), v => `时长改成 ${v}s`);
+    applyBtn('#bcMoveOk', () => batchBar.querySelector('#bcMove').value, v => ({ cameraMove: v }), v => `运镜设为「${nameOfMove(v)}」`);
+    applyBtn('#bcSizeOk', () => batchBar.querySelector('#bcSize').value, v => ({ shotSize: v }), v => `景别设为「${nameOfSize(v)}」`);
+    applyBtn('#bcAngleOk', () => batchBar.querySelector('#bcAngle').value, v => ({ angle: v }), v => `角度设为「${(ANGLES.find(a => a.key === v) || {}).name || v}」`);
+    applyBtn('#bcTransOk', () => batchBar.querySelector('#bcTrans').value, v => ({ transition: v }), v => `转场设为「${(TRANSITIONS.find(t => t.key === v) || {}).name || v}」`);
+    const sceneBtn = batchBar.querySelector('#bcSceneOk');
+    if (sceneBtn) sceneBtn.onclick = () => {
       if (!ids.length) { toast('先勾选镜头', 'warn'); return; }
-      const k = batchBar.querySelector('#bcMove').value;
-      const n = store.patchShots(ids, { cameraMove: k });
-      toast(`已把 ${n} 镜运镜设为「${nameOfMove(k)}」`, 'ok');
+      const sid = batchBar.querySelector('#bcScene').value;
+      const sc = store.findScene(sid);
+      const n = store.applySceneToShots(sid, ids);
+      toast(n ? `已把场景「${sc ? sc.name : ''}」套到 ${n} 个镜头（各镜之后可独立微调）` : '套用失败', n ? 'ok' : 'warn');
     };
     batchBar.querySelector('#bcDel').onclick = () => {
       if (!ids.length) { toast('先勾选镜头', 'warn'); return; }
@@ -457,16 +516,17 @@ export function renderStoryboard(container) {
     if (!p.shots.length) {
       grid.innerHTML = `<div class="empty-tip" style="grid-column:1/-1">分镜板还是空的。<br>去「剧本」页一键拆分镜，或点右上角「＋ 加镜头」手动添加。</div>`;
       renderBatchBar();
+      renderUndoBar();
       return;
     }
     p.shots.forEach((s, i) => {
       const mv = moveByKey[s.cameraMove] || moveByKey.static;
       /* 台词配速体检：中文 ≈5 字/秒，台词在镜头时长里念不完就亮黄灯 */
-      const speakLen = String(s.dialogue || '').replace(/[，。！？、…；：,.!?~\s"'「」『』（）()]/g, '').length;
+      const speakLen = String(s.dialogue || '').replace(/[，。！？、…；：,.!?~\s"'“”‘’「」『』（）()【】\-—]/g, '').length;
       const speakNeed = speakLen / 5;
       const talkTag = (s.dialogue && speakNeed > s.duration * 1.15)
         ? `<span class="tag" style="color:var(--warn,#b98900);font-weight:700" title="台词约 ${speakNeed.toFixed(1)} 秒才能念完，镜头只有 ${s.duration} 秒——要么加时长，要么删台词">⏱ 台词 ${speakNeed.toFixed(1)}s &gt; 镜头 ${s.duration}s</span>` : '';
-      const card = el(`<div class="shot-card${batchOn && selShots.has(s.id) ? ' sel' : ''}" draggable="true" data-idx="${i}">
+      const card = el(`<div class="shot-card${batchOn && selShots.has(s.id) ? ' sel' : ''}" draggable="${batchOn ? 'false' : 'true'}" data-idx="${i}">
         <div class="shot-frame aspect-${p.aspect.replace(':', 'x')}">
           <canvas class="shot-thumb"></canvas>
           <img class="shot-img" style="display:none">
@@ -486,6 +546,7 @@ export function renderStoryboard(container) {
         </div>
         <div class="shot-ops">
           <button class="icon-btn" data-op="preview" title="预演此镜">▶</button>
+          <button class="icon-btn" data-op="scene" title="直接打开场景搭建（搭完自动存回这一镜）">🏗</button>
           <button class="icon-btn" data-op="ins" title="在此镜后加一镜（沿用这个场景）">＋</button>
           <button class="icon-btn" data-op="dup" title="复制镜头">⧉</button>
           <button class="icon-btn" data-op="del" title="删除">🗑</button>
@@ -506,6 +567,12 @@ export function renderStoryboard(container) {
           e.stopPropagation();
           const ns = store.addShot({}, i + 1);   // 自动沿用上一镜场景（连戏默认）
           openShotEditor(ns, i + 1);
+          return;
+        }
+        if (op === 'scene') {
+          e.stopPropagation();
+          const s2 = store.active.shots.find(x => x.id === s.id) || s;
+          openSceneBuilder(s2, () => toast('这一镜的场景已保存 ✅', 'ok'));
           return;
         }
         if (op === 'preview') {
@@ -535,6 +602,7 @@ export function renderStoryboard(container) {
       }
     });
     renderBatchBar();
+    renderUndoBar();
   };
   renderCards();
 
@@ -580,7 +648,7 @@ export function renderStoryboard(container) {
   /* ---------- 导出分镜 CSV（和导入同一套表头，导出→同学改→再导回来） ---------- */
   container.querySelector('#btnExportShots').onclick = () => {
     if (!p.shots.length) { toast('分镜板是空的，没东西可导', 'warn'); return; }
-    const cell = v => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const cell = v => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const rows = [['镜号', '画面描述', '台词', '时长', '景别', '运镜', '角度', '场次', '备注']];
     p.shots.forEach((s, i) => rows.push([
       String(i + 1),
@@ -618,9 +686,10 @@ export function renderStoryboard(container) {
     window.dispatchEvent(new CustomEvent('bdm-nav', { detail: { view: 'animatic' } }));
   };
 
-  /* 数据变化时刷新卡片（加/删/改镜头立即反映） */
-  const refreshFn = () => { if (document.body.contains(grid)) renderCards(); };
-  store.subscribe(refreshFn);
+  /* 数据变化时刷新卡片（加/删/改镜头立即反映）；绑定 grid，切页/重渲染后自动摘掉旧监听 */
+  const offStore = store.subscribe(() => { if (document.body.contains(grid)) renderCards(); }, grid);
+  /* 切页时 app.js 会调这里的 cleanup */
+  const sbCleanup = () => { offStore(); clearTimeout(undoTimer); };
 
   /* 傻瓜模式 */
   container.querySelector('#btnSimpleMode').onclick = () => {
@@ -684,6 +753,7 @@ export function renderStoryboard(container) {
     };
     upd();
   }
+  return sbCleanup;
 }
 
 /* ============================================================
