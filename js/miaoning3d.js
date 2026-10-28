@@ -255,7 +255,11 @@
       const a = -((p.rot || 0) * Math.PI) / 180, cx = p.x, cz = p.y;
       const fd = a - ((p.faceDir || 0) * Math.PI) / 180;      // 头部朝向（相对身体）
       const fs = Math.min(1.8, Math.max(0.6, p.face || 1));   // 人脸大小也影响 3D 头
-      const skin = [0.99, 0.93, 0.87], hair = col.map(v => v * 0.45), shoe = col.map(v => v * 0.7);
+      /* 肤色朝人物色靠 28%：远看整个人就是「这个角色是绿的/红的」，
+         不然只有躯干和腿变、头和手还是肉色，在小画面里几乎看不出改过颜色。
+         头发 = 主色压暗，鞋子 = 主色再压暗一点。 */
+      const skin = [0.99, 0.93, 0.87].map((v, i) => v * 0.72 + col[i] * 0.28);
+      const hair = col.map(v => v * 0.42), shoe = col.map(v => v * 0.7);
       const P0 = poseOf(p.pose);
       /* 全身变换：躺下 = 整体后仰 90°，其余按姿势校准的升降量；跳跃再抬高 */
       const bodyRz = P0.lie ? -Math.PI / 2 : 0;
@@ -412,10 +416,107 @@
     });
   }
 
+  /* ---------- 选中物体的旋转手柄 ----------
+     3D 里选中东西后，旁边出现一个「↻」圆钮，拖它就转。
+     只有 Q/E 快捷键的话等于「没法旋转」——没人知道要按键。 */
+  let gizmoEl = null, gizmoDrag = null;
+  function ensureGizmo() {
+    if (gizmoEl && gizmoEl.isConnected) return gizmoEl;
+    const host = canvas && canvas.parentElement;
+    if (!host) return null;
+    gizmoEl = document.createElement('div');
+    gizmoEl.className = 'mn3d-gizmo';
+    gizmoEl.title = '拖动旋转（按住 Alt 自由转）· 也可以按 Q / E 每次 15°';
+    gizmoEl.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.2-6.9"/><path d="M21 3v6h-6"/></svg>';
+    gizmoEl.addEventListener('pointerdown', onGizmoDown);
+    host.appendChild(gizmoEl);
+    return gizmoEl;
+  }
+  /* 选中物的旋转中心（世界坐标） */
+  function selAnchor(state) {
+    const s = M._sel; if (!s) return null;
+    const o = findObjById(state, s.kind, s.id); if (!o) return null;
+    if (s.kind === 'prop') {
+      const b = (window.MN_propAABB ? window.MN_propAABB(o) : { x: o.x, y: o.y, w: +o.w || 1, d: +o.d || 1 });
+      return { o, cx: b.x + b.w / 2, cy: Math.min(2.2, +o.h || 1) * 0.55, cz: b.y + b.d / 2 };
+    }
+    if (s.kind === 'person') return { o, cx: o.x, cy: 1.0, cz: o.y };
+    if (s.kind === 'wall') return { o, cx: (o.x1 + o.x2) / 2, cy: Math.min(2, (o.h || 2.6) * 0.5), cz: (o.y1 + o.y2) / 2 };
+    return null;
+  }
+  function updateGizmo(state, vp) {
+    const el = ensureGizmo(); if (!el) return;
+    const on = state.view && state.view.mode === '3d';
+    const a = on ? selAnchor(state) : null;
+    if (!a) { el.style.display = 'none'; M._gizmo = null; return; }
+    const sp = projToScreen(vp, a.cx, a.cy, a.cz);
+    if (!sp) { el.style.display = 'none'; M._gizmo = null; return; }
+    el.style.display = '';
+    el.style.left = (sp.x + 44).toFixed(1) + 'px';
+    el.style.top = (sp.y - 8).toFixed(1) + 'px';
+    M._gizmo = { sx: sp.x, sy: sp.y, hx: sp.x + 44, hy: sp.y - 8, kind: M._sel.kind, id: M._sel.id, anchor: a };
+  }
+  function onGizmoDown(e) {
+    if (!M._gizmo) return;
+    e.preventDefault(); e.stopPropagation();
+    const s = M._sel; if (!s) return;
+    const o = findObjById(M._last, s.kind, s.id); if (!o) return;
+    const r = canvas.getBoundingClientRect();
+    gizmoDrag = {
+      kind: s.kind, id: s.id, sx: M._gizmo.sx, sy: M._gizmo.sy,
+      rot0: +o.rot || 0, x1: o.x1, y1: o.y1, x2: o.x2, y2: o.y2,
+      a0: Math.atan2(e.clientY - r.top - M._gizmo.sy, e.clientX - r.left - M._gizmo.sx),
+    };
+    try { gizmoEl.setPointerCapture(e.pointerId); } catch (err) { }
+    if (typeof M.onRotateStart === 'function') M.onRotateStart();
+    gizmoEl.classList.add('on');
+    gizmoEl.addEventListener('pointermove', onGizmoMove);
+    gizmoEl.addEventListener('pointerup', onGizmoUp);
+    gizmoEl.addEventListener('pointercancel', onGizmoUp);
+  }
+  function onGizmoMove(e) {
+    if (!gizmoDrag || !M._last) return;
+    const r = canvas.getBoundingClientRect();
+    const a1 = Math.atan2(e.clientY - r.top - gizmoDrag.sy, e.clientX - r.left - gizmoDrag.sx);
+    let deg = (a1 - gizmoDrag.a0) * 180 / Math.PI;
+    if (!e.altKey) deg = Math.round(deg / 15) * 15;                 // 默认 15° 吸附
+    const o = findObjById(M._last, gizmoDrag.kind, gizmoDrag.id);
+    if (!o) return;
+    if (gizmoDrag.kind === 'wall') {
+      const cx = (gizmoDrag.x1 + gizmoDrag.x2) / 2, cz = (gizmoDrag.y1 + gizmoDrag.y2) / 2;
+      const a = deg * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+      const rp = (x, z) => [cx + (x - cx) * ca - (z - cz) * sa, cz + (x - cx) * sa + (z - cz) * ca];
+      const p1 = rp(gizmoDrag.x1, gizmoDrag.y1), p2 = rp(gizmoDrag.x2, gizmoDrag.y2);
+      o.x1 = p1[0]; o.y1 = p1[1]; o.x2 = p2[0]; o.y2 = p2[1];
+    } else {
+      o.rot = ((gizmoDrag.rot0 + deg) % 360 + 360) % 360;
+    }
+    if (typeof M.onRotate === 'function') M.onRotate(Math.round(deg));
+    requestDraw();
+  }
+  function onGizmoUp() {
+    gizmoEl.removeEventListener('pointermove', onGizmoMove);
+    gizmoEl.removeEventListener('pointerup', onGizmoUp);
+    gizmoEl.removeEventListener('pointercancel', onGizmoUp);
+    gizmoEl.classList.remove('on');
+    const moved = !!gizmoDrag;
+    gizmoDrag = null;
+    if (moved && typeof M.onRotateEnd === 'function') M.onRotateEnd();
+  }
+
   /* ---------- 绘制 ---------- */
+  let drawRaf = 0;
+  /* 拖动时指针事件的频率可能比屏幕刷新还高（120~240Hz），
+     每来一次就重建整份几何体会白白丢掉一半以上的帧 —— 统一按帧合并。 */
+  function requestDraw() {
+    if (drawRaf) return;
+    drawRaf = requestAnimationFrame(() => { drawRaf = 0; if (M._last) draw(M._last); });
+  }
   function draw(state) {
     if (!gl) return;
+    const t0 = performance.now();
     const g = buildGeo(state), L = buildLines(state), lp = L.grid;
+    const geoMs = performance.now() - t0;
     const eye = eyeOf(), up = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
     const view = lookAt(eye, [cam.tx, cam.ty, cam.tz], up);
     const proj = perspective(45 * Math.PI / 180, aspect || 1, 0.1, 1000);
@@ -469,6 +570,9 @@
 
     /* 人物名牌：DOM 覆盖层跟随相机（2D 模式自动隐藏） */
     updateLabels(state, vp);
+    /* 选中物体的旋转手柄（DOM 覆盖层，拖动即转） */
+    updateGizmo(state, vp);
+    M._stat.draws++; M._stat.geoMs += geoMs; M._stat.ms += performance.now() - t0;
   }
 
   /* ---------- 交互 ---------- */
@@ -579,6 +683,7 @@
         /* 命中物体 → 拖动移动（记住抓取偏移，避免瞬移） */
         const o = findObjById(st, hit.kind, hit.id);
         const f = screenToFloor(cv, e.clientX, e.clientY);
+        if (typeof M.onMoveStart === 'function') M.onMoveStart(hit.kind, hit.id);
         drag = { mode: 'move', kind: hit.kind, id: hit.id, btn: 0, moved: 0, x: e.clientX, y: e.clientY,
           offX: f ? (o.x != null ? o.x : 0) - f[0] : 0, offZ: f ? (o.y != null ? o.y : 0) - f[1] : 0, sx: e.clientX, sy: e.clientY };
       } else {
@@ -603,16 +708,16 @@
           o.x = nx; o.y = nz;
         }
         if (typeof M.onMove === 'function') M.onMove();
-        else if (M._last) draw(M._last);
+        else requestDraw();
       } else if (drag.mode === 'pan' || e.shiftKey) {
         cv.style.cursor = 'grabbing';
         const eye = eyeOf(), view = lookAt(eye, [cam.tx, cam.ty, cam.tz], [0, 1, 0]);
         const right = [view[0], view[4], view[8]], upv = [view[1], view[5], view[9]], k = cam.r * 0.0016;
         cam.tx -= (right[0] * dx - upv[0] * dy) * k; cam.ty -= (right[1] * dx - upv[1] * dy) * k; cam.tz -= (right[2] * dx - upv[2] * dy) * k;
-        if (M._last) draw(M._last);
+        requestDraw();
       } else {
         cam.theta -= dx * 0.01; cam.phi = Math.max(0.02, Math.min(1.52, cam.phi - dy * 0.01));
-        if (M._last) draw(M._last);
+        requestDraw();
       }
     });
     const end = e => {
@@ -672,5 +777,9 @@
   M.capture = function () { if (!gl) return null; if (M._last) draw(M._last); try { return canvas.toDataURL('image/png'); } catch (e) { return null; } };
   M._debugGeo = function (state) { return buildGeo(state); };
   M.setSel = function (s) { M._sel = s; if (M._last) draw(M._last); };
+  /* 性能计数（测试/自查用）：一次 draw 的重建几何耗时与总耗时 */
+  M._stat = { draws: 0, geoMs: 0, ms: 0 };
+  M._resetStat = function () { M._stat.draws = 0; M._stat.geoMs = 0; M._stat.ms = 0; };
+  M._debugGizmo = function () { return M._gizmo; };
   M._reset = function () { cam.inited = false; };
 })();
