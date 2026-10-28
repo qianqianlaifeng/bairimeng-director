@@ -173,6 +173,15 @@
       };
     });
 
+    /* AI 常把人物摆在沙发/椅子旁边写「坐下」，但不会算坐面高度 → 这里统一落座：
+       站/坐在座位附近的人，绑到最近的空座位（位置、朝向、坐面高都由座位算）。 */
+    const L = window.MN_LAYOUT;
+    if (L && L.autoSeatAll) {
+      const fake = { props: sc.props, persons: sc.persons };
+      const seated = L.autoSeatAll(fake, { radius: 0.7, onlySitPose: true });
+      if (seated) issues.push('已让 ' + seated + ' 个人坐到附近的椅子/沙发上');
+    }
+
     /* 光源 */
     sc.lights = arr(sc.lights).filter(l => l && isFinite(+l.x)).slice(0, 3).map((l, i) => ({
       id: l.id || 'l' + (i + 1), name: String(l.name || '光源 ' + (i + 1)).slice(0, 12),
