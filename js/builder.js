@@ -18,7 +18,8 @@
  *          （运镜预演 / 动态分镜链路不变，照常消费）
  *          镜头册最新截图 → 挂成该镜参考图
  * ============================================================ */
-import { toast, askText } from './ui.js';
+import { toast, askText, confirmDlg } from './ui.js';
+import { CAMERA_MOVES, SHOT_SIZES, ANGLES } from './data.js';
 
 const DEG = Math.PI / 180;
 const uid = () => 'x' + Math.random().toString(36).slice(2, 9);
@@ -233,6 +234,7 @@ function buildOverlay() {
     <div class="mn-root" id="mnRoot"></div>
     <div class="sb-mn-dock">
       <span class="sb-mn-dock-tip" id="sbMnTip">搭建好后点「保存到镜头」——运镜预演 / 动态分镜就会用这个场景</span>
+      <button class="btn btn-ghost btn-sm" id="sbMnAi">🤖 AI 搭景</button>
       <button class="btn btn-ghost btn-sm" id="sbMnLib">📚 存入场景库</button>
       <button class="btn btn-primary btn-sm" id="sbMnSave">💾 保存到镜头</button>
       <button class="btn btn-ghost btn-sm" id="sbMnClose">直接返回</button>
@@ -241,7 +243,71 @@ function buildOverlay() {
   ovEl.querySelector('#sbMnSave').onclick = () => saveAndClose();
   /* ⚠️ 不能直接绑 saveToLibrary：click 事件对象会被当成 st0 传进去，场景被判空 */
   ovEl.querySelector('#sbMnLib').onclick = () => saveToLibrary();
+  ovEl.querySelector('#sbMnAi').onclick = () => runAiBuild();
   ovEl.querySelector('#sbMnClose').onclick = () => { closeOverlay(); };
+}
+
+/* ============================================================
+ * AI 搭景（逐镜确认）：按本镜描述生成场景 + 机位 + 人物走位
+ * 只注入导演台做草稿，不落库 —— 用户看过 2D/3D 再点「保存到镜头」
+ * ============================================================ */
+let aiBusy = false;
+const nameOf = (list, key) => (list.find(x => x.key === key) || {}).name || '';
+
+async function runAiBuild() {
+  if (aiBusy) return;
+  const btn = ovEl.querySelector('#sbMnAi'), tip = ovEl.querySelector('#sbMnTip');
+  const st = window.miaoningGetScene ? window.miaoningGetScene() : null;
+  if (!st || !window.AI_SCENE) { toast('导演台还没准备好，稍等一下再试', 'warn'); return; }
+  const settings = (window.__bdm && window.__bdm.settings) || {};
+  if (!settings.api || !settings.api.url || !settings.api.model) {
+    toast('先在「设置 → AI 接口」填好地址和模型名，再回来点 AI 搭景', 'warn');
+    return;
+  }
+  const sc0 = st.scene || {};
+  const has = ((sc0.rooms || []).length + (sc0.walls || []).length + (sc0.props || []).length + (sc0.persons || []).length) > 0;
+  if (has && !(await confirmDlg('AI 搭景会覆盖当前这套搭建（只是草稿，没点「保存到镜头」前都不算数）。继续？', { okText: '覆盖并重搭' }))) return;
+
+  aiBusy = true; btn.disabled = true; btn.textContent = '🤖 搭景中…';
+  if (tip) tip.textContent = 'AI 正在按本镜描述搭景（一般 10~40 秒）…';
+  try {
+    const p = (window.__bdm && window.__bdm.active) || {};
+    const shots = p.shots || [];
+    const idx = curShot ? shots.findIndex(s => s.id === curShot.id) : -1;
+    const r = await window.AI_SCENE.build({
+      shot: curShot || { desc: sc0.title || '' },
+      project: p, index: idx,
+      sceneKey: (curShot && curShot.sceneKey) || '',
+      sizeName: nameOf(SHOT_SIZES, (curShot || {}).shotSize) || '中景',
+      moveName: nameOf(CAMERA_MOVES, (curShot || {}).cameraMove) || '固定',
+      angleName: nameOf(ANGLES, (curShot || {}).angle) || '平视',
+      prevDesc: idx > 0 ? (shots[idx - 1].desc || '') : '',
+      nextDesc: idx >= 0 && idx < shots.length - 1 ? (shots[idx + 1].desc || '') : '',
+      prevScene: (() => {
+        /* 连戏：把上一镜搭好的空间压成一行喂给 AI，让它沿用同一套房间与家具位置 */
+        const ps = idx > 0 && shots[idx - 1].mnState && shots[idx - 1].mnState.scene;
+        if (!ps) return '';
+        const rooms = (ps.rooms || []).map(r => `${r.name || '房间'}(${r.x},${r.y} ${r.w}×${r.d})`).join('、');
+        const props = (ps.props || []).map(p => `${p.name}@(${(+p.x).toFixed(1)},${(+p.y).toFixed(1)})`).slice(0, 10).join('、');
+        const ps2 = (ps.persons || []).map(p => `${p.name}@(${(+p.x).toFixed(1)},${(+p.y).toFixed(1)})`).slice(0, 4).join('、');
+        return [rooms && '房间 ' + rooms, props && '家具 ' + props, ps2 && '人物 ' + ps2].filter(Boolean).join('；');
+      })(),
+      libraryNames: (p.scenes || []).map(x => x.name).slice(0, 6),
+      settings,
+    });
+    if (window.MN && window.MN.renderAll) window.MN.renderAll();
+    toast('AI 草稿搭好了：' + r.summary, 'ok');
+    if (r.issues && r.issues.length) toast('已自动修正：' + r.issues.join('；'), 'warn');
+    if (tip) tip.textContent = 'AI 草稿已就位 —— 看看 2D / 立起来看 3D，满意点「💾 保存到镜头」，不满意点「🤖 重搭」';
+    btn.textContent = '🤖 重搭';
+  } catch (e) {
+    console.error('[AI 搭景]', e);
+    toast('AI 搭景失败：' + (e.message || e), 'warn');
+    if (tip) tip.textContent = '搭建好后点「保存到镜头」——运镜预演 / 动态分镜就会用这个场景';
+  } finally {
+    aiBusy = false; btn.disabled = false;
+    if (btn.textContent === '🤖 搭景中…') btn.textContent = '🤖 AI 搭景';
+  }
 }
 
 function closeOverlay() {
@@ -342,6 +408,8 @@ export function openSceneBuilder(shot, onSaved, opts = {}) {
   /* 停靠条按模式切换文案：独立建景没有「镜头」可存 */
   const tip = ovEl.querySelector('#sbMnTip');
   const saveBtn = ovEl.querySelector('#sbMnSave');
+  const aiBtn = ovEl.querySelector('#sbMnAi');
+  if (aiBtn) aiBtn.textContent = '🤖 AI 搭景';
   if (libraryMode) {
     if (tip) tip.textContent = '独立建景：搭好后「存入场景库」，之后任何镜头都能一键套用';
     if (saveBtn) saveBtn.textContent = '💾 存入场景库并返回';
