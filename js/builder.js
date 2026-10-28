@@ -228,6 +228,7 @@ let ovEl = null;
 let curShot = null;
 let curOnSaved = null;
 let libraryMode = false;
+let curLibId = null;      // 从场景库「打开编辑」进来时，记住改的是哪一条
 
 function buildOverlay() {
   ovEl = document.createElement('div');
@@ -379,7 +380,11 @@ async function saveToLibrary(st0, scene0, has0) {
   const has = has0 != null ? has0 : scene.objects.length > 0;
   if (!has) { toast('先搭点东西再存场景库', 'warn'); return; }
   const defName = (curShot && (curShot.desc || '').slice(0, 12)) || ('场景 ' + ((window.__bdm.scenes || []).length + 1));
-  const name = await askText({
+  /* 从场景库「打开编辑」进来的：直接覆盖那一条，不再问名字（改名在场景库卡片上做） */
+  const editing = curLibId && window.__bdm.findScene(curLibId);
+  let name;
+  if (editing) name = editing.name;
+  else name = await askText({
     title: '存入场景库',
     label: '场景名称（之后任意镜头都能套用）',
     value: defName,
@@ -389,14 +394,14 @@ async function saveToLibrary(st0, scene0, has0) {
   if (name == null) return;
   const shots = (st.directorShots || []);
   const thumb = shots.length ? (shots[shots.length - 1].image || shots[shots.length - 1].url) : null;
-  const it = window.__bdm.saveScene({ name: name.trim() || defName, scene, mnState: st, thumb: typeof thumb === 'string' ? thumb : null });
+  const it = window.__bdm.saveScene({ id: editing ? editing.id : undefined, name: name.trim() || defName, scene, mnState: st, thumb: typeof thumb === 'string' ? thumb : null });
   /* 当前镜头同时指向这条场景，便于「这个景用在哪几镜」统计 */
   if (curShot && !libraryMode) {
     window.__bdm.updateShot(curShot.id, { scene, mnState: slimMnState(st), sceneId: it.id, cameraMove: 'free' });
   }
   window.__bdm.addXP(4, '存入场景库');
   attachLatestShot(st);
-  toast(`已存入场景库「${it.name}」，任意镜头都能套用 📚`, 'ok');
+  toast(editing ? `已更新场景库「${it.name}」📚（套用过的镜头没被改动）` : `已存入场景库「${it.name}」，任意镜头都能套用 📚`, 'ok');
   closeOverlay();
   if (curOnSaved) curOnSaved();
 }
@@ -407,7 +412,10 @@ async function saveToLibrary(st0, scene0, has0) {
 export function openSceneBuilder(shot, onSaved, opts = {}) {
   curShot = shot || null;
   curOnSaved = onSaved || null;
-  libraryMode = !!(opts && opts.library) || !shot;
+  curLibId = (opts && opts.editId) || null;
+  libraryMode = !!(opts && opts.library) || !shot || !!curLibId;
+  const libItem = curLibId && window.__bdm ? window.__bdm.findScene(curLibId) : null;
+  if (curLibId && !libItem) { toast('这套景已经不在了（可能被删了或换了项目）', 'warn'); curLibId = null; }
   /* 新手教程是弹窗层（z-index 高于搭建浮层），会挡住画布点击 —— 进搭建时自动收起 */
   document.querySelectorAll('.modal-ov').forEach(o => {
     if (o.querySelector('#tuBox')) { o.remove(); try { localStorage.setItem('bdm_tutorial_v1', '1'); } catch (e) { } }
@@ -421,8 +429,10 @@ export function openSceneBuilder(shot, onSaved, opts = {}) {
   const aiBtn = ovEl.querySelector('#sbMnAi');
   if (aiBtn) aiBtn.textContent = '🤖 AI 搭景';
   if (libraryMode) {
-    if (tip) tip.textContent = '独立建景：搭好后「存入场景库」，之后任何镜头都能一键套用';
-    if (saveBtn) saveBtn.textContent = '💾 存入场景库并返回';
+    if (tip) tip.textContent = curLibId
+      ? `正在编辑场景库「${libItem.name}」：改完点「保存到场景库」；已经套用过的镜头不会被改动`
+      : '独立建景：搭好后「存入场景库」，之后任何镜头都能一键套用';
+    if (saveBtn) saveBtn.textContent = curLibId ? '💾 保存到场景库' : '💾 存入场景库并返回';
   } else {
     if (tip) tip.textContent = '搭建好后点「保存到镜头」——运镜预演 / 动态分镜就会用这个场景';
     if (saveBtn) saveBtn.textContent = '💾 保存到镜头';
@@ -442,10 +452,12 @@ export function openSceneBuilder(shot, onSaved, opts = {}) {
         if (root && th === 'obsidian') root.dataset.mnTheme = 'dark';
       } catch (e) { /*  ignore */ }
       /* 优先用导演台原生快照（房间/墙/道具原样回来）；
-         老数据只有 shot.scene（白模），才走格式转换；独立建景则给一张空场景 */
-      const st = (curShot && curShot.mnState && curShot.mnState.scene)
-        ? curShot.mnState
-        : shotSceneToMn(curShot ? curShot.scene : null, curShot || { desc: '新场景' });
+         老数据只有白模 scene 才走格式转换；场景库条目也一样（先 mnState，再 scene） */
+      const seedShot = curShot ? curShot.scene : (libItem ? libItem.scene : null);
+      const seedState = (curShot && curShot.mnState && curShot.mnState.scene) ? curShot.mnState
+        : (libItem && libItem.mnState && libItem.mnState.scene) ? libItem.mnState : null;
+      const st = seedState || shotSceneToMn(seedShot, curShot || libItem || { desc: '新场景' });
+      if (libItem && st && st.scene) st.title = libItem.name;
       window.miaoningSeed(st);
     } catch (e) {
       console.error('[场景搭建] 初始化失败', e);
