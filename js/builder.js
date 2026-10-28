@@ -236,12 +236,17 @@ function buildOverlay() {
   ovEl.id = 'sbMnOverlay';
   ovEl.innerHTML = `
     <div class="mn-root" id="mnRoot"></div>
-    <div class="sb-mn-dock">
+    <div class="sb-mn-dock" id="sbMnDock">
+      <button class="sb-mn-fold" id="sbMnFold" title="收起工具条（挡画面时用）">▾</button>
       <span class="sb-mn-dock-tip" id="sbMnTip">搭建好后点「保存到镜头」——运镜预演 / 动态分镜就会用这个场景</span>
       <button class="btn btn-ghost btn-sm" id="sbMnAi">🤖 AI 搭景</button>
       <button class="btn btn-ghost btn-sm" id="sbMnLib">📚 存入场景库</button>
       <button class="btn btn-primary btn-sm" id="sbMnSave">💾 保存到镜头</button>
       <button class="btn btn-ghost btn-sm" id="sbMnClose">直接返回</button>
+      <span class="sb-mn-fold-only">
+        <button class="btn btn-ghost btn-sm" id="sbMnFoldShot" title="把当前画面存成 PNG">📷 截图</button>
+        <button class="btn btn-ghost btn-sm" id="sbMnFoldGrid" title="镜头册每个机位各拍一张，拼成一张">🎞 机位组图</button>
+      </span>
     </div>`;
   document.body.appendChild(ovEl);
   ovEl.querySelector('#sbMnSave').onclick = () => saveAndClose();
@@ -249,6 +254,24 @@ function buildOverlay() {
   ovEl.querySelector('#sbMnLib').onclick = () => saveToLibrary();
   ovEl.querySelector('#sbMnAi').onclick = () => runAiBuild();
   ovEl.querySelector('#sbMnClose').onclick = () => { closeOverlay(); };
+  ovEl.querySelector('#sbMnFold').onclick = () => setFolded(!ovEl.classList.contains('folded'));
+  ovEl.querySelector('#sbMnFoldShot').onclick = () => window.mnSnapCurrent && window.mnSnapCurrent();
+  ovEl.querySelector('#sbMnFoldGrid').onclick = () => window.mnSnapAllCams && window.mnSnapAllCams();
+}
+
+/* 停靠条收起：只留「展开 + 截图 + 机位组图 + 保存」一个小药丸，
+   顺带把下面那行 俯视/斜视/正视… 也藏掉，画面就干净了。状态记在本地。 */
+const FOLD_KEY = 'bdm_sb_fold_v1';
+function setFolded(on) {
+  if (!ovEl) return;
+  ovEl.classList.toggle('folded', !!on);
+  const b = ovEl.querySelector('#sbMnFold');
+  if (b) {
+    b.textContent = on ? '▸' : '▾';
+    b.title = on ? '展开工具条' : '收起工具条（挡画面时用）';
+  }
+  /* 视图控制条用 CSS 一起藏（这里不直接改 style：导演台是异步建的，此刻可能还不存在） */
+  try { localStorage.setItem(FOLD_KEY, on ? '1' : '0'); } catch (e) { }
 }
 
 /* ============================================================
@@ -422,6 +445,10 @@ export function openSceneBuilder(shot, onSaved, opts = {}) {
   });
   if (!ovEl) buildOverlay();
   ovEl.classList.add('open');
+  /* 上次收着的话，这次进来还是收着 */
+  let wasFolded = false;
+  try { wasFolded = localStorage.getItem(FOLD_KEY) === '1'; } catch (e) { }
+  setFolded(wasFolded);
   document.body.classList.add('sb-mn-open');
   /* 停靠条按模式切换文案：独立建景没有「镜头」可存 */
   const tip = ovEl.querySelector('#sbMnTip');
