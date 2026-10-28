@@ -97,6 +97,7 @@ export function renderAnimatic(container) {
     shotList.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
   };
 
+  const objUrls = new Set();   // 进一次页面建 N 个 objectURL，离开必须 revoke，否则整场会话一直占着
   const ensureImage = async (key) => {
     if (!key || whiteOnly) return null;
     if (images.has(key)) return images.get(key);
@@ -104,9 +105,11 @@ export function renderAnimatic(container) {
     if (!blob) return null;
     return new Promise(resolve => {
       const img = new Image();
+      const url = URL.createObjectURL(blob);
+      objUrls.add(url);
       img.onload = () => { images.set(key, img); resolve(img); };
       img.onerror = () => resolve(null);
-      img.src = URL.createObjectURL(blob);
+      img.src = url;
     });
   };
 
@@ -313,7 +316,13 @@ export function renderAnimatic(container) {
   renderFrame();
   start();
 
-  return () => { playing = false; if (rafId) cancelAnimationFrame(rafId); };
+  return () => {
+    playing = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    objUrls.forEach(u => { try { URL.revokeObjectURL(u); } catch (e) { } });
+    objUrls.clear();
+    images.clear();
+  };
 }
 
 /* ============================================================
@@ -449,10 +458,8 @@ export function renderEditor(container) {
   };
 
   renderTimeline();
-  // 项目变化时刷新
-  const unsub = () => store.listeners.includes(refreshFn) && (store.listeners = store.listeners.filter(f => f !== refreshFn));
+  /* 项目变化时刷新；subscribe 返回注销函数（store.listeners 里存的是 {fn, ownerEl}） */
   const refreshFn = () => { if (document.body.contains(tlBody)) renderTimeline(); };
-  store.subscribe(refreshFn);
-
+  const unsub = store.subscribe(refreshFn, tlBody);
   return unsub;
 }
