@@ -681,6 +681,7 @@ class WhiteModelRenderer {
           }
           return {
             x, z, yaw, scale: o.scale || 1,
+            liftY: Math.max(0, Math.min(1.6, +o.sitH || 0)),   // 坐在家具上：按坐面高度整体抬高
             pose: { phase: t * Math.PI * 6 * (o.action === 'run' ? 1.7 : 1) + i * 1.7, walk: moving ? (o.action === 'run' ? 0.95 : 0.55) : 0, sit: o.action === 'sit' },
           };
         })
@@ -766,7 +767,7 @@ class WhiteModelRenderer {
     };
     for (const part of buildScene((opts.scene && opts.scene.base) || this.scene)) collectPart(part, 0, 0, 0, 0, 1);
     for (const pp of propParts) collectPart(pp, 0, 0, 0, 0, 1);
-    for (const ap of parts) for (const part of ap.parts) collectPart(part, ap.d.x, 0, ap.d.z, ap.d.yaw, ap.d.scale);
+    for (const ap of parts) for (const part of ap.parts) collectPart(part, ap.d.x, ap.d.liftY || 0, ap.d.z, ap.d.yaw, ap.d.scale);
 
     if (cam.roll) { ctx.save(); ctx.translate(W / 2, H / 2); ctx.rotate(cam.roll); ctx.translate(-W / 2, -H / 2); }
 
