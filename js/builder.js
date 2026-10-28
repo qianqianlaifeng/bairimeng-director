@@ -343,6 +343,13 @@ function slimMnState(st) {
 function saveAndClose() {
   const st = window.miaoningGetScene ? window.miaoningGetScene() : null;
   if (!st) { toast('导演台还没准备好，稍等一下再试', 'warn'); return; }
+  /* 存镜头前把穿家具的走位绕一遍：预演和导出的 mp4 里人不会从茶几/沙发里穿过去 */
+  try {
+    if (window.MN_LAYOUT && st.scene) {
+      const routed = window.MN_LAYOUT.routeAllPaths(st.scene);
+      if (routed.count) { toast('已把 ' + routed.count + ' 条走位绕开家具', 'ok'); if (window.renderAll) window.renderAll(); }
+    }
+  } catch (e) { console.warn('[存镜头] 走位避障失败', e); }
   const scene = mnToShotScene(st);
   const has = scene.objects.length > 0;
   /* 独立建景模式（从场景库进入，没有绑定镜头）：只入库 */
