@@ -60,23 +60,34 @@ export function renderDict(container) {
     observeDemos();
   };
 
-  /* 可视区域内循环播放演示 */
+  /* 可视区域内循环播放演示
+     ⚠ 原来每次点分类都会 renderGrid() → observeDemos()，于是每点一次就新建一个
+     IntersectionObserver，并再起一条 rAF 循环（旧的还在跑，rafId 还被覆盖）——
+     点 5 次筛选就是 5 条循环同时刷，词典动画越来越快、CPU 白烧。
+     现在观察器和循环都只建一次，重画时只换要观察的元素。 */
+  let dictIO = null, dictLoopOn = false, dictT0 = 0, dictFrame = 0;
   const observeDemos = () => {
-    const io = new IntersectionObserver(entries => {
-      for (const en of entries) {
-        const card = en.target.closest('.dict-card');
-        if (en.isIntersecting) running.add(card);
-        else running.delete(card);
-      }
-    }, { root: container, rootMargin: '80px' });
-    grid.querySelectorAll('.dict-demo').forEach(d => io.observe(d));
+    if (!dictIO) {
+      dictIO = new IntersectionObserver(entries => {
+        for (const en of entries) {
+          const card = en.target.closest('.dict-card');
+          if (en.isIntersecting) running.add(card);
+          else running.delete(card);
+        }
+      }, { root: container, rootMargin: '80px' });
+    } else {
+      running.clear();
+      dictIO.disconnect();          // 旧卡片已从 DOM 摘掉，别再让它们留在 running 里
+    }
+    grid.querySelectorAll('.dict-demo').forEach(d => dictIO.observe(d));
 
-    const t0 = performance.now();
-    let dictFrame = 0;
+    if (dictLoopOn) return;         // 循环只起一次
+    dictLoopOn = true;
+    dictT0 = performance.now();
     const loop = (now) => {
-      if (!document.body.contains(grid)) { cancelAnimationFrame(rafId); return; }
+      if (!document.body.contains(grid)) { dictLoopOn = false; rafId = null; return; }
       dictFrame++; if (dictFrame % 3) { rafId = requestAnimationFrame(loop); return; }
-    const t = ((now - t0) / 3600) % 1;
+      const t = ((now - dictT0) / 3600) % 1;
       for (const card of running) {
         const cv = card.querySelector('canvas');
         if (!cv._player) {
@@ -99,7 +110,13 @@ export function renderDict(container) {
   renderFilter();
   renderGrid();
 
-  return () => { if (rafId) cancelAnimationFrame(rafId); };
+  return () => {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    if (dictIO) { dictIO.disconnect(); dictIO = null; }
+    dictLoopOn = false;
+    running.clear();
+  };
 }
 
 /* 词典详解弹窗 */
@@ -148,13 +165,17 @@ function openDictDetail(mv) {
 }
 
 /* 把运镜指派给当前项目某个镜头 */
-function assignMove(moveKey) {
+function assignMove(moveKey, extra = null) {
   const p = store.active;
   if (!p) { toast('先打开一个项目', 'warn'); return; }
   if (!p.shots.length) { toast('当前项目还没有镜头，先去拆分镜或加镜头', 'warn'); return; }
+  /* 从预演面板点「写回镜头」时，把面板上的景别/角度/时长/速度/看向高度一起带走，
+     不然调好的一整套机位只存了运镜，回分镜板又变回默认值。 */
+  const tags = extra ? Object.entries(extra).map(([, v]) => v).filter(Boolean).length : 0;
   const m = modal({
     title: `把「${moveByKey[moveKey].name}」用到哪个镜头？`,
     body: `
+      ${extra ? `<p class="dim" style="margin-top:0">会一并写回：${esc(extra.moveName || '')}${extra.sizeName ? ' · ' + esc(extra.sizeName) : ''}${extra.angleName ? ' · ' + esc(extra.angleName) : ''}${extra.durText ? ' · ' + esc(extra.durText) : ''}${extra.aimText ? ' · ' + esc(extra.aimText) : ''}</p>` : ''}
       <div class="assign-list">${p.shots.map((s, i) => `
         <button class="assign-item" data-i="${i}">
           <span class="assign-idx">${i + 1}</span>
@@ -164,9 +185,18 @@ function assignMove(moveKey) {
   });
   m.body.querySelectorAll('.assign-item').forEach(b => b.onclick = () => {
     const s = p.shots[+b.dataset.i];
-    store.updateShot(s.id, { cameraMove: moveKey });
+    const patch = { cameraMove: moveKey };
+    if (extra) {
+      if (extra.shotSize) patch.shotSize = extra.shotSize;
+      if (extra.angle) patch.angle = extra.angle;
+      if (extra.duration) patch.duration = extra.duration;
+      if (extra.moveSpeed) patch.moveSpeed = extra.moveSpeed;
+      if ('aimY' in extra) patch.aimY = extra.aimY;
+      if ('camH' in extra) patch.camH = extra.camH;
+    }
+    store.updateShot(s.id, patch);
     m.close();
-    toast(`第 ${+b.dataset.i + 1} 镜已改为「${moveByKey[moveKey].name}」`, 'ok');
+    toast(`第 ${+b.dataset.i + 1} 镜已改为「${moveByKey[moveKey].name}」` + (extra ? '（含景别/角度/时长等面板设置）' : ''), 'ok');
   });
 }
 
@@ -237,8 +267,8 @@ export function renderPreview(container, payload = {}) {
             ${focusOptions(builtScene)}
           </select></div>
           <label class="form-row" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="pvPaths" ${initShot && initShot.showPath ? 'checked' : ''}><span>显示人物走位线</span></label>
-          <div class="form-row"><label>景别（真实距离）</label><select id="pvSize" class="input">${opts(SHOT_SIZES, 'MS')}</select></div>
-          <div class="form-row"><label>拍摄角度（直观可见）</label><select id="pvAngle" class="input">${opts(ANGLES, 'eye')}</select></div>
+          <div class="form-row"><label>景别（真实距离）</label><select id="pvSize" class="input">${opts(SHOT_SIZES, initShot?.shotSize || 'MS')}</select></div>
+          <div class="form-row"><label>拍摄角度（直观可见）</label><select id="pvAngle" class="input">${opts(ANGLES, initShot?.angle || 'eye')}</select></div>
           <div class="form-row"><label>看向高度（拍哪里）</label><select id="pvAim" class="input">
             <option value="auto" selected>自动（跟景别走）</option>
             <option value="1.66">脸 · 特写 1.66m</option>
@@ -259,7 +289,7 @@ export function renderPreview(container, payload = {}) {
           <div class="form-row"><label>运镜速度</label><select id="pvMoveSpeed" class="input">
             <option value="std" selected>标准</option><option value="slow">慢 · 细腻</option><option value="fast">快 · 有力</option>
           </select></div>
-          <div class="form-row"><label>镜头时长</label><input id="pvDur" type="range" min="1" max="12" step="0.5" value="4" class="scrub"><span class="dim" id="pvDurLabel">4s</span></div>
+          <div class="form-row"><label>镜头时长</label><input id="pvDur" type="range" min="1" max="20" step="0.5" value="${Math.min(20, Math.max(1, +(initShot?.duration) || 4))}" class="scrub"><span class="dim" id="pvDurLabel">${Math.min(20, Math.max(1, +(initShot?.duration) || 4))}s</span></div>
           ${p?.shots?.length ? `<button class="btn btn-magic" id="pvAssign">🎬 把当前运镜写回镜头</button>` : ''}
         </div>
       </div>
@@ -322,7 +352,14 @@ export function renderPreview(container, payload = {}) {
 
   playBtn.onclick = () => {
     if (player.playing) { player.stop(); playBtn.textContent = '▶ 播放'; }
-    else startPlay(player.t || 0);
+    else {
+      /* 「预演次数」只在用户真按了播放时计——原来写在页面进入处，反复切页就能刷等级 */
+      store.achv.counts.previews++;
+      store.persistAchv();
+      store.unlock('firstPreview');
+      store.addXP(2, '运镜预演');
+      startPlay(player.t || 0);
+    }
   };
   container.querySelector('#pvLoop').onclick = e => {
     loopOn = !loopOn;
@@ -439,14 +476,26 @@ export function renderPreview(container, payload = {}) {
   drawMap();
 
   const assignBtn = container.querySelector('#pvAssign');
-  if (assignBtn) assignBtn.onclick = () => assignMove(curMove);
+  if (assignBtn) assignBtn.onclick = () => {
+    const q = (id) => container.querySelector('#' + id).value;
+    const aimV = q('pvAim'), camHV = q('pvCamH');
+    assignMove(curMove, {
+      moveName: (moveByKey[curMove] || {}).name,
+      shotSize: q('pvSize'),
+      angle: q('pvAngle'),
+      duration: +q('pvDur'),
+      moveSpeed: q('pvMoveSpeed'),
+      aimY: aimV === 'auto' ? null : +aimV,
+      camH: camHV === 'auto' ? null : +camHV,
+      sizeName: (SHOT_SIZES.find(x => x.key === q('pvSize')) || {}).name,
+      angleName: (ANGLES.find(x => x.key === q('pvAngle')) || {}).name,
+      durText: `${+q('pvDur')}s`,
+      aimText: aimV === 'auto' ? '' : '看向 ' + aimV + 'm',
+    });
+  };
 
   renderMoves();
-  startPlay();
-  store.achv.counts.previews++;
-  store.persistAchv();
-  store.unlock('firstPreview');
-  store.addXP(2, '运镜预演');
+  startPlay();          // 进入页面自动播一次，但不计「预演次数」（计数在播放按钮里）
 
   return () => player.destroy();
 }
