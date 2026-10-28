@@ -183,7 +183,8 @@
     /* 机位 */
     const cam = (obj.camera && typeof obj.camera === 'object') ? obj.camera : {};
     obj.camera = {
-      az: ((+cam.az || 25) % 360 + 360) % 360,
+      /* ⚠️ 不能用 `+cam.az || 25`：az=0（正后方）是合法值，会被当成缺省 */
+      az: ((isFinite(+cam.az) ? +cam.az : 25) % 360 + 360) % 360,
       dist: cl(cam.dist || 7, 3, 14),
       h: cl(cam.h || 1.8, 0.5, 5),
       fov: cl(cam.fov || 50, 35, 65),
