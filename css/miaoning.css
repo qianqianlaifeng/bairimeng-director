@@ -589,15 +589,21 @@
 .mn-ctx-sep{height:1px;margin:4px 6px;background:var(--line)}
 
 /* ---- 物件库 ---- */
-.mn-lib-head{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
-.mn-lib-head strong{font-size:13.5px;font-weight:650}
-.mn-lib-head span{font-size:11.5px;color:var(--muted)}
-.mn-lib-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.mn-lib-item{display:flex;align-items:center;gap:7px;height:38px;padding:0 9px;border-radius:7px;
+/* 物件库头部：标题 + 右侧工具按钮一行，说明单独一行（原来三个挤一行，窄面板下会折行成三截） */
+.mn-lib-head{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+.mn-lib-head strong{font-size:13.5px;font-weight:650;flex:0 0 auto}
+.mn-lib-tool{margin-left:auto;flex:0 0 auto;white-space:nowrap;
+  font-size:11.5px;line-height:1;padding:5px 10px;border-radius:999px;cursor:pointer;
+  color:var(--accent);background:var(--accent-soft);border:1px solid transparent}
+.mn-lib-tool:hover{border-color:var(--accent)}
+.mn-lib-hint{margin:0 0 10px;font-size:11.5px;line-height:1.5;color:var(--muted)}
+/* 窄面板下两列会把「1.6×0.8」挤断 → 按可用宽度自动决定几列（放不下就变一列） */
+.mn-lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px}
+.mn-lib-item{display:flex;align-items:center;gap:5px;height:36px;padding:0 7px;border-radius:7px;
   border:1px solid var(--line);background:var(--paper);text-align:left}
 .mn-lib-item i{width:15px;height:15px;border-radius:4px;flex:0 0 auto;border:1px solid rgba(0,0,0,.08)}
-.mn-lib-item span{font-size:12.5px}
-.mn-lib-item small{margin-left:auto;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.mn-lib-item span{font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mn-lib-item small{margin-left:auto;flex:0 0 auto;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .mn-lib-item:hover{border-color:var(--accent);color:var(--accent)}
 .mn-lib-item.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .mn-lib-row{display:flex;gap:6px;margin-top:8px}
