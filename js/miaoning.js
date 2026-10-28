@@ -1,4 +1,9 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.13.2（2026-10-28）：① 场景库卡片终于能「打开」了 —— 缩略图和「✏️ 打开编辑」都能把那套景装回导演台改，
+                          改完点「💾 保存到场景库」原地覆盖那一条（不会再变成新景，也不会改动已经套用过的镜头）。
+                          ② 导演台底栏加两个按钮：「📷 截图」把当前画面存成 PNG（2D 平面图 / 3D 立体都行，
+                          3D 会把人物名牌按标签层位置画进图里，出来就是一张能直接用的站位图）；
+                          「🎞 机位组图」把镜头册里每个机位各拍一张、拼成一张带编号说明的图。
    v1.13.1（2026-10-28）：导入/导出补两处丢字段 —— ① 人物的 sitOn/sitH（坐在哪把椅子、坐面多高）以前过一遍 normPerson 就被抹掉，
                           导进来的「坐下」会瘫在地板上；现在保留，并在导入后按现场椅子重算落座（椅子不在就自动起身）。
                           ② 光源的 h/intensity 也会被 normScene 抹掉，导致壁炉暖光、吊灯顶光、窗外月光全挤在同一高度同一亮度；现在跟着走。
@@ -738,6 +743,117 @@ function buildFloatTools() {
     box.appendChild(b);
   });
 }
+/* ---------- 截图：把画面导出成 PNG ----------
+   3D 画布里是不含 DOM 名牌的，所以截图时按标签层当前位置把人名画回图上 —— 出来就是一张能直接用的站位图。 */
+const loadImg = url => new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = url; });
+function shotBase() {
+  const t = (MN.state && (MN.state.title || '')) || '场景';
+  return String(t).replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || '场景';
+}
+function dlURL(url, name) {
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function roundRectPath(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y); c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y); c.closePath();
+}
+/* 3D 当前视角 → PNG（带人名） */
+async function grab3DURL() {
+  const cv = $('#mn3d');
+  if (!cv || !window.MN3D) return null;
+  MN3D.render(MN.state);
+  await sleep(150);                        // 等一帧：标签层的位置要按新投影算
+  const url = MN3D.capture();
+  const im = url && await loadImg(url);
+  if (!im) return null;
+  const out = document.createElement('canvas');
+  out.width = im.naturalWidth || cv.width; out.height = im.naturalHeight || cv.height;
+  const c = out.getContext('2d');
+  c.drawImage(im, 0, 0);
+  const k = out.width / Math.max(1, cv.clientWidth || out.width);   // CSS 像素 → 画布像素
+  c.font = `600 ${Math.round(12 * k)}px system-ui, -apple-system, "Microsoft YaHei", sans-serif`;
+  c.textBaseline = 'middle';
+  Array.from(document.querySelectorAll('.mn3d-label')).forEach(lb => {
+    const txt = (lb.textContent || '').trim();
+    if (!txt || lb.style.display === 'none') return;
+    const x = (parseFloat(lb.style.left) || 0) * k, y = (parseFloat(lb.style.top) || 0) * k;
+    const w = c.measureText(txt).width + 12 * k, h = 21 * k;
+    c.fillStyle = 'rgba(18,22,32,.76)';
+    roundRectPath(c, x - w / 2, y - h / 2, w, h, 6 * k); c.fill();
+    c.strokeStyle = lb.style.getPropertyValue('--lb') || '#2e7cf6'; c.lineWidth = Math.max(1, 1.2 * k);
+    roundRectPath(c, x - w / 2, y - h / 2, w, h, 6 * k); c.stroke();
+    c.fillStyle = '#fff'; c.fillText(txt, x - w / 2 + 6 * k, y + 0.5 * k);
+  });
+  return out.toDataURL('image/png');
+}
+/* 2D 平面图 → PNG（临时清掉选中框，拍完还原） */
+async function grab2DURL() {
+  const cv = $('#mnCanvas'); if (!cv) return null;
+  const keepSel = MN.sel, keepList = MN.selList;
+  MN.sel = null; MN.selList = []; MN.guide = null;
+  paint();
+  let url = null;
+  try { url = cv.toDataURL('image/png'); } catch (e) { url = null; }
+  MN.sel = keepSel; MN.selList = keepList || [];
+  refreshSel(); paint();
+  return url;
+}
+function is3D() { return !!(MN.state && MN.state.view && MN.state.view.mode === '3d'); }
+async function snapCurrent() {
+  const url = is3D() ? await grab3DURL() : await grab2DURL();
+  if (!url) return toast('截图失败：画布还没准备好', 'warn');
+  dlURL(url, `${shotBase()}-${is3D() ? '3D站位图' : '平面图'}.png`);
+  toast(is3D() ? '已下载 3D 站位图 📷（带人名）' : '已下载平面图 📷', 'ok');
+}
+/* 镜头册里每个机位各拍一张，拼成一张组图 */
+async function snapAllCams() {
+  const cams = (MN.state.directorShots || []).filter(s => s && s.cam);
+  if (!cams.length) {
+    toast('镜头册还没有机位：点「立起来」→ 摆好角度 → 镜头册的「＋」存一个机位，再回来点「机位组图」', 'warn');
+    return;
+  }
+  const was3d = is3D();
+  if (!was3d) { setMode('3d'); await sleep(1100); }
+  const prev = MN3D.getCamera();
+  const imgs = [];
+  for (let i = 0; i < cams.length; i++) {
+    MN3D.setCamera(cams[i].cam);
+    MN3D.render(MN.state);
+    const url = await grab3DURL();
+    const im = url && await loadImg(url);
+    if (im) imgs.push({ im, name: cams[i].name || ('机位 ' + (i + 1)) });
+    await sleep(90);
+  }
+  MN3D.setCamera(prev); MN3D.render(MN.state);
+  if (!was3d) setMode('2d');
+  if (!imgs.length) return toast('截图失败', 'warn');
+
+  /* 一行最多 2 格，下面带机位名 */
+  const cols = Math.min(2, imgs.length), rows = Math.ceil(imgs.length / cols);
+  const cw = imgs[0].im.naturalWidth, ch = imgs[0].im.naturalHeight;
+  const gap = Math.round(cw * 0.018), cap = Math.round(ch * 0.075);
+  const out = document.createElement('canvas');
+  out.width = cols * cw + (cols + 1) * gap;
+  out.height = rows * (ch + cap) + gap;
+  const c = out.getContext('2d');
+  c.fillStyle = '#12161f'; c.fillRect(0, 0, out.width, out.height);
+  imgs.forEach((it, i) => {
+    const x = gap + (i % cols) * (cw + gap), y = gap + Math.floor(i / cols) * (ch + cap);
+    c.drawImage(it.im, x, y, cw, ch);
+    c.fillStyle = '#eef1f7';
+    c.font = `600 ${Math.round(cap * 0.5)}px system-ui, "Microsoft YaHei", sans-serif`;
+    c.textBaseline = 'middle';
+    c.fillText(`${i + 1}. ${it.name}`, x + 6, y + ch + cap / 2);
+  });
+  dlURL(out.toDataURL('image/png'), `${shotBase()}-机位组图${imgs.length}张.png`);
+  toast(`已下载 ${imgs.length} 个机位的组图 🎞`, 'ok');
+}
+
 function buildViewCtl() {
   const box = $('#mnViewCtl'); if (!box) return;
   box.innerHTML = `
@@ -748,6 +864,8 @@ function buildViewCtl() {
     <button class="mn-vc icon" id="mnZoomIn" title="放大">${icon('plus', 's12')}</button>
     <button class="mn-vc ${MN.grid ? 'active' : ''}" id="mnGridBtn">${icon('grid-2x2', 's12')}隐藏网格</button>
     <button class="mn-vc" id="mnFloorBtn">${icon('paintbrush', 's12')}地面上色</button>
+    <button class="mn-vc" id="mnShotBtn" title="把当前画面存成 PNG（2D 平面图 / 3D 立体都行）">${icon('camera', 's12')}截图</button>
+    <button class="mn-vc" id="mnShotAllBtn" title="镜头册里每个机位各截一张，拼成一张图">${icon('film', 's12')}机位组图</button>
     <button class="mn-vc" id="mnFullBtn">${icon('maximize', 's12')}工作台全屏</button>
     <button class="mn-vc" id="mnHideUi">${icon('eye-off', 's12')}隐藏界面</button>`;
   $$('[data-view]', box).forEach(b => b.onclick = () => {
@@ -763,6 +881,8 @@ function buildViewCtl() {
   $('#mnZoomOut').onclick = () => zoomBy(0.8);
   $('#mnGridBtn').onclick = () => { MN.grid = !MN.grid; $('#mnGridBtn').classList.toggle('active', MN.grid); if (MN.state) { MN.state.view.grid = MN.grid; saveSoon(); } paint(); };
   $('#mnFloorBtn').onclick = () => { if (MN.state) { MN.state.view.floorColor = !MN.state.view.floorColor; paint(); saveSoon(); render3D(); toast(MN.state.view.floorColor ? '房间已上色' : '房间改成线框'); } };
+  $('#mnShotBtn').onclick = () => snapCurrent();
+  $('#mnShotAllBtn').onclick = () => snapAllCams();
   $('#mnFullBtn').onclick = () => toggleImmersive();
   $('#mnHideUi').onclick = () => toggleImmersive();
 }
