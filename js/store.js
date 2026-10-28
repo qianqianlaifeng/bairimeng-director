@@ -82,9 +82,18 @@ function newProject(name, aspect = '16:9') {
   };
 }
 
-/* ============================================================
- * Store 单例
- * ============================================================ */
+/* 老存档 / 外部导入的项目可能缺后来加的字段 → 读进来先补齐。
+   newShot 把 partial 放在最后展开，原有字段和 id 一个都不会动。 */
+function normalizeProject(p) {
+  if (!p || typeof p !== 'object') return p;
+  p.shots = Array.isArray(p.shots) ? p.shots.map(s => newShot(s)) : [];
+  if (!Array.isArray(p.scenes)) p.scenes = [];
+  if (!p.meta || typeof p.meta !== 'object') p.meta = {};
+  if (!p.aspect) p.aspect = '16:9';
+  if (!p.name) p.name = '未命名项目';
+  return p;
+}
+
 class Store {
   constructor() {
     const stored = load(LS.settings, {});
@@ -96,6 +105,7 @@ class Store {
       this.persistSettings();
     }
     this.projects = load(LS.projects, []);
+    if (Array.isArray(this.projects)) this.projects = this.projects.map(normalizeProject);
     this.achv = Object.assign({
       xp: 0, unlocked: {}, lastCheckin: null, streak: 0, maxStreak: 0,
       counts: { shots: 0, prompts: 0, dictViews: {}, breakdowns: 0, previews: 0 },
@@ -106,12 +116,24 @@ class Store {
     if (!this.projects.find(p => p.id === this.activeId)) this.activeId = null;
     this.listeners = [];
     this.xpListeners = [];
+    /* 上次会话里删掉但还没过撤销窗口的图片，启动时补清一次（只清没有任何项目引用的） */
+    this._pendingImgs = load('bdm_img_pending_v1', []) || [];
     this._initIDB();
+    if (this._pendingImgs.length) this._idbReady.then(() => this.purgeOrphanImages()).catch(() => { });
   }
 
   /* ---------- 订阅 ---------- */
-  subscribe(fn) { this.listeners.push(fn); }
-  emit() { this.listeners.forEach(f => { try { f(); } catch (e) { console.error(e); } }); }
+  /* ownerEl：视图容器。切页后容器脱离 DOM，对应监听器会在下一次 emit 时自动摘掉，
+     避免旧视图的刷新函数一直堆积、并操作已经不在页面上的 DOM。 */
+  subscribe(fn, ownerEl) {
+    const rec = { fn, ownerEl: ownerEl || null };
+    this.listeners.push(rec);
+    return () => { this.listeners = this.listeners.filter(l => l !== rec); };
+  }
+  emit() {
+    this.listeners = this.listeners.filter(l => !l.ownerEl || document.body.contains(l.ownerEl));
+    this.listeners.forEach(l => { try { l.fn(); } catch (e) { console.error(e); } });
+  }
   onXP(fn) { this.xpListeners.push(fn); }
 
   /* ---------- 持久化 ---------- */
@@ -151,8 +173,8 @@ class Store {
   deleteProject(id) {
     const idx = this.projects.findIndex(p => p.id === id);
     if (idx < 0) return;
-    // 清理该项目的参考图
-    for (const s of this.projects[idx].shots) if (s.image) this.deleteImage(s.image);
+    // 清理该项目的参考图 / 手绘稿 / 审核截图
+    this._imgKeys(this.projects[idx].shots).forEach(k => this.deleteImage(k));
     this.projects.splice(idx, 1);
     if (this.activeId === id) this.activeId = this.projects[0]?.id || null;
     this.persistProjects(); this.emit();
@@ -180,11 +202,73 @@ class Store {
 
   /* ---------- 镜头操作 ---------- */
   /* 批量导入分镜（同学写好的表格）：一次落库、一次重绘 */
+  /* ---------- 删镜头可撤销 + 参考图延迟清理 ----------
+     清空 / 批量删 / 替换导入都是「一键毁掉一堆」的操作，误触代价高。
+     这里删之前先整板快照，留 60 秒撤销窗口；参考图和手绘稿不立刻删，
+     等窗口过了再统一清「任何项目都不再引用」的孤儿，既不误删也能兜住中途关页面的情况。 */
+  static UNDO_WINDOW = 60000;
+  _shotUndo = null;           // {projectId, label, shots:[深拷贝], at}
+  _purgeTimer = null;
+  _pendingImgs = [];          // 待清理的图片 key（跨刷新保存在 localStorage）
+
+  _imgKeys(shots) {
+    const ks = [];
+    (shots || []).forEach(s => {
+      if (!s) return;
+      if (s.image) ks.push(s.image);
+      if (s.sketch) ks.push(s.sketch);
+      if (s.reviewImg) ks.push(s.reviewImg);
+    });
+    return ks;
+  }
+  _findShot(shotId) {
+    const p = this.active;
+    return p ? (p.shots || []).find(s => s.id === shotId) || null : null;
+  }
+  _takeShotUndo(label) {
+    const p = this.active; if (!p) return;
+    this._shotUndo = { projectId: p.id, label, shots: JSON.parse(JSON.stringify(p.shots || [])), at: Date.now() };
+    this._queueImgPurge();
+  }
+  canUndoShots() {
+    const u = this._shotUndo;
+    return !!(u && this.active && u.projectId === this.active.id && Date.now() - u.at < Store.UNDO_WINDOW);
+  }
+  undoInfo() { return this.canUndoShots() ? this._shotUndo : null; }
+  undoRemoveShots() {
+    const p = this.active, u = this._shotUndo;
+    if (!p || !u || u.projectId !== p.id) return 0;
+    p.shots = u.shots.map(s => newShot(s));
+    p.updatedAt = Date.now();
+    this._shotUndo = null;
+    clearTimeout(this._purgeTimer); this._purgeTimer = null;
+    this.persistProjects(); this.emit();
+    return p.shots.length;
+  }
+  _queueImgPurge() {
+    try { save('bdm_img_pending_v1', this._pendingImgs); } catch (e) { }
+    clearTimeout(this._purgeTimer);
+    this._purgeTimer = setTimeout(() => this.purgeOrphanImages(), Store.UNDO_WINDOW);
+  }
+  async purgeOrphanImages() {
+    if (!this._pendingImgs || !this._pendingImgs.length) return 0;
+    const live = new Set();
+    for (const p of this.projects) this._imgKeys(p.shots).forEach(k => live.add(k));
+    const doomed = Array.from(new Set(this._pendingImgs)).filter(k => !live.has(k));
+    this._pendingImgs = this._pendingImgs.filter(k => live.has(k));
+    try { save('bdm_img_pending_v1', this._pendingImgs); } catch (e) { }
+    for (const k of doomed) { try { await this.deleteImage(k); } catch (e) { } }
+    return doomed.length;
+  }
+
   importShots(list, opts = {}) {
     const p = this.active; if (!p) return 0;
     const arr = (list || []).filter(x => x && String(x.desc || '').trim());
     if (!arr.length) return 0;
-    if (opts.replace) p.shots = [];
+    if (opts.replace) {
+      if (p.shots.length) { this._pendingImgs = this._pendingImgs.concat(this._imgKeys(p.shots)); this._takeShotUndo('替换导入'); }
+      p.shots = [];
+    }
     arr.forEach(x => p.shots.push(newShot(x)));
     p.updatedAt = Date.now();
     this.persistProjects(); this.emit();
@@ -222,7 +306,9 @@ class Store {
   deleteShot(shotId) {
     const p = this.active; if (!p) return;
     const s = p.shots.find(x => x.id === shotId);
-    if (s?.image) this.deleteImage(s.image);
+    if (!s) return;
+    this._pendingImgs = this._pendingImgs.concat(this._imgKeys([s]));
+    this._takeShotUndo('删除 1 个镜头');
     p.shots = p.shots.filter(x => x.id !== shotId);
     p.updatedAt = Date.now();
     this.persistProjects(); this.emit();
@@ -231,7 +317,10 @@ class Store {
     const p = this.active; if (!p) return;
     const i = p.shots.findIndex(x => x.id === shotId);
     if (i < 0) return;
-    const copy = newShot({ ...p.shots[i], id: undefined, title: '', image: p.shots[i].image });
+    /* 去掉 id 再交给 newShot 生成新 id —— 写成 id: undefined 会把 newShot 里生成的 id 覆盖掉，
+       两条复制出来的镜头就都是 undefined，删除/编辑会命中错的镜头 */
+    const { id, ...rest } = p.shots[i];
+    const copy = newShot({ ...rest, title: '' });
     p.shots.splice(i + 1, 0, copy);
     p.updatedAt = Date.now();
     this.persistProjects(); this.emit();
@@ -251,9 +340,10 @@ class Store {
   }
   /* 批量：清空 / 删多镜 / 批量改字段 */
   clearShots() {
-    const p = this.active; if (!p) return 0;
+    const p = this.active; if (!p || !p.shots.length) return 0;
     const n = p.shots.length;
-    p.shots.forEach(s => { if (s.image) this.deleteImage(s.image); });
+    this._pendingImgs = this._pendingImgs.concat(this._imgKeys(p.shots));
+    this._takeShotUndo('清空 ' + n + ' 个镜头');
     p.shots = [];
     p.updatedAt = Date.now();
     this.persistProjects(); this.emit();
@@ -262,7 +352,8 @@ class Store {
   deleteShots(ids) {
     const p = this.active; if (!p || !ids || !ids.length) return 0;
     const set = new Set(ids);
-    p.shots.forEach(s => { if (set.has(s.id) && s.image) this.deleteImage(s.image); });
+    this._pendingImgs = this._pendingImgs.concat(this._imgKeys(p.shots.filter(s => set.has(s.id))));
+    this._takeShotUndo('删除 ' + set.size + ' 个镜头');
     p.shots = p.shots.filter(s => !set.has(s.id));
     p.updatedAt = Date.now();
     this.persistProjects(); this.emit();
@@ -470,8 +561,9 @@ class Store {
       if (!silent) this._notify('今天已经签到过啦，明天再来～');
       return false;
     }
+    const yest = this.achv.lastCheckin;          // 先留一份“上一次签到是哪天”，下面就被覆盖了
     this.achv.lastCheckin = today;
-    this.achv.streak = (this.achv.lastCheckin === yestStr() || this.achv.checkinHistory.includes(yestStr())) ? this.achv.streak + 1 : 1;
+    this.achv.streak = (yest === yestStr() || this.achv.checkinHistory.includes(yestStr())) ? this.achv.streak + 1 : 1;
     this.achv.maxStreak = Math.max(this.achv.maxStreak || 0, this.achv.streak);
     this.achv.checkinHistory.push(today);
     if (this.achv.checkinHistory.length > 60) this.achv.checkinHistory.shift();
@@ -524,12 +616,32 @@ class Store {
     };
   }
   importAll(data) {
-    if (data.app !== 'bairimeng-director') throw new Error('不是白日梦导演台的备份文件');
-    if (data.projects) { this.projects = data.projects; this.persistProjects(); }
+    if (!data || data.app !== 'bairimeng-director') throw new Error('不是白日梦导演台的备份文件');
+    /* 两种导出格式都要认：
+       ① 整站备份 {projects:[…]}（设置→导出备份）
+       ② 「📦 导出项目 → 项目 JSON」的单个项目对象 {name, shots:[…]}
+       以前只认 ①，导②这种文件会提示“导入成功”却什么都没做。 */
+    if (Array.isArray(data.projects)) {
+      this._queueAllImages();                       // 被替换掉的旧项目的图，之后统一清孤儿
+      this.projects = data.projects.map(normalizeProject);
+      this.persistProjects();
+    } else if (Array.isArray(data.shots)) {
+      this.importProject(data);
+    } else {
+      throw new Error('备份文件里没有项目数据');
+    }
     if (data.settings) { this.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings); this.persistSettings(); }
     if (data.achv) { this.achv = Object.assign(this.achv, data.achv); this.persistAchv(); }
     this.activeId = this.settings.lastProjectId;
+    if (!this.projects.find(p => p.id === this.activeId)) this.activeId = this.projects[0]?.id || null;
     this.emit();
+  }
+  /* 把当前所有项目引用过的图片 key 记入待清理队列（删不掉就变孤儿） */
+  _queueAllImages() {
+    const ks = [];
+    for (const p of this.projects) ks.push(...this._imgKeys(p.shots));
+    this._pendingImgs = this._pendingImgs.concat(ks);
+    try { save('bdm_img_pending_v1', this._pendingImgs); } catch (e) { }
   }
 
   /* ---------- IndexedDB（参考图） ---------- */
@@ -579,12 +691,15 @@ class Store {
     });
   }
 
-  /* ---------- 图片压缩入库 ---------- */
+  /* ---------- 图片压缩入库 ----------
+     重新上传要先把上一张从 IndexedDB 删掉，否则每换一次图就多一个没人引用的 blob。 */
   async attachImage(shotId, file) {
     const blob = await compressImage(file, 1024);
     const key = await this.putImage(blob);
     if (!key) { this._notify('图片保存失败（浏览器不支持或空间不足）', 'warn'); return; }
+    const old = this._findShot(shotId)?.image;
     this.updateShot(shotId, { image: key });
+    if (old && old !== key) this.deleteImage(old);
     this._notify('参考图已挂到镜头上');
   }
 
@@ -592,7 +707,9 @@ class Store {
   async attachSketch(shotId, blob) {
     const key = await this.putImage(blob);
     if (!key) { this._notify('手绘稿保存失败（浏览器不支持或空间不足）', 'warn'); return; }
+    const old = this._findShot(shotId)?.sketch;
     this.updateShot(shotId, { sketch: key });
+    if (old && old !== key) this.deleteImage(old);
     this.addXP(2, '手绘分镜');
     this._notify('手绘分镜稿已保存 🎨');
   }
@@ -601,7 +718,9 @@ class Store {
     const blob = await compressImage(file, 1280);
     const key = await this.putImage(blob);
     if (!key) { this._notify('截图保存失败（存储空间不足）', 'warn'); return null; }
+    const old = this._findShot(shotId)?.reviewImg;
     this.updateShot(shotId, { reviewImg: key });
+    if (old && old !== key) this.deleteImage(old);
     return key;
   }
   async getReviewImgData(shotId) {
