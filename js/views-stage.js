@@ -236,6 +236,7 @@ export function renderPreview(container, payload = {}) {
           <div class="form-row"><label>焦点（摇 / 俯仰落点）</label><select id="pvFocus" class="input">
             ${focusOptions(builtScene)}
           </select></div>
+          <label class="form-row" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="pvPaths" ${initShot && initShot.showPath ? 'checked' : ''}><span>显示人物走位线</span></label>
           <div class="form-row"><label>景别（真实距离）</label><select id="pvSize" class="input">${opts(SHOT_SIZES, 'MS')}</select></div>
           <div class="form-row"><label>拍摄角度（直观可见）</label><select id="pvAngle" class="input">${opts(ANGLES, 'eye')}</select></div>
           <div class="form-row"><label>看向高度（拍哪里）</label><select id="pvAim" class="input">
@@ -313,7 +314,7 @@ export function renderPreview(container, payload = {}) {
     const focusScene = sceneV === '__shot__' ? builtScene : scene;
     const fRaw = container.querySelector('#pvFocus').value;
     const focus = focusValue(fRaw, focusScene, aimV === 'auto' ? undefined : +aimV);
-    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value, size: container.querySelector('#pvSize').value, aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV, focus, focusKind: fRaw.split(':')[0] });
+    player.play(mv.sim, { duration: dur, action, scene, loop: loopOn, fromT, showPaths: container.querySelector('#pvPaths').checked, angle: container.querySelector('#pvAngle').value, moveSpeed: container.querySelector('#pvMoveSpeed').value, size: container.querySelector('#pvSize').value, aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV, focus, focusKind: fRaw.split(':')[0] });
     drawMap();
     playBtn.textContent = '⏸ 暂停';
     player.onEnd = () => { playBtn.textContent = '▶ 播放'; };
@@ -335,6 +336,7 @@ export function renderPreview(container, payload = {}) {
   container.querySelector('#pvAim').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvCamH').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvFocus').onchange = () => startPlay(0);
+  container.querySelector('#pvPaths').onchange = (e) => { if (initShot) store.updateShot(initShot.id, { showPath: e.target.checked }); startPlay(player.t || 0); };
   container.querySelector('#pvMoveSpeed').onchange = () => startPlay(player.t || 0);
   container.querySelector('#pvScene').onchange = () => startPlay(0);
   const durInput = container.querySelector('#pvDur');
@@ -356,6 +358,7 @@ export function renderPreview(container, payload = {}) {
       size: container.querySelector('#pvSize').value,
       aimY: aimV === 'auto' ? undefined : +aimV,
       camH: camHV === 'auto' ? undefined : +camHV,
+      showPaths: container.querySelector('#pvPaths').checked,
       focus: focusValue(container.querySelector('#pvFocus').value, (() => { const v2 = container.querySelector('#pvScene').value; return v2 === '__shot__' ? builtScene : v2; })(), aimV === 'auto' ? undefined : +aimV),
       focusKind: container.querySelector('#pvFocus').value.split(':')[0],
     });
