@@ -48,6 +48,7 @@ export function renderAnimatic(container) {
           </select>
           <button class="btn btn-ghost btn-sm" id="anLoop">🔁 循环: 关</button>
           <button class="btn btn-ghost btn-sm" id="anSkipImg" title="忽略参考图，全部用白模播放">🧊 白模模式: 关</button>
+          <button class="btn btn-ghost btn-sm" id="anExport" title="把整片预演编成 mp4（无音轨）">🎬 导出 mp4</button>
         </div>
       </div>
       <div class="animatic-side card">
@@ -223,6 +224,89 @@ export function renderAnimatic(container) {
     renderFrame();
   };
   container.querySelector('#anSpeed').onchange = () => { lastTs = 0; };
+
+  /* ---------- 导出预演 mp4 ----------
+     和屏幕上看的完全是同一套渲染：有参考图走 Ken Burns，没图走白模；
+     整片按镜头时长顺序编码成一件事先排好的时间轴（无音轨）。 */
+  const anExport = container.querySelector('#anExport');
+  anExport.onclick = async () => {
+    if (typeof window.mnExportCanvasVideo !== 'function') { toast('导出器没加载上，刷新页面试试', 'warn'); return; }
+    if (playing) pause();
+    const [aw, ah] = String(p.aspect || '16:9').split(':').map(Number);
+    const W = 1280, H = Math.round(1280 * (ah || 9) / (aw || 16) / 2) * 2;
+    const dur = s => Math.max(0.5, +s.duration || 3);
+    const starts = [];
+    let acc = 0;
+    p.shots.forEach(s => { starts.push(acc); acc += dur(s); });
+    const total = acc;
+
+    anExport.disabled = true; anExport.textContent = '🎬 准备中…';
+    try {
+      /* 参考图先全部读出来，编码过程中不能再等 IndexedDB */
+      const pool = new Map();
+      if (!whiteOnly) {
+        for (const s of p.shots) {
+          const key = s.image || s.sketch;
+          if (!key) continue;
+          const img = await ensureImage(key);
+          if (img) pool.set(key, img);
+        }
+      }
+      const oc = document.createElement('canvas');
+      oc.width = W; oc.height = H;
+      const offR = new WhiteModelRenderer(oc);
+      /* 渲染器构造时会按 getBoundingClientRect() 重设尺寸——离屏画布没有布局，会被压成 3×3 像素。
+         这里再按导出尺寸盖回去（同时清空画布），并关掉 DPR 缩放。 */
+      oc.width = W; oc.height = H;
+      offR.w = W; offR.h = H; offR._dpr = 1;
+
+      const drawFrame = (t, ctx) => {
+        let i = 0;
+        while (i < starts.length - 1 && t >= starts[i + 1]) i++;
+        const s = p.shots[i];
+        const local = Math.min(1, Math.max(0, (t - starts[i]) / dur(s)));
+        const mv = moveByKey[s.cameraMove] || moveByKey.static;
+        ctx.fillStyle = '#0b0d12';
+        ctx.fillRect(0, 0, W, H);
+        const img = whiteOnly ? null : pool.get(s.image || s.sketch);
+        if (img) {
+          const tf = imageTransformFor(mv.sim, local);
+          const sc = Math.max(W / img.naturalWidth, H / img.naturalHeight) * tf.scale;
+          ctx.save();
+          ctx.translate(W / 2 + tf.dx * W, H / 2 + tf.dy * H);
+          ctx.rotate(tf.rot);
+          ctx.drawImage(img, -img.naturalWidth * sc / 2, -img.naturalHeight * sc / 2, img.naturalWidth * sc, img.naturalHeight * sc);
+          ctx.restore();
+        } else {
+          offR.setTheme({ ground: (s.scene && s.scene.floor) || '#d9dde5' });
+          offR.render(mv.sim, local, 'stand', {
+            duration: s.duration, hud: false, letterbox: false,   // 交付物不要上下黑边
+            angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize,
+            scene: s.scene, aimY: s.aimY ?? undefined, camH: s.camH ?? undefined,
+          });
+          ctx.drawImage(oc, 0, 0);
+        }
+      };
+
+      const res = await window.mnExportCanvasVideo({
+        W, H, fps: 24, total, drawFrame,
+        onProgress: pr => { anExport.textContent = '🎬 ' + Math.round(pr * 100) + '%'; },
+      });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(res.blob);
+      a.download = (p.name || '预演') + '-预演.' + res.ext;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+      toast('预演视频已导出：' + res.frames + ' 帧 / ' + (res.blob.size / 1048576).toFixed(1) + 'MB（' + res.ext + '）', 'ok');
+      store.unlock('animatic');
+    } catch (e) {
+      console.error('[预演导出]', e);
+      toast('导出失败：' + (e.message || e), 'warn');
+    } finally {
+      anExport.disabled = false;
+      anExport.textContent = '🎬 导出 mp4';
+    }
+  };
 
   seekTo(0, 0);
   renderFrame();
