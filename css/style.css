@@ -567,6 +567,19 @@ body.theme-obsidian .modal, body.theme-gilt .modal { box-shadow: 0 30px 80px rgb
 }
 .shot-review-flag.good { color: var(--ok); }
 .shot-review-flag.bad { color: var(--bad); }
+/* 批量管理：勾选角标 */
+.shot-check {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 2.5px solid rgba(120, 130, 160, 0.75); background: rgba(255, 255, 255, 0.55);
+  color: transparent; display: none; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 900; z-index: 4; pointer-events: none;
+}
+.storyboard-grid.batching .shot-check { display: flex; }
+.storyboard-grid.batching .shot-card.sel .shot-check {
+  background: var(--acc, #4a7dff); border-color: transparent; color: #fff;
+}
+.storyboard-grid.batching .shot-card.sel { outline: 3px solid var(--acc, #4a7dff); outline-offset: -3px; }
 .shot-body { padding: 9px 11px 4px; flex: 1; }
 .shot-desc {
   font-size: 12px; line-height: 1.6; min-height: 36px;
