@@ -802,6 +802,37 @@ class WhiteModelRenderer {
       }
     }
 
+    /* ---- 人物走位线（可选，贴地画；在模型之前画，家具会自然挡住） ---- */
+    if (opts.showPaths) {
+      for (const a of sceneActors) {
+        const path = a.path || [];
+        if (path.length < 2) continue;
+        ctx.save();
+        ctx.lineWidth = Math.max(1.6, W / 700);
+        ctx.strokeStyle = 'rgba(46,124,246,0.88)';
+        const dash = Math.max(4, W / 170);
+        ctx.setLineDash([dash, dash * 0.7]);
+        ctx.beginPath();
+        let started = false;
+        for (const q of path) {
+          const pr = this.project([q.x, 0.04, q.z], cam, focal, cx, cyv);
+          if (!pr) { started = false; continue; }
+          if (!started) { ctx.moveTo(pr.x, pr.y); started = true; } else ctx.lineTo(pr.x, pr.y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        path.forEach((q, i) => {
+          const pr = this.project([q.x, 0.05, q.z], cam, focal, cx, cyv);
+          if (!pr) return;
+          const last = i === path.length - 1;
+          ctx.beginPath(); ctx.arc(pr.x, pr.y, last ? Math.max(4, W / 280) : Math.max(2.4, W / 520), 0, Math.PI * 2);
+          ctx.fillStyle = last ? 'rgba(46,124,246,0.96)' : 'rgba(255,255,255,0.92)';
+          ctx.fill(); ctx.strokeStyle = 'rgba(46,124,246,0.9)'; ctx.lineWidth = 1.5; ctx.stroke();
+        });
+        ctx.restore();
+      }
+    }
+
     /* ---- 画家算法绘制 ---- */
     polys.sort((a, b) => b.d - a.d);
     let L = [0.45, 0.8, 0.4], lightInt = 1; // 光方向
@@ -901,8 +932,8 @@ class MovePlayer {
     this.duration = 4;
     this.hud = true;
   }
-  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0, angle, moveSpeed, size, aimY, camH, focus } = {}) {
-    this.extra = { angle, moveSpeed, size, aimY, camH, focus };
+  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0, angle, moveSpeed, size, aimY, camH, focus, showPaths } = {}) {
+    this.extra = { angle, moveSpeed, size, aimY, camH, focus, showPaths };
     this.sim = sim; this.duration = duration;
     this.action = action; this.loop = loop;
     /* ⚠ 2026-10-27 修：以前只把 scene 交给 renderer.scene（只当舞台底用），
@@ -920,7 +951,7 @@ class MovePlayer {
     else if (opts?.aimY !== undefined || opts?.camH !== undefined) this.extra = { ...(this.extra || {}), aimY: opts.aimY, camH: opts.camH };
     if (opts && opts.scene !== undefined) { this.scene = opts.scene; this.renderer.scene = opts.scene; }
     this.duration = opts?.duration || this.duration;
-    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene, focus: this.extra?.focus });
+    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene, focus: this.extra?.focus, showPaths: this.extra?.showPaths });
   }
   stop() { this.playing = false; }
   destroy() { this.playing = false; if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
@@ -934,7 +965,7 @@ class MovePlayer {
         else { t = 1; this.playing = false; if (this.onEnd) this.onEnd(); }
       }
       this.t = t;
-      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene, focus: this.extra?.focus });
+      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene, focus: this.extra?.focus, showPaths: this.extra?.showPaths });
       if (this.onTick) this.onTick(t);
       this._raf = requestAnimationFrame(this._frame.bind(this));
     }
