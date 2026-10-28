@@ -728,7 +728,7 @@
       const wasClick = d0.moved < 5;
       const st = M._last;
       if (d0.mode === 'move') {
-        if (typeof M.onMoveEnd === 'function') M.onMoveEnd();
+        if (typeof M.onMoveEnd === 'function') M.onMoveEnd(d0.kind, d0.id, d0.moved >= 5);
         if (wasClick && typeof M.onSelect === 'function') M.onSelect(d0.kind, d0.id);
         return;
       }
