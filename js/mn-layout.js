@@ -72,11 +72,12 @@
   }
 
   /* 一个物体与场景里其它东西的碰撞（不含自己） */
-  function hitsFor(box, scene, ignoreId, selfKind, selfKindName) {
+  function hitsFor(box, scene, ignoreId, selfKind, selfKindName, selfObj) {
     const out = [];
     const selfUnderlay = !!(selfKindName && UNDERLAY[selfKindName]);
+    const mySeat = selfObj && selfObj.sitOn && selfObj.sitOn.id;      // 坐在椅子上的那个人，椅子本身不算穿模
     for (const p of (scene.props || [])) {
-      if (p.hidden || p.id === ignoreId) continue;
+      if (p.hidden || p.id === ignoreId || p.id === mySeat) continue;
       if (selfUnderlay || UNDERLAY[p.kind]) continue;          // 地毯叠地毯/家具压地毯都不算撞
       const b = boxOf('prop', p);
       if (b && mtv(box, b)) out.push({ kind: 'prop', id: p.id, name: p.name });
@@ -90,6 +91,7 @@
     }
     for (const pe of (scene.persons || [])) {
       if (pe.hidden || pe.id === ignoreId) continue;
+      if (selfKind === 'prop' && pe.sitOn && pe.sitOn.id === ignoreId) continue;   // 家具挪动时不必把坐在它身上的人当障碍
       const b = boxOf('person', pe);
       if (b && mtv(box, b)) out.push({ kind: 'person', id: pe.id, name: pe.name });
     }
@@ -121,7 +123,7 @@
       const box = boxOf(kind, t);
       if (!box) return { ok: true, t };
       if (keepInside && !insideRooms(box, scene)) return { ok: false, t, hits: [{ kind: 'room', name: '房间外' }] };
-      const hits = hitsFor(box, scene, o.id, kind, o.kind);
+      const hits = hitsFor(box, scene, o.id, kind, o.kind, t);
       return { ok: hits.length === 0, t, hits };
     };
     const want = kind === 'person' ? { x: +o.x || 0, y: +o.y || 0 }
@@ -159,7 +161,7 @@
     /* 两遍：第一遍按顺序排，第二遍把第一遍被挤得又撞上的再处理一次 */
     for (let pass = 0; pass < 2; pass++) {
       (scene.props || []).forEach(o => { if (!o.hidden) doOne('prop', o); });
-      (scene.persons || []).forEach(o => { if (!o.hidden) doOne('person', o); });
+      (scene.persons || []).forEach(o => { if (!o.hidden && !o.sitOn) doOne('person', o); });   // 坐着的人由座位定位，不参与避让
     }
     return moved;
   }
@@ -180,7 +182,7 @@
   function collides(scene, kind, o) {
     const b = boxOf(kind, o);
     if (!b) return false;
-    return hitsFor(b, scene, o.id, kind, o.kind).length > 0;
+    return hitsFor(b, scene, o.id, kind, o.kind, o).length > 0;
   }
 
   /* ============================================================
@@ -366,6 +368,119 @@
     return { count: n, added };
   }
 
+  /* ================= 座位：让「人」和「椅子/沙发/长凳/床」真的发生关系 =================
+     道具 kind 上挂 seats = [{x, y, h, face}]（局部米 + 坐面高 + 坐下朝向），
+     这里负责把局部座位换算成地图坐标，并处理「谁占了哪个座位」。 */
+  function kindDef(o) {
+    const K = window.MN_PROP_KINDS; if (!K) return null;
+    const key = window.MN_kindOf ? window.MN_kindOf(o) : (o && o.kind);
+    return (key && K[key]) ? K[key] : null;
+  }
+  function seatsOf(o) {
+    if (!o || o.hidden) return null;
+    const def = kindDef(o);
+    return (def && Array.isArray(def.seats) && def.seats.length) ? def.seats : null;
+  }
+  /* 第 i 个座位的地图坐标 + 人物朝向 + 坐面高度（道具缩放/旋转/移动后都重算） */
+  function seatWorld(o, i) {
+    const seats = seatsOf(o); if (!seats || !seats[i]) return null;
+    const def = kindDef(o);
+    const w = Math.abs(+o.w || 1), d = Math.abs(+o.d || 1), h = Math.abs(+o.h || 1);
+    const ct = window.MN_propCenter ? window.MN_propCenter(o) : { x: (+o.x || 0) + w / 2, y: (+o.y || 0) + d / 2 };
+    const sx = def.w ? w / def.w : 1, sy = def.h ? h / def.h : 1, sz = def.d ? d / def.d : 1;
+    const s = seats[i];
+    const lx = (+s.x || 0) * sx, ly = (+s.y || 0) * sz;
+    const r = ((+o.rot || 0) % 360) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+    return {
+      x: ct.x + lx * c - ly * sn,
+      y: ct.y + lx * sn + ly * c,
+      rot: (((+o.rot || 0) + (+s.face || 90)) % 360 + 360) % 360,
+      h: Math.max(0.15, (+s.h || 0.45) * sy),
+      propId: o.id, seat: i, name: o.name || (def.name || '座位'),
+    };
+  }
+  function seatKey(pid, i) { return pid + ':' + i; }
+  function occupiedSeats(scene) {
+    const s = new Set();
+    (scene.persons || []).forEach(p => { if (p.sitOn && p.sitOn.id) s.add(seatKey(p.sitOn.id, p.sitOn.seat || 0)); });
+    return s;
+  }
+  /* 找最近的空座位（radius 米内；allowTaken=true 时已坐的也算） */
+  function nearestSeat(scene, x, y, opts = {}) {
+    const rad = opts.radius == null ? 1.2 : opts.radius;
+    const taken = opts.allowTaken ? new Set() : occupiedSeats(scene);
+    let best = null;
+    for (const p of (scene.props || [])) {
+      const seats = seatsOf(p); if (!seats) continue;
+      for (let i = 0; i < seats.length; i++) {
+        if (taken.has(seatKey(p.id, i))) continue;
+        const sw = seatWorld(p, i); if (!sw) continue;
+        const dd = Math.hypot(sw.x - x, sw.y - y);
+        if (dd <= rad && (!best || dd < best.dist)) best = Object.assign({}, sw, { dist: dd });
+      }
+    }
+    return best;
+  }
+  /* 把某个座位坐到人物身上（返回改动人物的字段；调用方负责 pushUndo/paint） */
+  function seatPerson(person, seat) {
+    person.sitOn = { id: seat.propId, seat: seat.seat };
+    person.x = seat.x; person.y = seat.y;
+    person.rot = seat.rot;
+    person.sitH = seat.h;
+    person.pose = '坐下';
+    person.path = [];
+    return person;
+  }
+  function unseatPerson(person, standUpPose) {
+    person.sitOn = null; person.sitH = 0;
+    if (!standUpPose || standUpPose === '坐下') person.pose = '站立';
+    else person.pose = standUpPose;
+    return person;
+  }
+  /* 道具被挪动 / 旋转 / 缩放 / 删除后，让坐在上面的人跟着走 */
+  function refitSitters(scene, movedPropId) {
+    let n = 0;
+    for (const p of (scene.persons || [])) {
+      if (!p.sitOn || !p.sitOn.id) continue;
+      if (movedPropId && p.sitOn.id !== movedPropId) continue;
+      const prop = (scene.props || []).find(o => o.id === p.sitOn.id);
+      if (!prop || prop.hidden) { unseatPerson(p); continue; }
+      const sw = seatWorld(prop, p.sitOn.seat || 0);
+      if (!sw) { unseatPerson(p); continue; }
+      p.x = sw.x; p.y = sw.y; p.rot = sw.rot; p.sitH = sw.h; n++;
+    }
+    return n;
+  }
+  /* 一键「谁站在椅子上 / 谁写了坐下就真坐下去」：AI 搭景、自动摆好之后跑一遍。
+     opts.radius 吸附半径（米）；opts.onlySitPose = 只吸附姿势已写成「坐下」的人。 */
+  function autoSeatAll(scene, opts = {}) {
+    const radius = opts.radius == null ? 0.45 : opts.radius;
+    let n = 0;
+    const taken = occupiedSeats(scene);
+    for (const p of (scene.persons || [])) {
+      if (p.hidden || p.sitOn) continue;
+      if (p.pose === '躺下') continue;
+      if (Array.isArray(p.path) && p.path.length >= 2) continue;      // 有走位线的人是在走路，不要半路按坐下
+      if (opts.onlySitPose && p.pose !== '坐下') continue;             // 放宽半径时只吸附「已经写了坐下」的，免得人莫名其妙坐下去
+      const seats = [];
+      for (const o of (scene.props || [])) {
+        const ss = seatsOf(o); if (!ss) continue;
+        for (let i = 0; i < ss.length; i++) {
+          if (taken.has(seatKey(o.id, i))) continue;
+          const sw = seatWorld(o, i); if (!sw) continue;
+          if (Math.hypot(sw.x - p.x, sw.y - p.y) <= radius) seats.push(sw);
+        }
+      }
+      if (!seats.length) continue;
+      seats.sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y));
+      seatPerson(p, seats[0]);
+      taken.add(seatKey(seats[0].propId, seats[0].seat));
+      n++;
+    }
+    return n;
+  }
+
   window.MN_LAYOUT = { boxOf, mtv, hitsFor, insideRooms, findFreeSpot, resolveScene, settle, collides,
-    pathObstacles, segBlocked, routePath, routeAllPaths };
+    pathObstacles, segBlocked, routePath, routeAllPaths,
+    seatsOf, seatWorld, nearestSeat, seatPerson, unseatPerson, refitSitters, autoSeatAll, occupiedSeats };
 })();
