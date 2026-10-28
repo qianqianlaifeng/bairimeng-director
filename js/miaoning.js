@@ -1,4 +1,8 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.12.3（2026-10-28）：防穿模（新 js/mn-layout.js）—— 分离轴碰撞检测；放置家具/人物、2D 拖动松手、3D 拖动松手都会
+                          自动让到最近的空位（只挪你正在动的那一件，已摆好的不动）；AI 搭景落地时整场排一遍重叠；
+                          家具不许插进墙、人不许站进家具里；门/窗嵌墙、地毯铺在家具下不算穿模；
+                          拖动中撞上会把选中框描红警告。另加「🧹 自动摆好」按钮（家具/人物面板、物件库）。
    v1.12.2（2026-10-28）：摇镜焦点 —— 左/右摇、上/下摇现在**终点对准焦点**（以前按固定角度扫完就落在空处），
                           焦点默认是主体人物，也能在「镜头编辑 / 运镜预演」里指定某个人物、某件道具或画面中心；
                           指定道具作焦点时按道具自身高度取景（不再把镜头抬到 1.15m 把人/物顶到画面上沿）。
@@ -356,7 +360,11 @@ function bindShell() {
     /* 3D 拖动：只重绘 3D。2D 画布此时是隐藏的，paint() 里的 doPaint 纯属白烧 CPU（拖起来就卡） */
     window.MN3D.onMoveStart = () => { pushUndo(); };
     window.MN3D.onMove = () => { saveSoon(); paint3D(); };
-    window.MN3D.onMoveEnd = () => { saveSoon(); paint(); renderTree(); };
+    window.MN3D.onMoveEnd = (kind, id, dragged) => {
+      /* 3D 里拖完也自动让开（只挪这一件） */
+      if (dragged && (kind === 'prop' || kind === 'person')) settleOne(kind, id, false);
+      saveSoon(); paint(); renderTree();
+    };
     window.MN3D.onRotateStart = () => { pushUndo(); };
     window.MN3D.onRotate = () => { };
     window.MN3D.onRotateEnd = () => { refreshSel(); renderAll(); saveSoon(); toast('已旋转（Ctrl+Z 可撤销）'); };
@@ -849,6 +857,7 @@ function renderObjPanel() {
       <label class="mn-field"><span>模型</span><input type="text" value="${(window.MN_PROP_KINDS[o.kind] || {}).name || o.kind || '方块'}" disabled /></label>
     </div>
     <label class="mn-field"><span>颜色</span></label>${swatches(PROP_COLORS, o.color, 'color')}
+    <div class="mn-chip-row"><button class="mn-chip" data-act="autolayout" title="把重叠的家具/人物排开，墙和房间不动">${icon('sparkles', 's12')}自动摆好</button></div>
   </section>`;
   if (sel.kind === 'person') return `<section class="mn-prop">${head}
     <div class="mn-chip-row">
@@ -857,6 +866,7 @@ function renderObjPanel() {
       <button class="mn-chip active" data-act="move">${icon('move-3d', 's12')}移动</button>
       <button class="mn-chip" data-act="rotate">${icon('rotate-3d', 's12')}旋转</button>
       <button class="mn-chip" data-act="scale">${icon('scan-line', 's12')}缩放</button>
+      <button class="mn-chip" data-act="autolayout" title="把重叠的家具/人物排开">${icon('sparkles', 's12')}自动摆好</button>
     </div>
     <label class="mn-field"><span>人物名称</span><input type="text" data-f="name" value="${esc(o.name || '')}" placeholder="给这个角色起个名字（3D 里显示在头顶）" /></label>
     <label class="mn-field"><span>人物姿态</span>
@@ -899,7 +909,8 @@ function renderLibrary() {
   const pendName = pend ? (pend.preset && pend.preset.name) || (pend.kind === 'person' ? '人物' : '光源') : '';
   const n = selList().length;
   return `<section class="mn-prop">
-    <div class="mn-lib-head"><strong>物件库</strong><span>点一下 → 画布上点一下落地</span></div>
+    <div class="mn-lib-head"><strong>物件库</strong><span>点一下 → 画布上点一下落地</span>
+      <button class="mn-linkbtn" data-act="autolayout" title="把重叠的家具/人物排开">🧹 自动摆好</button></div>
     ${pend ? `<div class="mn-lib-pending">正在放 <b>${esc(pendName)}</b> · 连着点就连续放 · <button class="mn-linkbtn" data-libcancel>退出</button></div>` : ''}
     ${n > 1 ? `<div class="mn-lib-pending">已选 <b>${n}</b> 个 · Del 一起删 · 方向键一起挪</div>` : ''}
     <div class="mn-lib-grid">
@@ -930,6 +941,7 @@ function bindLibrary() {
     toast('点画布放一个' + (kind === 'person' ? '人物' : '光源') + ' · Esc 退出');
   });
   const c = $('[data-libcancel]', root); if (c) c.onclick = () => { MN.pending = null; renderRight(); paint(); };
+  const al = $('[data-act="autolayout"]', root); if (al) al.onclick = () => autoLayout();
 }
 
 function bindObjPanel() {
@@ -971,6 +983,7 @@ function bindObjPanel() {
     }
     else if (a === 'copy') { copySel(); }
     else if (a === 'paste') { pasteClip(1, 1); }
+    else if (a === 'autolayout') { autoLayout(); }
     else if (a === 'samecolor') {
       /* 连戏：同一个角色出现在多个镜/多个位置时，一次把同名角色都换色 */
       const list = (MN.state.scene.persons || []).filter(p => p.name && p.name === o.name);
@@ -1195,7 +1208,9 @@ function doPaint() {
     ctx.translate(q.x, q.y);
     ctx.rotate((p.rot || 0) * Math.PI / 180);
     if (isSel('prop', p.id)) {
-      ctx.strokeStyle = PAL.accent; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+      /* 撞上了就描红：不用等松手才知道这里放不下 */
+      const bad = window.MN_LAYOUT && MN.drag && MN.drag.moved && MN_LAYOUT.collides(MN.state.scene, 'prop', p);
+      ctx.strokeStyle = bad ? '#e5484d' : PAL.accent; ctx.lineWidth = bad ? 3 : 2; ctx.setLineDash([5, 4]);
       ctx.strokeRect(-w / 2, -h / 2, w, h); ctx.setLineDash([]);
     }
     if (K && K.top) { ctx.scale(C, C); K.top(ctx, p.w, p.d, st); }
@@ -1252,7 +1267,8 @@ function doPaint() {
       ctx.textAlign = 'left';
     }
     if (isSel('person', p.id)) {
-      ctx.strokeStyle = PAL.accent; ctx.lineWidth = 2;
+      const bad = window.MN_LAYOUT && MN.drag && MN.drag.moved && MN_LAYOUT.collides(MN.state.scene, 'person', p);
+      ctx.strokeStyle = bad ? '#e5484d' : PAL.accent; ctx.lineWidth = bad ? 3 : 2;
       ctx.beginPath(); ctx.ellipse(0, 0, R * 1.06, R * 1.28, 0, 0, 7); ctx.stroke();
     }
     ctx.restore();
@@ -1491,13 +1507,41 @@ function finishPath() {
   renderAll(); saveSoon();
 }
 
+/* ---------- 防穿模：自动让位 ----------
+   只挪「你正在放/正在拖的那一件」，已经摆好的东西不动。
+   放置、拖动松手、3D 拖动松手、AI 搭景之后都会走这里。 */
+function settleOne(kind, id, quiet) {
+  if (!window.MN_LAYOUT || !MN.state || !MN.state.scene) return false;
+  const o = findObj(kind, id); if (!o) return false;
+  const r = window.MN_LAYOUT.settle(MN.state.scene, kind, o);
+  if (r.moved) { if (!quiet) toast('已自动让开 ' + r.dist + 'm（不穿模）', 'ok'); return true; }
+  if (r.failed && !quiet) toast('这附近放不下，先挪开别的家具吧', 'warn');
+  return false;
+}
+function settleSel(quiet) {
+  const list = selList().filter(x => x.kind === 'prop' || x.kind === 'person');
+  let n = 0;
+  list.forEach(x => { if (settleOne(x.kind, x.id, true)) n++; });
+  if (n && !quiet) toast('自动让开 ' + n + ' 件（不穿模）', 'ok');
+  return n;
+}
+/* 整场排开（按钮用） */
+function autoLayout() {
+  if (!window.MN_LAYOUT || !MN.state) return;
+  pushUndo();
+  const moved = window.MN_LAYOUT.resolveScene(MN.state.scene, { maxR: 3 });
+  renderAll(); saveSoon();
+  toast(moved.length ? '已排开 ' + moved.length + ' 件（Ctrl+Z 可撤销）' : '场上没有重叠，不用排', moved.length ? 'ok' : undefined);
+}
+
 function placePending(wx, wy) {  const p = MN.pending; if (!p) return;
   pushUndo();
+  let added = null;
   /* 放置后「不选中」新物体：右侧继续留在物件库，方便接着换下一个预设连放
      （之前会选中刚放的东西，物件库被属性面板顶掉，想再放别的东西就点不到了） */
   if (p.kind === 'person') {
     const o = { id: uid(), name: '人物 ' + (MN.state.scene.persons.length + 1), x: snap(wx), y: snap(wy), rot: 0, color: p.preset.color || '#2e7cf6', pose: '站立', face: 1, faceDir: 0, jump: 0 };
-    MN.state.scene.persons.push(o);
+    MN.state.scene.persons.push(o); added = o;
   } else if (p.kind === 'light') {
     const o = { id: uid(), name: '光源 ' + (MN.state.scene.lights.length + 1), x: snap(wx), y: snap(wy), color: '#ffe9b0', intensity: 1, h: 2.5 };
     MN.state.scene.lights.push(o);
@@ -1505,7 +1549,10 @@ function placePending(wx, wy) {  const p = MN.pending; if (!p) return;
     const pr = p.preset;
     const o = { id: uid(), name: pr.name, x: snap(wx - pr.w / 2), y: snap(wy - pr.d / 2), w: pr.w, d: pr.d, h: pr.h, color: pr.color || '', kind: pr.kind || window.MN_kindOf({ name: pr.name }), rot: 0 };
     MN.state.scene.props.push(o);
+    added = o;
   }
+  /* 放下去就自动躲开已有家具/墙，省得你自己挪 */
+  if (added) settleOne(p.kind, added.id, false);
   renderAll(); saveSoon();
 }
 
@@ -1637,7 +1684,7 @@ function onPtrUp(e) {
   }
   if (d.kind === 'pan') { paint(); return; }
   if (d.kind === 'move') {
-    if (d.moved) { renderTree(); renderRight(); saveSoon(); }
+    if (d.moved) { settleSel(false); renderTree(); renderRight(); saveSoon(); }
     paint(); return;
   }
   if (d.kind === 'marquee') {
@@ -1664,6 +1711,7 @@ function onPtrUp(e) {
     } else {
       const p = { id: uid(), name: '造物 ' + (MN.state.scene.props.length + 1), x, y, w, d: h, h: Math.min(w, h, 1), color: '' };
       MN.state.scene.props.push(p); selectOnly('prop', p.id);
+      settleOne('prop', p.id, false);
     }
     refreshSel(); saveSoon(); paint();
     return;
@@ -3290,8 +3338,14 @@ window.miaoningGetScene = function () {
 /* AI 搭景落地：走同一个 importAiData（mode='model' 只换场景、保留机位与故事板），
    返回一句中文摘要给浮层提示用。 */
 window.miaoningApplyAiScene = function (data) {
-  const parts = importAiData(data, 'model');
+  const r = importAiData(data, 'model');            // 返回 {msg}，不是数组
+  let msg = (r && r.msg) ? r.msg : '已应用 AI 场景';
+  /* AI 生成的东西经常叠在一起 → 落地时整场排一遍，保证不穿模 */
+  if (window.MN_LAYOUT && MN.state && MN.state.scene) {
+    const moved = window.MN_LAYOUT.resolveScene(MN.state.scene, { maxR: 3 });
+    if (moved.length) msg += ' · 自动排开 ' + moved.length + ' 件重叠';
+  }
   fitView(); renderAll(); saveSoon();
-  return (parts && parts.length) ? parts.join(' / ') : '已应用 AI 场景';
+  return msg;
 };
 })();
