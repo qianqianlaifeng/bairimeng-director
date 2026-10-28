@@ -1,4 +1,9 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.13.3（2026-10-28）：① 底部停靠条可收起 —— 左边多一个「▾」，收起来只剩一个小药丸
+                          （展开 · 📷 截图 · 🎞 机位组图 · 💾 保存），顺带把下面那行 俯视/斜视/正视/网格… 一起藏掉，
+                          看画面和出图不再被两条横栏压住；收起状态记在本地，下次进来还是收着。
+                          ② 物件库头部排版：标题 + 「🧹 自动摆好」药丸一行、说明文字单独一行（原来三样挤一行
+                          在窄面板里折成三截）；物件格子改自适应列数 + 收紧内边距，尺寸数字不再被挤断。
    v1.13.2（2026-10-28）：① 场景库卡片终于能「打开」了 —— 缩略图和「✏️ 打开编辑」都能把那套景装回导演台改，
                           改完点「💾 保存到场景库」原地覆盖那一条（不会再变成新景，也不会改动已经套用过的镜头）。
                           ② 导演台底栏加两个按钮：「📷 截图」把当前画面存成 PNG（2D 平面图 / 3D 立体都行，
@@ -1092,8 +1097,9 @@ function renderLibrary() {
   const pendName = pend ? (pend.preset && pend.preset.name) || (pend.kind === 'person' ? '人物' : '光源') : '';
   const n = selList().length;
   return `<section class="mn-prop">
-    <div class="mn-lib-head"><strong>物件库</strong><span>点一下 → 画布上点一下落地</span>
-      <button class="mn-linkbtn" data-act="autolayout" title="把重叠的家具/人物排开">🧹 自动摆好</button></div>
+    <div class="mn-lib-head"><strong>物件库</strong>
+      <button class="mn-lib-tool" data-act="autolayout" title="把重叠的家具/人物排开，墙和房间不动">🧹 自动摆好</button></div>
+    <p class="mn-lib-hint">点一下选物件 → 再点画布落地，连着点可以连续放</p>
     ${pend ? `<div class="mn-lib-pending">正在放 <b>${esc(pendName)}</b> · 连着点就连续放 · <button class="mn-linkbtn" data-libcancel>退出</button></div>` : ''}
     ${n > 1 ? `<div class="mn-lib-pending">已选 <b>${n}</b> 个 · Del 一起删 · 方向键一起挪</div>` : ''}
     <div class="mn-lib-grid">
@@ -3673,6 +3679,7 @@ Object.assign(window, {
   /* 座位 API（builder / ai-scene / 测试都用得到） */
   mnSitOn: sitOn, mnStandUp: standUp, mnSitSelToNearestSeat: sitSelToNearestSeat,
   mnSeatSomeoneOn: seatSomeoneOn, mnStandSel: standSel, mnRefitSeats: refitSeats,
+  mnSnapCurrent: snapCurrent, mnSnapAllCams: snapAllCams,
   mnSeatAfterDrop: seatAfterDrop, mnFindProp: findProp, mnSeatableProps: seatableProps,
 });
 
