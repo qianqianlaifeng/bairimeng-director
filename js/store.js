@@ -249,6 +249,33 @@ class Store {
     p.updatedAt = Date.now();
     this.persistProjects(); this.emit();
   }
+  /* 批量：清空 / 删多镜 / 批量改字段 */
+  clearShots() {
+    const p = this.active; if (!p) return 0;
+    const n = p.shots.length;
+    p.shots.forEach(s => { if (s.image) this.deleteImage(s.image); });
+    p.shots = [];
+    p.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+    return n;
+  }
+  deleteShots(ids) {
+    const p = this.active; if (!p || !ids || !ids.length) return 0;
+    const set = new Set(ids);
+    p.shots.forEach(s => { if (set.has(s.id) && s.image) this.deleteImage(s.image); });
+    p.shots = p.shots.filter(s => !set.has(s.id));
+    p.updatedAt = Date.now();
+    this.persistProjects(); this.emit();
+    return set.size;
+  }
+  patchShots(ids, patch) {
+    const p = this.active; if (!p || !ids || !ids.length || !patch) return 0;
+    const set = new Set(ids);
+    let n = 0;
+    p.shots.forEach(s => { if (set.has(s.id)) { Object.assign(s, patch); n++; } });
+    if (n) { p.updatedAt = Date.now(); this.persistProjects(); this.emit(); }
+    return n;
+  }
 
   /* ---------- 场景库（项目级，任意镜头可复用） ---------- */
   get scenes() { const p = this.active; return (p && p.scenes) || []; }
