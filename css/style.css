@@ -1123,6 +1123,12 @@ body.sb-mn-open { overflow: hidden; }
 .sc-thumb{height:132px;background:linear-gradient(135deg,var(--bg2),var(--panel2));display:flex;align-items:center;justify-content:center;overflow:hidden}
 .sc-thumb img{width:100%;height:100%;object-fit:cover}
 .sc-thumb-ph{font-size:30px;opacity:.35}
+/* 缩略图本身就是「打开编辑」的入口：hover 出提示条 */
+.sc-thumb-btn{position:relative;cursor:pointer}
+.sc-thumb-open{position:absolute;inset:auto 0 0 0;display:flex;align-items:center;justify-content:center;gap:4px;
+  padding:6px 0;font-size:12px;font-weight:700;color:#fff;background:rgba(18,22,32,.72);
+  transform:translateY(100%);transition:transform .14s ease;pointer-events:none}
+.sc-card:hover .sc-thumb-open{transform:none}
 .sc-body{padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px}
 .sc-name{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sc-meta{font-size:11.5px}
