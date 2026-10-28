@@ -245,6 +245,7 @@ export function renderReview(container) {
       const cur = s.review?.score === n ? 0 : n;
       stars.forEach(x => x.classList.toggle('on', +x.dataset.n <= cur && cur > 0));
       s.review = { ...(s.review || { checks: {}, note: '' }), score: cur };
+      store.updateShot(s.id, { review: s.review });   // 打完星就落盘，切页不丢分
     });
     item.querySelectorAll('[data-dim]').forEach(ch => ch.onclick = () => {
       s.review = s.review || { score: 0, checks: {}, note: '' };
@@ -252,6 +253,7 @@ export function renderReview(container) {
       s.review.checks[ch.dataset.dim] = !s.review.checks[ch.dataset.dim];
       ch.classList.toggle('chip-on', !!s.review.checks[ch.dataset.dim]);
       ch.textContent = ch.dataset.dim + (s.review.checks[ch.dataset.dim] ? ' ✓' : '');
+      store.updateShot(s.id, { review: s.review });
     });
     /* 成片截图 */
     const imgEl = item.querySelector('.rv-img');
@@ -358,7 +360,7 @@ export function renderAchievements(container) {
       <div><b>${achv.counts.shots || 0}</b><span>累计镜头</span></div>
       <div><b>${achv.counts.prompts || 0}</b><span>生成提示词</span></div>
       <div><b>${achv.counts.previews || 0}</b><span>预演次数</span></div>
-      <div><b>${Object.keys(achv.counts.dictViews || {}).length}/${36}</b><span>学过的运镜</span></div>
+      <div><b>${Object.keys(achv.counts.dictViews || {}).length}/${CAMERA_MOVES.length}</b><span>学过的运镜</span></div>
       <div><b>${Object.keys(achv.unlocked).length}/${BADGES.length}</b><span>徽章</span></div>
     </div>`;
 
@@ -433,7 +435,7 @@ export function renderSettings(container) {
 
     <div class="card set-card about-card">
       <div class="card-title">🌙 关于</div>
-      <p>白日梦导演台 v1.12.8 · 纯前端 AI 影片导演工作台</p>
+      <p>白日梦导演台 v1.13.0 · 纯前端 AI 影片导演工作台</p>
       <p class="dim">剧本 → 分镜 → 运镜预演 → 动态分镜 → 剪辑 → 提示词 → 审核，一站式完成 AI 短片前期制作。<br>
       无后端、无追踪、无依赖，部署在 GitHub Pages 上，离线也能用。</p>
     </div>`;
