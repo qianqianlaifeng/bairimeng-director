@@ -263,7 +263,9 @@
       const P0 = poseOf(p.pose);
       /* 全身变换：躺下 = 整体后仰 90°，其余按姿势校准的升降量；跳跃再抬高 */
       const bodyRz = P0.lie ? -Math.PI / 2 : 0;
-      const bodyDy = (P0.dy || 0) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22;
+      /* 全身变换：躺下 = 整体后仰 90°，其余按姿势校准的升降量；跳跃再抬高；
+         坐在家具上（sitOn/sitH 由座位算出）再按坐面高度抬一次，人才会真的落到椅子面上 */
+      const bodyDy = (P0.dy || 0) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22 + (p.sitOn ? Math.max(0, Math.min(1.6, +p.sitH || 0)) : 0);
       const leanJ = P0.lean ? [{ pivot: [0, 0.84, 0], angle: P0.lean }] : [];
       const hip = s => ({ pivot: [0, 0.84, s * 0.112], angle: (s > 0 ? P0.hipL : P0.hipR) || 0 });
       const knee = s => ({ pivot: [0, 0.52, s * 0.112], angle: (s > 0 ? P0.kneeL : P0.kneeR) || 0 });
@@ -405,7 +407,7 @@
       if (!el) { el = document.createElement('div'); el.className = 'mn3d-label'; layer.appendChild(el); }
       /* 名牌高度跟着姿势走：躺下贴地、坐着在头顶、站立在头顶上方 */
       const pose = p.pose || '站立';
-      const topY = (pose === '躺下' ? 0.55 : pose === '坐下' ? 1.62 : 1.82) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22;
+      const topY = (pose === '躺下' ? 0.55 : pose === '坐下' ? 1.62 : 1.82) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22 + (p.sitOn ? Math.max(0, Math.min(1.6, +p.sitH || 0)) : 0);
       const sp = projToScreen(vp, p.x, topY, p.y);
       if (!sp) { el.style.display = 'none'; return; }
       el.style.display = '';
