@@ -2,7 +2,7 @@
  * 白日梦导演台 · 动态分镜（文生动画预演） + 剪辑台
  * ============================================================ */
 import { TRANSITIONS, SHOT_SIZES, CAMERA_MOVES } from './data.js';
-import { WhiteModelRenderer, imageTransformFor } from './cameraSim.js';
+import { WhiteModelRenderer, imageTransformFor, focusPointOf } from './cameraSim.js';
 import { moveByKey, buildPrompt } from './breakdown.js';
 import { esc, el, toast, confirmDlg, fmtDur, opts } from './ui.js';
 
@@ -146,7 +146,7 @@ export function renderAnimatic(container) {
       canvas.style.display = '';
       imgEl.style.display = 'none';
       renderer.setTheme({ ground: (s.scene && s.scene.floor) || '#d9dde5' });
-      renderer.render(mv.sim, t, 'stand', { duration: s.duration, hud: false, letterbox: true, angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize, scene: s.scene, aimY: s.aimY ?? undefined, camH: s.camH ?? undefined });
+      renderer.render(mv.sim, t, 'stand', { duration: s.duration, hud: false, letterbox: true, angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize, scene: s.scene, aimY: s.aimY ?? undefined, camH: s.camH ?? undefined, focus: focusPointOf(s.scene, s.focusKind, s.focusId, s.aimY), focusKind: s.focusKind || 'auto' });
     }
     /* 转场淡入 */
     if (transitionAlpha > 0.001) {
@@ -283,6 +283,7 @@ export function renderAnimatic(container) {
             duration: s.duration, hud: false, letterbox: false,   // 交付物不要上下黑边
             angle: s.angle, moveSpeed: s.moveSpeed, size: s.shotSize,
             scene: s.scene, aimY: s.aimY ?? undefined, camH: s.camH ?? undefined,
+            focus: focusPointOf(s.scene, s.focusKind, s.focusId, s.aimY), focusKind: s.focusKind || 'auto',
           });
           ctx.drawImage(oc, 0, 0);
         }
