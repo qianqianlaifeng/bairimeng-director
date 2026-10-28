@@ -1,4 +1,7 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.12.4（2026-10-28）：走位避障 —— 画完轨迹自动绕开家具与墙（A* + 视线简化，0.2m 网格），门洞算通路；
+                          人物面板加「🧵 绕开家具」按钮可重绕当前走位；AI 搭景落地时自动把穿家具的走位绕过。
+                          预演里人不再从茶几/沙发里穿过去了。
    v1.12.3（2026-10-28）：防穿模（新 js/mn-layout.js）—— 分离轴碰撞检测；放置家具/人物、2D 拖动松手、3D 拖动松手都会
                           自动让到最近的空位（只挪你正在动的那一件，已摆好的不动）；AI 搭景落地时整场排一遍重叠；
                           家具不许插进墙、人不许站进家具里；门/窗嵌墙、地毯铺在家具下不算穿模；
@@ -879,6 +882,7 @@ function renderObjPanel() {
     <label class="mn-field"><span>运动轨迹<strong>${(o.path || []).length ? `${o.path.length} 点 · ${pathLen(o.path).toFixed(1)}m` : '未画'}</strong></span></label>
     <div class="mn-chip-row">
       <button class="mn-chip" data-act="drawpath">${icon('route', 's12')}画轨迹</button>
+      <button class="mn-chip" data-act="routepath" title="让这条走位线绕开家具和墙">${icon('route', 's12')}绕开家具</button>
       <button class="mn-chip" data-act="clearpath">${icon('eraser', 's12')}清除</button>
     </div>
     ${(o.path || []).length ? `<label class="mn-field"><span>行走速度<strong>${o.speed || 1.2} m/s</strong></span><input type="range" class="mn-range" data-f="speed" min="0.3" max="4" step="0.1" value="${o.speed || 1.2}" /></label>` : ''}
@@ -980,6 +984,16 @@ function bindObjPanel() {
     }
     else if (a === 'clearpath') {
       pushUndo(); delete o.path; renderRight(); paint(); saveSoon(); toast('已清除轨迹');
+    }
+    else if (a === 'routepath') {
+      if (!o.path || o.path.length < 2) { toast('先画一条走位线', 'warn'); return; }
+      if (!window.MN_LAYOUT) return;
+      pushUndo();
+      const r = window.MN_LAYOUT.routePath(MN.state.scene, o.path, {});
+      if (r.changed) {
+        o.path = r.pts; renderRight(); paint(); saveSoon();
+        toast(`已绕开家具：${o.path.length} 个点（新增 ${r.added} 个拐点）`, 'ok');
+      } else toast('这条线没有穿过任何东西');
     }
     else if (a === 'copy') { copySel(); }
     else if (a === 'paste') { pasteClip(1, 1); }
@@ -1499,7 +1513,13 @@ function finishPath() {
       pushUndo();
       per.path = d.pts;
       per.speed = per.speed || 1.2;
-      toast(`轨迹已保存：${d.pts.length} 个点 / ${pathLen(d.pts).toFixed(1)}m`);
+      /* 画完自动绕开家具和墙：不然预演里人会从茶几、沙发上穿过去 */
+      let note = '';
+      if (window.MN_LAYOUT) {
+        const r = window.MN_LAYOUT.routePath(MN.state.scene, per.path, {});
+        if (r.changed) { per.path = r.pts; note = '，已自动绕开家具'; }
+      }
+      toast(`轨迹已保存：${per.path.length} 个点 / ${pathLen(per.path).toFixed(1)}m${note}`);
     } else {
       toast('至少要点两个位置才能形成轨迹', 'warn');
     }
@@ -3344,6 +3364,8 @@ window.miaoningApplyAiScene = function (data) {
   if (window.MN_LAYOUT && MN.state && MN.state.scene) {
     const moved = window.MN_LAYOUT.resolveScene(MN.state.scene, { maxR: 3 });
     if (moved.length) msg += ' · 自动排开 ' + moved.length + ' 件重叠';
+    const routed = window.MN_LAYOUT.routeAllPaths(MN.state.scene);
+    if (routed.count) msg += ' · 走位绕开障碍 ' + routed.count + ' 条';
   }
   fitView(); renderAll(); saveSoon();
   return msg;
