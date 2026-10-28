@@ -1,4 +1,10 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.12.0（2026-10-28）：AI 搭景——按镜头描述（台词/场次/前后镜/同场布局）自动生成房间·家具·光源 + 人物走位 + 机位，
+                          本地校验夹取、空场景自动返修一次，注入导演台当草稿（逐镜确认后再「保存到镜头」）；
+                          机位被自己搭的墙挡住时自动转到无墙的一侧。
+                          动态分镜新增「🎬 导出 mp4」（WebCodecs 逐帧编码 1280×720@24fps，无音轨）；
+                          修 mp4 封装器三处错误（ftyp 长度少 4 字节 / stsc 与 stco 不匹配 / avc1 字段拼错）——
+                          此前 WebCodecs 路径出的 mp4 根本打不开。
    v1.11.9（2026-10-27）：道具库 23 类多部件精细模型（桌面+围板+四腿 / 沙发坐垫+靠背+扶手 / 柜门+拉手…），
                           2D 俯视符号、3D 导演台、白模预演三端共用同一套部件；3D 与预演里的道具终于会跟随「旋转 Z」。
                           修：3D 朝向与 2D 反向（rot=90 现在三端一起朝向地图下方）；运镜预演/动态分镜真正吃进
@@ -1878,13 +1884,17 @@ function normProp(p, i, center) {
 function normPerson(p, i, center) {
   const POSES = ['站立', '走路', '坐下', '招手', '躺下', '运动'];
   const has = isFinite(+p.x) && isFinite(+p.y);
+  /* 运动轨迹：AI 搭景会直接给 path（2~6 个途经点），手工导入也认 */
+  const path = arrOf(p.path).filter(q => q && isFinite(+q.x) && isFinite(+q.y)).slice(0, 8)
+    .map(q => ({ x: +q.x, y: +q.y }));
   return {
     id: p.id || uid(), name: strOr(p.name, '人物 ' + (i + 1), 12),
     x: has ? +p.x : center.x, y: has ? +p.y : center.y,
     rot: ((numOr(p.rot, 90) % 360) + 360) % 360,
     color: p.color || '#2e7cf6',
-    pose: POSES.indexOf(p.pose) >= 0 ? p.pose : '站立',
+    pose: path.length >= 2 ? '走路' : (POSES.indexOf(p.pose) >= 0 ? p.pose : '站立'),
     face: clamp(numOr(p.face, 1), 0.5, 2), faceDir: numOr(p.faceDir, 0), jump: clamp(numOr(p.jump, 0), 0, 3),
+    ...(path.length >= 2 ? { path, speed: clamp(numOr(p.speed, 1.2), 0.3, 3) } : {}),
     hidden: !!p.hidden,
   };
 }
@@ -2873,17 +2883,31 @@ function muxMP4(samples, desc, W, H, fps, totalMs) {
   const stts = _fbox('stts', 0, 0, _u32(1), _u32(n), _u32(dur));
   const stss = _box.apply(null, ['stss', _u32(0), _u32(0)].concat(syncs.length ? [_u32(syncs.length)].concat(syncs.map(_u32)) : []));
   const stsz = _fbox('stsz', 0, 0, _u32(0), _u32(n), _cat(samples.map(s => _u32(s.data.length))));
-  // mdat 在前 → chunk 只有一个，偏移 = ftyp(32) + mdat header(8)
-  const mdatBodyLen = samples.reduce((a, s) => a + s.data.length, 0);
-  const ftypLen = 8 + 4 + 4 * 4;
-  const mdatStart = ftypLen + 8;
-  const stco = _fbox('stco', 0, 0, _u32(1), _u32(mdatStart));
+  /* ⚠️ 2026-10-27 修：ftyp 实际是 8(头)+4(major)+4(minor)+16(兼容品牌)=32 字节，
+     原来按 28 算 → 每个样本偏移都少了 4 字节，播放器读到的是错位数据（"能下载但打不开"）。
+     同时改成「每个样本一个 chunk」，stsc 的 samples_per_chunk=1 才对得上 stco 的 n 条偏移。 */
+  const ftyp = _box('ftyp', _str('isom'), _u32(512), _str('isom'), _str('iso2'), _str('avc1'), _str('mp41'));
+  const mdatStart = ftyp.length + 8;
+  const offs = []; { let o = mdatStart; for (const s of samples) { offs.push(o); o += s.data.length; } }
+  const stco = _fbox('stco', 0, 0, _u32(n), _cat(offs.map(_u32)));
   const stsc = _fbox('stsc', 0, 0, _u32(1), _u32(1), _u32(1), _u32(1));
   const avcC = desc ? _box('avcC', desc) : _box('avcC', _u8(1), _u8(0x42), _u8(0xE0), _u8(0x1F), _u8(0xFF), _u8(0xE1), _u16(0), _u16(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(1), _u8(0), _u16(0), _u16(0), _u8(0));
+  /* avc1 视觉样本条目：按 ISO/IEC 14496-12 VisualSampleEntry 逐字段写。
+     之前这段字段拼错（pre_defined[3] 只写了 8 字节、尾部字段缺失），
+     导致宽高/子盒偏移全错，Chrome 直接判定「无法解码」。 */
+  const cmpName = new Uint8Array(32);                        // compressorname：长度字节 + 31 字节名
   const avc1 = _box('avc1',
-    _cat([_u8(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(0)]), _u16(1), _u16(0), _u16(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(0),
-    _u16(W), _u16(H), _u32(0x00480000), _u32(0x00480000), _u32(0), _u16(1),
-    _cat([_u8(0), _u16(0)]), _u16(0), _u16(0), _u16(0), _u16(0), _u32(0), _u32(0),
+    _cat([_u8(0), _u8(0), _u8(0), _u8(0), _u8(0), _u8(0)]),  // reserved[6]
+    _u16(1),                                                 // data_reference_index
+    _u16(0), _u16(0),                                        // pre_defined, reserved
+    _cat([_u32(0), _u32(0), _u32(0)]),                       // pre_defined[3]（12 字节）
+    _u16(W), _u16(H),                                        // width, height
+    _u32(0x00480000), _u32(0x00480000),                      // 72 dpi
+    _u32(0),                                                 // reserved
+    _u16(1),                                                 // frame_count
+    cmpName,                                                 // compressorname(32)
+    _u16(0x0018),                                            // depth = 24
+    _u16(0xFFFF),                                            // pre_defined = -1
     avcC);
   const stsd = _fbox('stsd', 0, 0, _u32(1), avc1);
   const stbl = _box('stbl', stsd, stts, stss, stsc, stsz, stco);
@@ -2899,8 +2923,7 @@ function muxMP4(samples, desc, W, H, fps, totalMs) {
   const trak = _box('trak', tkhd, mdia);
   const mvhd = _fbox('mvhd', 0, 0, _u32(0), _u32(0), _u32(1000), _u32(durMs), _u32(0x00010000), _u16(0x0100), _u16(0), _u32(0), _u32(0), _UNITY_MATRIX, _cat([_u32(0), _u32(0), _u32(0), _u32(0), _u32(0), _u32(0)]), _u32(2));
   const moov = _box('moov', mvhd, trak);
-  const ftyp = _box('ftyp', _str('isom'), _u32(512), _str('isom'), _str('iso2'), _str('avc1'), _str('mp41'));
-  const mdat = _cat([_u32(mdatBodyLen + 8), _str('mdat')].concat(samples.map(s => s.data)));
+  const mdat = _box('mdat', _cat(samples.map(s => s.data)));
   return _cat([ftyp, mdat, moov]);
 }
 
@@ -3103,9 +3126,92 @@ async function exportStoryboardMP4() {
   toast('当前浏览器不支持视频导出，请改用 4K 图片导出');
 }
 
+/* ============================================================
+ * 通用视频导出：给「预演视频 / 动态分镜导出」用
+ * drawFrame(t, ctx, w, h) 负责画第 t 秒那一帧，其余交给编码器。
+ * 优先 WebCodecs 离线逐帧编码（快、不挑时长），不支持时退回 MediaRecorder 实时录。
+ * ============================================================ */
+async function mnExportCanvasVideo({ W, H, fps = 24, total, drawFrame, onProgress }) {
+  if (!(total > 0)) throw new Error('时长无效');
+  const w = Math.max(64, Math.round(W)), h = Math.max(64, Math.round(H));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  const report = p => { try { if (onProgress) onProgress(p); } catch (e) { } };
+
+  if (window.VideoEncoder && window.VideoFrame) {
+    const codec = await pickAvcCodec(w, h, fps);
+    if (codec) {
+      const samples = []; let desc = null;
+      const toU8 = v => (v instanceof Uint8Array ? v.slice() : new Uint8Array(v));
+      const enc = new VideoEncoder({
+        output: (ch, md) => {
+          /* 现行 Chromium 会把 SPS/PPS 放进 decoderConfig.description（AVCDecoderConfigurationRecord），
+             而不是关键帧里——直接用它是 muxMP4 要的 avcC 正文。 */
+          try {
+            const dsc = md && md.decoderConfig && md.decoderConfig.description;
+            if (!desc && dsc) desc = toU8(dsc);
+          } catch (e) { /* 拿不到就退回自解析 */ }
+          const d = new Uint8Array(ch.byteLength); ch.copyTo(d);
+          samples.push({ data: d, key: ch.type === 'key' });
+        },
+        error: (e) => console.warn('[MP4] encoder', e),
+      });
+      enc.configure({ codec, width: w, height: h, bitrate: 8_000_000, framerate: fps, avc: { format: 'avc' }, latencyMode: 'quality' });
+      const N = Math.max(1, Math.round(total * fps));
+      for (let f = 0; f < N; f++) {
+        drawFrame(f / fps, ctx, w, h);
+        const vf = new VideoFrame(c, { timestamp: Math.round(f * 1e6 / fps), duration: Math.round(1e6 / fps) });
+        enc.encode(vf, { keyFrame: f % (fps * 2) === 0 });
+        vf.close();
+        if (enc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 6));
+        if (f % 8 === 0) { report(f / N); await new Promise(r => setTimeout(r, 0)); }
+      }
+      await enc.flush();
+      try { enc.close(); } catch (e) { }
+      if (samples.length) {
+        if (!desc) desc = avcCFromSamples(samples);
+        if (!desc) throw new Error('未能解析 H.264 参数集(SPS/PPS)');
+        const bytes = muxMP4(samples, desc, w, h, fps, total * 1000);
+        report(1);
+        return { blob: new Blob([bytes], { type: 'video/mp4' }), ext: 'mp4', frames: samples.length };
+      }
+      throw new Error('编码器没有产出任何帧');
+    }
+  }
+
+  const mime = pickRecordMime();
+  if (!mime) throw new Error('当前浏览器不支持视频编码');
+  /* captureStream 要求画布参与布局，藏到屏幕外而不是 display:none */
+  c.style.cssText = 'position:fixed;left:-10000px;top:0;width:' + w + 'px;height:' + h + 'px;';
+  document.body.appendChild(c);
+  const stream = c.captureStream(fps);
+  const chunks = [];
+  const rec = new MediaRecorder(stream, { mimeType: mime.mime, videoBitsPerSecond: 6_000_000 });
+  rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(r => { rec.onstop = r; });
+  rec.start(200);
+  const t0 = performance.now();
+  await new Promise(resolve => {
+    const loop = () => {
+      const el0 = (performance.now() - t0) / 1000;
+      drawFrame(Math.min(el0, total), ctx, w, h);
+      report(Math.min(1, el0 / total));
+      if (el0 >= total + 0.15) return resolve();
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  });
+  rec.stop(); await stopped;
+  c.remove();
+  return { blob: new Blob(chunks, { type: mime.mime }), ext: mime.ext, frames: Math.round(total * fps) };
+}
+window.mnExportCanvasVideo = mnExportCanvasVideo;
+
 /* ---------- QA 句柄 ---------- */
 window.miaoningAPI = {
   openStoryboard, closeStoryboard, generateFromDirector, exportStoryboardImages, exportStoryboardMP4,
+  mnExportCanvasVideo,
   renderStoryboard, drawShotFrame, paintInkTo, sbAspectWH, ensureProject, blankProject,
   openAiModal, importAiData, importText, openImportModal,
 };
@@ -3141,5 +3247,12 @@ window.miaoningSeed = function (st) {
 };
 window.miaoningGetScene = function () {
   return MN.state ? JSON.parse(JSON.stringify(MN.state)) : null;
+};
+/* AI 搭景落地：走同一个 importAiData（mode='model' 只换场景、保留机位与故事板），
+   返回一句中文摘要给浮层提示用。 */
+window.miaoningApplyAiScene = function (data) {
+  const parts = importAiData(data, 'model');
+  fitView(); renderAll(); saveSoon();
+  return (parts && parts.length) ? parts.join(' / ') : '已应用 AI 场景';
 };
 })();
