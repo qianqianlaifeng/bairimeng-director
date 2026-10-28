@@ -1,4 +1,9 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.12.1（2026-10-28）：3D 操作修复 —— 选中物体旁新增「↻ 拖动旋转」手柄（15° 吸附，按住 Alt 自由转）、Q/E 每次 15°、
+                          拖动改成按帧合并 + 只重绘 3D（12k 顶点重场景 3.4ms/帧，不再每来一个指针事件就重建整份几何）、
+                          3D 拖动与旋转都能 Ctrl+Z；右键「复制」以前只往剪贴板放一份（画面毫无反应），现在直接就地复制；
+                          人物颜色改成整个人跟着变（含皮肤与头发），面板显示当前色 + 「同名角色一起换」；
+                          预演：修剖墙判断（以前切掉的是背景墙、留下机位那一侧的墙）、光源不再被渲染成一根立在画面中间的落地灯。
    v1.12.0（2026-10-28）：AI 搭景——按镜头描述（台词/场次/前后镜/同场布局）自动生成房间·家具·光源 + 人物走位 + 机位，
                           本地校验夹取、空场景自动返修一次，注入导演台当草稿（逐镜确认后再「保存到镜头」）；
                           机位被自己搭的墙挡住时自动转到无墙的一侧。
@@ -345,8 +350,13 @@ function bindShell() {
       if (!kind) { clearSel(); refreshSel(); return; }
       selectOnly(kind, id); refreshSel();
     };
-    window.MN3D.onMove = () => { saveSoon(); paint(); };
-    window.MN3D.onMoveEnd = () => { saveSoon(); };
+    /* 3D 拖动：只重绘 3D。2D 画布此时是隐藏的，paint() 里的 doPaint 纯属白烧 CPU（拖起来就卡） */
+    window.MN3D.onMoveStart = () => { pushUndo(); };
+    window.MN3D.onMove = () => { saveSoon(); paint3D(); };
+    window.MN3D.onMoveEnd = () => { saveSoon(); paint(); renderTree(); };
+    window.MN3D.onRotateStart = () => { pushUndo(); };
+    window.MN3D.onRotate = () => { };
+    window.MN3D.onRotateEnd = () => { refreshSel(); renderAll(); saveSoon(); toast('已旋转（Ctrl+Z 可撤销）'); };
     window.MN3D.onContext = (kind, id, x, y) => {
       if (kind) { selectOnly(kind, id); refreshSel(); }
       openCtx(x, y, kind ? { kind, id } : null);
@@ -384,7 +394,7 @@ function setMode(mode) {
     if (c3) c3.style.cursor = MN.pending || MN.tool === 'person' || MN.tool === 'light' ? 'copy' : 'default';
     $('#mnModeBadge').textContent = '3D';
     $('#mnStageName').textContent = '立体布景';
-    $('#mnStageSub').textContent = '左拖转视角 · 滚轮缩放 · 右键平移 · 双击聚焦';
+    $('#mnStageSub').textContent = '左拖转视角 · 滚轮缩放 · 右键平移 / 菜单 · 选中后拖 ↻ 旋转（Q/E 微调 15°）';
     $('#mnBtnRise').innerHTML = icon('rotate-ccw', 's14') + '躺下去';
     render3D();
   } else {
@@ -851,7 +861,8 @@ function renderObjPanel() {
     </label>
     <label class="mn-field"><span>人脸大小<strong>${o.face || 1} 倍</strong></span><input type="range" class="mn-range" data-f="face" min="0.5" max="2" step="0.1" value="${o.face || 1}" /></label>
     <label class="mn-field"><span>人物颜色</span></label>${swatches(PERSON_COLORS, o.color, 'color')}
-    <label class="mn-field mn-color-row"><span>自定义颜色</span><input type="color" class="mn-color" data-f="color" value="${o.color || '#2e7cf6'}" /></label>
+    <label class="mn-field mn-color-row"><span>人物颜色 <b class="mn-color-now" style="background:${o.color || '#2e7cf6'}"></b><code>${esc(o.color || '#2e7cf6')}</code></span><input type="color" class="mn-color" data-f="color" value="${o.color || '#2e7cf6'}" /></label>
+    ${((MN.state.scene && MN.state.scene.persons) || []).some(p => p.id !== o.id && p.name === o.name) ? `<div class="mn-chip-row"><button class="mn-chip" data-act="samecolor">${icon('users', 's12')}同名角色一起换</button></div>` : ''}
     <label class="mn-field"><span>运动轨迹<strong>${(o.path || []).length ? `${o.path.length} 点 · ${pathLen(o.path).toFixed(1)}m` : '未画'}</strong></span></label>
     <div class="mn-chip-row">
       <button class="mn-chip" data-act="drawpath">${icon('route', 's12')}画轨迹</button>
@@ -928,8 +939,15 @@ function bindObjPanel() {
       let v = inp.type === 'number' || inp.type === 'range' ? +inp.value : inp.value;
       if (f === 'name') v = String(v).slice(0, 20);
       o[f] = v;
-      if (inp.type === 'range' && inp.previousElementSibling) { const s = inp.previousElementSibling.querySelector('strong'); if (s) s.textContent = (f === 'fov' ? '' : '') + v + (f === 'faceDir' ? '°' : f === 'face' ? ' 倍' : f === 'jump' ? '' : f === 'intensity' ? '' : ''); }
+      if (f === 'range' && inp.previousElementSibling) { const s = inp.previousElementSibling.querySelector('strong'); if (s) s.textContent = (f === 'fov' ? '' : '') + v + (f === 'faceDir' ? '°' : f === 'face' ? ' 倍' : f === 'jump' ? '' : f === 'intensity' ? '' : ''); }
       renderTree(); paint(); saveSoon();
+      /* 换色时把「当前色」色块也刷一下（不然面板上还是旧颜色，看着像没生效） */
+      if (f === 'color') {
+        const chip = box.querySelector('.mn-color-now');
+        if (chip) chip.style.background = String(v);
+        const code = chip && chip.nextElementSibling;
+        if (code && code.tagName === 'CODE') code.textContent = String(v);
+      }
     });
   });
   $$('[data-sw]', box).forEach(b => b.onclick = () => {
@@ -950,6 +968,13 @@ function bindObjPanel() {
     }
     else if (a === 'copy') { copySel(); }
     else if (a === 'paste') { pasteClip(1, 1); }
+    else if (a === 'samecolor') {
+      /* 连戏：同一个角色出现在多个镜/多个位置时，一次把同名角色都换色 */
+      const list = (MN.state.scene.persons || []).filter(p => p.name && p.name === o.name);
+      pushUndo(); list.forEach(p => { p.color = o.color; });
+      renderAll(); saveSoon();
+      toast(`已把「${o.name}」的 ${list.length} 个角色都换成 ${o.color}`, 'ok');
+    }
     else if (a === 'addhole') { pushUndo(); (o.holes = o.holes || []).push({ t: 0.5, w: 1 }); renderRight(); paint(); saveSoon(); }
     else if (['move', 'rotate', 'scale'].includes(a)) { $$('[data-act]', box).forEach(x => x.classList.remove('active')); b.classList.add('active'); toast('变换模式：' + a + '（3D 视图生效）'); }
   });
@@ -1062,6 +1087,15 @@ function resizeCanvas() {
   else paint();
 }
 let paintRaf = null;
+let paint3dRaf = null;
+/* 只重绘 3D（3D 里拖动物体时用）：不碰隐藏的 2D 画布，也不重建右侧面板 */
+function paint3D() {
+  if (paint3dRaf) return;
+  paint3dRaf = requestAnimationFrame(() => {
+    paint3dRaf = null;
+    if (MN.state && window.MN3D && MN3D.ok) { try { MN3D.render(MN.state); } catch (e) { } }
+  });
+}
 function paint() {
   if (paintRaf) return;
   paintRaf = requestAnimationFrame(() => {
@@ -1648,8 +1682,10 @@ function openCtx(x, y, hit) {
   if (hit) {
     const kind = hit.kind, o = findObj(kind, hit.id);
     const n = selList().length;
-    items.push({ icon: 'copy', label: n > 1 ? `复制这 ${n} 个` : '复制', hint: 'Ctrl+D', fn: copySel });
-    items.push({ icon: 'clipboard-paste', label: '原地再放一个', hint: 'Ctrl+V', fn: () => pasteClip(1, 1) });
+    /* ⚠️ 2026-10-28 修：这里以前绑的是 copySel（只进剪贴板，画面没变化），
+       用户点「复制」以为坏了。右键「复制」= Ctrl+D 直接就地复制一份。 */
+    items.push({ icon: 'copy', label: n > 1 ? `复制这 ${n} 个` : '复制', hint: 'Ctrl+D', fn: duplicateSel });
+    items.push({ icon: 'clipboard-paste', label: '再粘贴一个', hint: 'Ctrl+V', fn: () => pasteClip(1, 1) });
     sep();
     items.push({ icon: o && o.hidden ? 'eye' : 'eye-off', label: o && o.hidden ? '显示' : '隐藏', fn: hideSel });
     items.push({ icon: 'pencil-line', label: '重命名', hint: 'F2', fn: renameSel });
