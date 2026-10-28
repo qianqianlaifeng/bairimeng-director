@@ -40,23 +40,25 @@ function modal({ title = '', body = '', wide = false, onClose = null } = {}) {
   const __mdl = ov.querySelector('.modal');
   __mdl.addEventListener('animationend', function h() { __mdl.style.transform = 'none'; __mdl.removeEventListener('animationend', h); });
   setTimeout(() => { __mdl.style.transform = 'none'; }, 400);
-  const close = (result) => {
+  /* 关闭：任何入口（✕ / 遮罩 / Esc / 代码调用）都走这一个函数，
+     保证 Esc 监听器解绑、滚动锁恢复，并且只生效一次。 */
+  const prevOv = document.body.style.overflow;
+  document.body.style.overflow = 'hidden';
+  let closed = false;
+  const onKey = (ev) => { if (ev.key === 'Escape') finish(null); };
+  function finish(result) {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('keydown', onKey);
+    document.body.style.overflow = prevOv;
     ov.classList.add('closing');
     setTimeout(() => ov.remove(), 180);
     if (onClose) onClose(result);
-  };
-  ov.querySelector('.modal-x').onclick = () => close(null);
-  ov.addEventListener('mousedown', e => { if (e.target === ov) close(null); });
-  document.addEventListener('keydown', function h(ev) {
-    if (ev.key === 'Escape' && document.body.contains(ov)) { close(null); document.removeEventListener('keydown', h); }
-  });
-  // 防滚动穿透
-  const prevOv = document.body.style.overflow;
-  document.body.style.overflow = 'hidden';
-  const origClose = close;
-  const wrappedClose = (r) => { document.body.style.overflow = prevOv; origClose(r); };
-  ov.querySelector('.modal-x').onclick = () => wrappedClose(null);
-  return { close: wrappedClose, root: ov, body: ov.querySelector('.modal-body') };
+  }
+  document.addEventListener('keydown', onKey);
+  ov.querySelector('.modal-x').onclick = () => finish(null);
+  ov.addEventListener('mousedown', e => { if (e.target === ov) finish(null); });
+  return { close: finish, root: ov, body: ov.querySelector('.modal-body') };
 }
 
 /* 确认框（Promise） */
