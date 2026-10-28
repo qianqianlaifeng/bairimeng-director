@@ -154,6 +154,29 @@ function propPart(o) {
   return { polys, joints: [] };
 }
 
+
+/* ---------- 焦点解析 ----------
+   镜头可指定「焦点」：auto=主体（第一个人物）· person/prop=按 id · center=场景中心。
+   摇镜/俯仰的终点、固定机位的对准点都用它。 */
+function focusPointOf(scene, kind, id, aimY) {
+  const objs = (scene && scene.objects) || [];
+  const yOverride = (aimY != null && aimY !== '' && isFinite(+aimY)) ? +aimY : null;
+  const actor = (id && objs.find(o => o.type === 'actor' && o.id === id)) || objs.find(o => o.type === 'actor');
+  if (kind === 'center') {
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (const o of objs) { x0 = Math.min(x0, o.x); x1 = Math.max(x1, o.x); z0 = Math.min(z0, o.z); z1 = Math.max(z1, o.z); }
+    if (!isFinite(x0)) return [0, yOverride != null ? yOverride : 1.2, 0];
+    return [(x0 + x1) / 2, yOverride != null ? yOverride : 1.2, (z0 + z1) / 2];
+  }
+  if (kind === 'prop' && id) {
+    const o = objs.find(x => x.type === 'prop' && x.id === id);
+    if (o) return [o.x, yOverride != null ? yOverride : Math.min(2, (+o.h || 1) * 0.55), o.z];
+  }
+  if (actor) return [actor.x, yOverride != null ? yOverride : 1.5, actor.z];
+  if (objs.length) return [objs[0].x, yOverride != null ? yOverride : 1.2, objs[0].z];
+  return [0, yOverride != null ? yOverride : 1.5, 0];
+}
+
 /* ---------- 演员白模（关节链接的小人：肩/肘/髋/膝 正向动力学） ----------
  * parts: [{ polys, joints }]，joints 从近端到远端排列，渲染时按远端优先依次施加旋转 */
 /* 五官：深色眼睛/眉毛/嘴（贴在头球正面 +z），让特写能读到脸和朝向 */
@@ -263,6 +286,9 @@ function lookAt(pos, target) {
 /* 依据运镜定义与进度 t ∈ [0,1] 求相机状态 */
 function solveCamera(sim, t, actor, opts = {}) {
   const head = [actor.x, actor.y + 1.5, actor.z];
+  /* 焦点：摇/俯仰/固定机位都对着它。不传就回落到主体（演员头部）。
+     以前摇镜只按固定角度扫一圈，扫完镜头落在空处 —— 现在默认扫到焦点上。 */
+  const aim = (Array.isArray(opts.focus) && opts.focus.length === 3 && isFinite(opts.focus[0])) ? opts.focus : head;
   const e = easeInOut(t);
   const sp = sim.speed || 0.5;
   const cam = { pos: [0, 1.7, 7], fov: 55, yaw: 0, pitch: 0 };
@@ -270,7 +296,7 @@ function solveCamera(sim, t, actor, opts = {}) {
 
   switch (sim.type) {
     case 'static':
-      set([0, 1.7, 7], head);
+      set([0, 1.7, 7], aim);
       break;
     case 'dolly': {
       if (sim.dir === 'in') {
@@ -306,10 +332,11 @@ function solveCamera(sim, t, actor, opts = {}) {
     }
     case 'pan': {
       const p = [0, 1.7, 6.5];
-      const base = lookAt(p, head);
+      const base = lookAt(p, aim);
       const sweep = (sim.speed > 1.5 ? 0.9 : 0.55) * (0.5 + sp);
-      const a = sim.dir === 'left' ? lerp(sweep, -sweep, e) : lerp(-sweep, sweep, e);
-      cam.pos = p; cam._tgt = head;
+      /* 起手偏开 sweep，收在 0 = 正对焦点（左摇往右偏起、右摇往左偏起） */
+      const a = sim.dir === 'left' ? lerp(sweep, 0, e) : lerp(-sweep, 0, e);
+      cam.pos = p; cam._tgt = aim;
       cam.yaw = base.yaw + a;
       cam.pitch = base.pitch;
       cam.blur = sim.blur && sp * Math.abs(Math.sin(t * Math.PI)) > 0.4;
@@ -317,10 +344,12 @@ function solveCamera(sim, t, actor, opts = {}) {
     }
     case 'tilt': {
       const p = [0, 1.6, 6.5];
-      cam.pos = p; cam._tgt = head;
+      const bp = lookAt(p, aim);
+      cam.pos = p; cam._tgt = aim;
       cam.fov = 55;
-      cam.yaw = lookAt(p, [0, 1.5, 0]).yaw;
-      cam.pitch = sim.dir === 'up' ? lerp(-0.45, 0.5, e) : lerp(0.5, -0.45, e);
+      cam.yaw = bp.yaw;
+      /* 起手从下面/上面 0.55rad，收在正对焦点的高度 */
+      cam.pitch = sim.dir === 'up' ? lerp(bp.pitch - 0.55, bp.pitch, e) : lerp(bp.pitch + 0.55, bp.pitch, e);
       break;
     }
     case 'crane': {
@@ -460,7 +489,11 @@ function solveCamera(sim, t, actor, opts = {}) {
     const k = Math.max(0.95, cfg.d) / D0;
     const dx = cam.pos[0] - cam._tgt[0], dy = cam.pos[1] - cam._tgt[1], dz = cam.pos[2] - cam._tgt[2];
     cam.pos = [cam._tgt[0] + dx * k, cam._tgt[1] + dy * k, cam._tgt[2] + dz * k];
-    const aimY = cfg.aim ?? cam._tgt[1];
+    /* 指定了「道具/画面中心」焦点时，按焦点自己的高度取景（不然中景会把镜头抬到 1.15m，
+       焦点是个 0.4m 的茶几就会落到画面很下面）；人物/自动仍然按景别标准取景。 */
+    const objFocus = !!(opts.focusKind && opts.focusKind !== 'auto' && opts.focusKind !== 'person'
+      && Array.isArray(opts.focus) && isFinite(opts.focus[1]));
+    const aimY = objFocus ? Math.min(2.4, Math.max(0.1, opts.focus[1])) : (cfg.aim ?? cam._tgt[1]);
     const tg = [cam._tgt[0], aimY, cam._tgt[2]];
     cam._tgt = tg;
     reaim(tg);   // 只调整取景距离/高度，保留 pan/tilt 的角偏移
@@ -470,7 +503,7 @@ function solveCamera(sim, t, actor, opts = {}) {
      * 画框半高 hh = 距离×tan(fov/2)，要求 画框上沿 = 瞄准点+hh ≥ 1.8m。 */
     const distNow = Math.hypot(cam.pos[0] - tg[0], cam.pos[1] - tg[1], cam.pos[2] - tg[2]) || 0.6;
     const hh = distNow * Math.tan(((cam.fov || 55) * DEG) / 2);
-    const wantAim = Math.min(1.66, Math.max(aimY, 1.8 - hh));
+    const wantAim = objFocus ? aimY : Math.min(1.66, Math.max(aimY, 1.8 - hh));
     if (wantAim > aimY + 0.01) {
       const tg2 = [tg[0], wantAim, tg[2]];
       cam._tgt = tg2;
@@ -618,7 +651,8 @@ class WhiteModelRenderer {
     // 运镜速度：快推提前走完并定住，慢推到结束时只走一部分
     const speedF = opts.moveSpeed === 'slow' ? 0.62 : opts.moveSpeed === 'fast' ? 1.55 : 1;
     // POV 模式不画演员（自己就是演员）
-    const cam = solveCamera(sim, clamp(t * speedF, 0, 1), actor, { angle: opts.angle, size: opts.size, scene: opts.scene });
+    const cam = solveCamera(sim, clamp(t * speedF, 0, 1), actor, { angle: opts.angle, size: opts.size, scene: opts.scene, focus: opts.focus, focusKind: opts.focusKind });
+    this._lastCam = cam;   // 测试/排查用：最近一次渲染实际用的相机
     const focal = (H / 2) / Math.tan((cam.fov * DEG) / 2);
     const cx = W / 2, cyv = H / 2;
 
@@ -867,8 +901,8 @@ class MovePlayer {
     this.duration = 4;
     this.hud = true;
   }
-  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0, angle, moveSpeed, size, aimY, camH } = {}) {
-    this.extra = { angle, moveSpeed, size, aimY, camH };
+  play(sim, { duration = 4, action = 'stand', scene = 'plain', loop = false, fromT = 0, angle, moveSpeed, size, aimY, camH, focus } = {}) {
+    this.extra = { angle, moveSpeed, size, aimY, camH, focus };
     this.sim = sim; this.duration = duration;
     this.action = action; this.loop = loop;
     /* ⚠ 2026-10-27 修：以前只把 scene 交给 renderer.scene（只当舞台底用），
@@ -882,11 +916,11 @@ class MovePlayer {
   }
   seek(sim, t, opts) {
     this.sim = sim; this.action = opts?.action || this.action || 'stand';
-    if (opts?.angle !== undefined) this.extra = { angle: opts.angle, moveSpeed: opts.moveSpeed, size: opts.size, aimY: opts.aimY, camH: opts.camH };
+    if (opts?.angle !== undefined) this.extra = { angle: opts.angle, moveSpeed: opts.moveSpeed, size: opts.size, aimY: opts.aimY, camH: opts.camH, focus: opts.focus ?? this.extra?.focus };
     else if (opts?.aimY !== undefined || opts?.camH !== undefined) this.extra = { ...(this.extra || {}), aimY: opts.aimY, camH: opts.camH };
     if (opts && opts.scene !== undefined) { this.scene = opts.scene; this.renderer.scene = opts.scene; }
     this.duration = opts?.duration || this.duration;
-    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene });
+    this.renderer.render(this.sim, clamp(t, 0, 1), this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene, focus: this.extra?.focus });
   }
   stop() { this.playing = false; }
   destroy() { this.playing = false; if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
@@ -900,7 +934,7 @@ class MovePlayer {
         else { t = 1; this.playing = false; if (this.onEnd) this.onEnd(); }
       }
       this.t = t;
-      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene });
+      this.renderer.render(this.sim, t, this.action, { duration: this.duration, hud: this.hud, letterbox: true, angle: this.extra?.angle, moveSpeed: this.extra?.moveSpeed, size: this.extra?.size, aimY: this.extra?.aimY, camH: this.extra?.camH, scene: this.scene, focus: this.extra?.focus });
       if (this.onTick) this.onTick(t);
       this._raf = requestAnimationFrame(this._frame.bind(this));
     }
@@ -932,4 +966,4 @@ function imageTransformFor(sim, t) {
   return { scale, dx, dy, rot };
 }
 
-export { WhiteModelRenderer, MovePlayer, imageTransformFor, solveCamera, solveActor, clamp, lerp, easeInOut, easeOut, propPart, rotXpt, rotYpt, pathPosAt };
+export { WhiteModelRenderer, MovePlayer, imageTransformFor, solveCamera, solveActor, clamp, lerp, easeInOut, easeOut, propPart, rotXpt, rotYpt, pathPosAt, focusPointOf };
