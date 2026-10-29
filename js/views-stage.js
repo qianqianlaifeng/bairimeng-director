@@ -513,11 +513,12 @@ export function renderScenes(container) {
       <div class="page-head">
         <h2>🏗 场景库 <span class="dim">· ${scenes.length} 套景 · 一套景可以被任意镜头套用（连戏不用重搭）</span></h2>
         <div class="page-head-actions">
+          <button class="btn btn-ghost" id="scEnv">🖼 导入环境图</button>
           <button class="btn btn-ghost" id="scAutoGroup">🧠 按场次智能归组</button>
           <button class="btn btn-primary" id="scNew">＋ 新建场景</button>
         </div>
       </div>
-      <div class="card sc-hint dim">💡 在场景搭建里点「存入场景库」，这里就会出现；套用到多个镜头后，各镜仍可单独微调。</div>
+      <div class="card sc-hint dim">💡 在场景搭建里点「存入场景库」，这里就会出现；套用到多个镜头后，各镜仍可单独微调。手里只有场景图？点「🖼 导入环境图」让 AI 看图反推出 3D 景。</div>
       ${scenes.length ? `<div class="sc-grid" id="scGrid">${scenes.map(it => {
         const st = (it.mnState && it.mnState.scene) || {};
         const n = (a) => (a || []).length;
@@ -545,6 +546,13 @@ export function renderScenes(container) {
     if (newBtn) newBtn.onclick = async () => {
       const { openSceneBuilder } = await import('./builder.js');
       openSceneBuilder(null, draw, { library: true });
+    };
+
+    /* 看图反推 3D 场景 */
+    const envBtn = container.querySelector('#scEnv');
+    if (envBtn) envBtn.onclick = async () => {
+      const { openEnvImport } = await import('./env-import-ui.js');
+      openEnvImport({ onApplied: draw });
     };
 
     /* 智能归组：按剧本场次给镜头建景 + 绑定 */
