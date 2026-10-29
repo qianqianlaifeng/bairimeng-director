@@ -64,7 +64,7 @@
   /* ---------- WebGL ---------- */
   let gl = null, canvas = null, prog = null, lineProg = null;
   let bufPos, bufNrm, bufCol, bufLine;
-  let envProg = null, boardProg = null, envQuad = null, bufEnvP = null, bufEnvT = null;
+  let envProg = null, boardProg = null, shadowProg = null, envQuad = null, bufEnvP = null, bufEnvT = null, bufShadow = null;
   let envTex = null, envTexKey = null, envLoadingKey = null;
   const cam = { theta: 0.6, phi: 1.0, r: 30, tx: 7, ty: 1.5, tz: 7, inited: false };
   let bounds = { minX: 0, maxX: 14, minZ: 0, maxZ: 14 };
@@ -112,15 +112,18 @@
     uniform sampler2D uTex;
     uniform vec3 uFwd; uniform vec3 uRight; uniform vec3 uUp;
     uniform float uTanH; uniform float uAsp; uniform float uYaw; uniform float uBright; uniform float uVSpread;
+    uniform float uVOff;
     uniform int uMode;
     void main(){
       vec3 d = normalize(uFwd + uRight * (vN.x * uTanH * uAsp) + uUp * (vN.y * uTanH));
       float c = cos(uYaw), s = sin(uYaw);
       d = vec3(d.x * c + d.z * s, d.y, -d.x * s + d.z * c);
       float u = atan(d.z, d.x) / 6.2831853 + 0.5;
-      /* 0 = 等距柱状全景（2:1 图，上下是天地）；1 = 柱面（普通图横向裹一圈，纵向按俯仰摊开） */
+      /* 0 = 等距柱状全景（2:1 图，上下是天地）；1 = 柱面（普通图横向裹一圈，纵向按俯仰摊开）
+         uVOff 用来把照片里的地面上下挪到布景地面上 —— 不然人物就像踩在照片的半空中 */
       float v = uMode == 0 ? acos(clamp(d.y, -1.0, 1.0)) / 3.14159265
                            : clamp(0.5 - d.y * uVSpread, 0.0, 1.0);
+      v = clamp(v + uVOff, 0.0, 1.0);
       gl_FragColor = vec4(texture2D(uTex, vec2(u, v)).rgb * uBright, 1.0);
     }`;
   /* 背景板 = 场景里立着的一块贴图布景（概念图/剧照当外景挡在后面） */
@@ -129,6 +132,9 @@
   const BFS = `precision mediump float; varying vec2 vT; uniform sampler2D uTex;
     uniform float uBright; uniform float uOpacity;
     void main(){ gl_FragColor = vec4(texture2D(uTex, vT).rgb * uBright, uOpacity); }`;
+  /* 接触阴影：贴地一圈半透明暗斑。没有它，人物和道具就像浮在空中 —— 尤其背后铺了真实场景图时 */
+  const SVS = `attribute vec3 aP; uniform mat4 uVP; void main(){ gl_Position = uVP * vec4(aP, 1.0); }`;
+  const SFS = `precision mediump float; uniform vec4 uCol; void main(){ gl_FragColor = uCol; }`;
 
   function sh(type, src) {
     const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
@@ -211,6 +217,7 @@
       yaw: (+e.yaw || 0) * Math.PI / 180,
       bright: e.bright == null ? 1 : Math.max(0.2, Math.min(2, +e.bright)),
       vSpread: e.vSpread == null ? 0.62 : Math.max(0.15, Math.min(2, +e.vSpread)),
+      vOff: Math.max(-0.5, Math.min(0.5, +e.vOff || 0)),
       bx: +e.bx || 0, by: e.by == null ? 4 : +e.by, bz: +e.bz || 0,
       bw: Math.max(1, +e.bw || 16), brot: (+e.brot || 0) * Math.PI / 180,
       opacity: e.opacity == null ? 1 : Math.max(0.15, Math.min(1, +e.opacity)),
@@ -227,9 +234,9 @@
     catch (e) { gl = null; }
     if (!gl) { M.ok = false; return false; }
     prog = prog2(VS, FS); lineProg = prog2(LVS, LFS);
-    envProg = prog2(EVS, EFS); boardProg = prog2(BVS, BFS);
+    envProg = prog2(EVS, EFS); boardProg = prog2(BVS, BFS); shadowProg = prog2(SVS, SFS);
     bufPos = gl.createBuffer(); bufNrm = gl.createBuffer(); bufCol = gl.createBuffer(); bufLine = gl.createBuffer();
-    bufEnvP = gl.createBuffer(); bufEnvT = gl.createBuffer();
+    bufEnvP = gl.createBuffer(); bufEnvT = gl.createBuffer(); bufShadow = gl.createBuffer();
     /* 全屏四边形（两个三角形，覆盖 NDC -1..1） */
     envQuad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, envQuad);
@@ -261,6 +268,17 @@
     const p = [[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]], n = [0, 1, 0];
     for (const k of [0, 1, 2, 0, 2, 3]) { const q = p[k]; g.pos.push(q[0], q[1], q[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]); }
   }
+  /* 接触阴影：贴地一片椭圆暗斑，最后单独一遍半透明画出来 */
+  function pushDisc(g, cx, cz, ax, az, y) {
+    const N = 18, arr = g.shadows;
+    for (let i = 0; i < N; i++) {
+      const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2;
+      arr.push(cx, y, cz,
+        cx + Math.cos(a0) * ax, y, cz + Math.sin(a0) * az,
+        cx + Math.cos(a1) * ax, y, cz + Math.sin(a1) * az);
+    }
+  }
+  const SHADOW_Y = 0.045;
   /* 绕局部 z 轴（侧向轴）旋转：四肢前后摆动都在这条轴上 */
   const rotZp = (pt, pv, ang) => {
     if (!ang) return pt;
@@ -340,7 +358,7 @@
     return o;
   };
   function buildGeo(state) {
-    const g = { pos: [], nrm: [], col: [], track: null };
+    const g = { pos: [], nrm: [], col: [], track: null, shadows: [] };
     const limbBoxes = [];
     const sc = state.scene, material = (state.view && state.view.material) || 'original', dark = isDark();
     let vi = 0;
@@ -408,6 +426,7 @@
       } else {
         pushBox(g, pw / 2, ph / 2, pd / 2, yaw, ct.x, 0, ct.y, base, [0, ph / 2, 0]);
       }
+      pushDisc(g, ct.x, ct.y, Math.max(0.14, pw * 0.62), Math.max(0.14, pd * 0.62), SHADOW_Y);
     }
     for (const p of sc.persons) {
       if (p.hidden) continue;
@@ -471,6 +490,11 @@
       }
       put([0.93, 0.85, 0.79], [faceX + 0.008, 1.542, 0], [0.014, 0.020, 0.013], leanJ, fd); // 鼻
       put(mouthC, [faceX, 1.507, 0], [0.005, 0.006, 0.022], leanJ, fd);                      // 嘴
+      /* 脚底一片阴影 —— 坐着的时候阴影归椅子，不再叠一层 */
+      if (!p.sitOn) {
+        const rr = P0.lie ? 0.55 : 0.30;
+        pushDisc(g, cx, cz, rr, P0.lie ? rr * 0.55 : rr * 0.88, SHADOW_Y);
+      }
     }
     for (const l of sc.lights) {
       if (l.hidden) continue;
@@ -481,9 +505,15 @@
   }
   function buildLines(state) {
     const lp = [], paths = [], y = 0.06;
-    const x0 = Math.floor(bounds.minX) - 2, x1 = Math.ceil(bounds.maxX) + 2, z0 = Math.floor(bounds.minZ) - 2, z1 = Math.ceil(bounds.maxZ) + 2;
-    for (let x = x0; x <= x1; x++) lp.push(x, y, z0, x, y, z1);
-    for (let z = z0; z <= z1; z++) lp.push(x0, y, z, x1, y, z);
+    const env = envOf(state);
+    /* 环境图不铺白模地面时，网格也别画 —— 那块有边的网格"筏子"正是让人物看着浮空的原因 */
+    if (env && !env.floor) {
+      lp.length = 0;
+    } else {
+      const x0 = Math.floor(bounds.minX) - 2, x1 = Math.ceil(bounds.maxX) + 2, z0 = Math.floor(bounds.minZ) - 2, z1 = Math.ceil(bounds.maxZ) + 2;
+      for (let x = x0; x <= x1; x++) lp.push(x, y, z0, x, y, z1);
+      for (let z = z0; z <= z1; z++) lp.push(x0, y, z, x1, y, z);
+    }
     /* 人物运动轨迹：贴地画折线，让 3D 里也能看到走位线 */
     for (const pe of ((state && state.scene && state.scene.persons) || [])) {
       const pts = pe.path || [];
@@ -694,6 +724,7 @@
     gl.uniform1f(gl.getUniformLocation(envProg, 'uYaw'), env.yaw);
     gl.uniform1f(gl.getUniformLocation(envProg, 'uBright'), env.bright);
     gl.uniform1f(gl.getUniformLocation(envProg, 'uVSpread'), env.vSpread);
+    gl.uniform1f(gl.getUniformLocation(envProg, 'uVOff'), env.vOff);
     gl.uniform1i(gl.getUniformLocation(envProg, 'uMode'), env.mode === 'cyl' ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.uniform1i(gl.getUniformLocation(envProg, 'uTex'), 0);
@@ -788,6 +819,22 @@
     /* 背后铺了真实场景图时压一档曝光：白模本来会过曝成纯白，跟照片一比就像贴了张纸 */
     gl.uniform1f(gl.getUniformLocation(prog, 'uExp'), env ? 0.95 : 1.0);
     gl.drawArrays(gl.TRIANGLES, 0, g.pos.length / 3);
+
+    /* 接触阴影：半透明、不写深度，必须画在实体之后 —— 不然脚会被"埋"进地里 */
+    if (g.shadows && g.shadows.length) {
+      gl.useProgram(shadowProg);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufShadow);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.shadows), gl.DYNAMIC_DRAW);
+      const sa = gl.getAttribLocation(shadowProg, 'aP');
+      gl.enableVertexAttribArray(sa); gl.vertexAttribPointer(sa, 3, gl.FLOAT, false, 0, 0);
+      gl.uniformMatrix4fv(gl.getUniformLocation(shadowProg, 'uVP'), false, new Float32Array(vp));
+      gl.uniform4fv(gl.getUniformLocation(shadowProg, 'uCol'),
+        new Float32Array(dark ? [0, 0, 0, 0.42] : [0.12, 0.09, 0.06, 0.26]));
+      gl.drawArrays(gl.TRIANGLES, 0, g.shadows.length / 3);
+      gl.depthMask(true); gl.disable(gl.BLEND);
+    }
 
     gl.useProgram(lineProg);
     gl.bindBuffer(gl.ARRAY_BUFFER, bufLine); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lp), gl.DYNAMIC_DRAW);
