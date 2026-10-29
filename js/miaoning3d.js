@@ -152,7 +152,7 @@
       envTex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, envTex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
-      envSetParams();
+      envSetParams(null);
     }
     if (envLoadingKey === src) return envTex;
     envLoadingKey = src;
@@ -165,7 +165,7 @@
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
       try {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im);
-        envSetParams();
+        envSetParams(im);
         envTexKey = src;
         M._envSize = { w: im.naturalWidth, h: im.naturalHeight, aspect: im.naturalWidth / (im.naturalHeight || 1) };
         M._envAvg = avgColor(im);
@@ -189,12 +189,16 @@
       return [r / n / 255, g / n / 255, b / n / 255];
     } catch (e) { return null; }
   }
-  function envSetParams() {
-    /* 图基本都不是 2 的幂，WebGL1 只能用 CLAMP_TO_EDGE + LINEAR（REPEAT/mipmap 会报 incomplete） */
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  function envSetParams(im) {
+    /* 2 的幂才能用 REPEAT + mipmap：全景图横向接缝不再有一条竖线，缩小取样也不闪。
+       非 2 的幂只能 CLAMP_TO_EDGE + LINEAR（WebGL1 会报 incomplete texture） */
+    const pot = !!im && (im.naturalWidth & (im.naturalWidth - 1)) === 0
+      && (im.naturalHeight & (im.naturalHeight - 1)) === 0;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, pot ? gl.REPEAT : gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, pot ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+    if (pot) { try { gl.generateMipmap(gl.TEXTURE_2D); } catch (e) { } }
   }
 
   /* 环境图状态兜底：老数据 / AI 搭景没写过 env，这里统一补齐，UI 和渲染都读它 */
@@ -284,23 +288,60 @@
         if (bodyDy) v = [v[0], v[1] + bodyDy, v[2]];
         return tfPoint(yaw, tx, ty, tz, v);
       });
-      for (const k of [0, 1, 2, 0, 2, 3]) { const p = wp[k]; g.pos.push(p[0], p[1], p[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]); }
+      for (const k of [0, 1, 2, 0, 2, 3]) {
+        const p = wp[k]; g.pos.push(p[0], p[1], p[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]);
+        /* 摆姿势要能直接点四肢拖：顺手把这条肢体的世界包围盒记下来供拾取 */
+        if (g.track) {
+          const b = g.track.box;
+          if (!b) g.track.box = [p[0], p[1], p[2], p[0], p[1], p[2]];
+          else {
+            b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.min(b[2], p[2]);
+            b[3] = Math.max(b[3], p[0]); b[4] = Math.max(b[4], p[1]); b[5] = Math.max(b[5], p[2]);
+          }
+        }
+      }
     }
   }
-  /* 姿势表：hip/sh 正 = 向前摆；knee/el 负 = 向后弯（膝盖生理方向）
+  /* 姿势预设：hip/sh 正 = 向前摆；knee/el 负 = 向后弯（膝盖生理方向）
      dy = 整体升降（实测校准，保证脚底贴地不穿模） */
-  function poseOf(name) {
-    switch (name) {
-      case '走路': return { hipL: 0.48, hipR: -0.48, kneeL: -0.30, kneeR: -0.05, shL: -0.34, shR: 0.34, elL: -0.28, elR: -0.28, dy: -0.04 };
-      case '运动': return { hipL: 0.85, hipR: -0.85, kneeL: -0.95, kneeR: -0.25, shL: -0.75, shR: 0.75, elL: -0.85, elR: -0.85, lean: 0.14, dy: -0.10 };
-      case '招手': return { shR: 2.05, elR: 0.75, shL: 0.12, elL: -0.2 };
-      case '坐下': return { sit: true, hipL: 1.45, hipR: 1.45, kneeL: -1.42, kneeR: -1.42, shL: 0.55, shR: 0.55, elL: -0.5, elR: -0.5, dy: -0.28 };
-      case '躺下': return { lie: true, hipL: 0.06, hipR: -0.06, dy: 0.18 };
-      default: return { shL: 0.04, shR: 0.04, elL: -0.06, elR: -0.06 };
-    }
+  const POSE_PRESETS = {
+    '走路': { hipL: 0.48, hipR: -0.48, kneeL: -0.30, kneeR: -0.05, shL: -0.34, shR: 0.34, elL: -0.28, elR: -0.28, dy: -0.04 },
+    '运动': { hipL: 0.85, hipR: -0.85, kneeL: -0.95, kneeR: -0.25, shL: -0.75, shR: 0.75, elL: -0.85, elR: -0.85, lean: 0.14, dy: -0.10 },
+    '招手': { shR: 2.05, elR: 0.75, shL: 0.12, elL: -0.2 },
+    '坐下': { sit: true, hipL: 1.45, hipR: 1.45, kneeL: -1.42, kneeR: -1.42, shL: 0.55, shR: 0.55, elL: -0.5, elR: -0.5, dy: -0.28 },
+    '躺下': { lie: true, hipL: 0.06, hipR: -0.06, dy: 0.18 },
+    '站立': { shL: 0.04, shR: 0.04, elL: -0.06, elR: -0.06 },
+  };
+  /* 可编辑关节：面板和 3D 拖肢体都走这张表，单位是「度」，落在 p.joints 上覆盖预设 */
+  const JOINTS = [
+    { k: 'lean', name: '上身前倾', min: -40, max: 70, step: 2 },
+    { k: 'shL', name: '左上臂', min: -170, max: 90, step: 5 },
+    { k: 'shR', name: '右上臂', min: -170, max: 90, step: 5 },
+    { k: 'elL', name: '左肘', min: -130, max: 70, step: 5 },
+    { k: 'elR', name: '右肘', min: -130, max: 70, step: 5 },
+    { k: 'hipL', name: '左大腿', min: -120, max: 130, step: 5 },
+    { k: 'hipR', name: '右大腿', min: -120, max: 130, step: 5 },
+    { k: 'kneeL', name: '左膝', min: -140, max: 20, step: 5 },
+    { k: 'kneeR', name: '右膝', min: -140, max: 20, step: 5 },
+  ];
+  const DEG = Math.PI / 180;
+  function poseOf(name, p) {
+    const out = Object.assign({}, POSE_PRESETS[name] || POSE_PRESETS['站立']);
+    const j = (p && p.joints) || {};
+    for (const d of JOINTS) if (j[d.k] != null && isFinite(+j[d.k])) out[d.k] = (+j[d.k]) * DEG;
+    return out;
   }
+  M.JOINTS = JOINTS;
+  M.poseOf = poseOf;
+  /* 度 → 该关节当前实际生效的弧度值（面板显示"预设 + 你的改动"要用） */
+  M.jointDeg = function (p) {
+    const base = poseOf(p && p.pose, null), j = (p && p.joints) || {}, o = {};
+    for (const d of JOINTS) o[d.k] = j[d.k] != null ? +j[d.k] : Math.round((base[d.k] || 0) / DEG);
+    return o;
+  };
   function buildGeo(state) {
-    const g = { pos: [], nrm: [], col: [] };
+    const g = { pos: [], nrm: [], col: [], track: null };
+    const limbBoxes = [];
     const sc = state.scene, material = (state.view && state.view.material) || 'original', dark = isDark();
     let vi = 0;
     const env = envOf(state);
@@ -311,7 +352,8 @@
     for (const r of sc.rooms) {
       if (r.hidden) continue;
       const col = material === 'random' ? hashColor(vi++) : (r.color ? hex2rgb(r.color) : (dark ? [0.16, 0.15, 0.13] : [0.93, 0.91, 0.86]));
-      pushFloor(g, r.x, r.y, r.x + r.w, r.y + r.d, col, 0.03);
+      /* 环境球/柱面不铺地面时，房间地板也得让位 —— 不然照片自己的地被一块米色板盖住 */
+      if (!(env && !env.floor)) pushFloor(g, r.x, r.y, r.x + r.w, r.y + r.d, col, 0.03);
     }
     const wallCol = dark ? [0.40, 0.38, 0.34] : [0.78, 0.74, 0.66];
     for (const w of sc.walls) {
@@ -379,7 +421,7 @@
          头发 = 主色压暗，鞋子 = 主色再压暗一点。 */
       const skin = [0.99, 0.93, 0.87].map((v, i) => v * 0.72 + col[i] * 0.28);
       const hair = col.map(v => v * 0.42), shoe = col.map(v => v * 0.7);
-      const P0 = poseOf(p.pose);
+      const P0 = poseOf(p.pose, p);
       /* 全身变换：躺下 = 整体后仰 90°，其余按姿势校准的升降量；跳跃再抬高 */
       const bodyRz = P0.lie ? -Math.PI / 2 : 0;
       /* 全身变换：躺下 = 整体后仰 90°，其余按姿势校准的升降量；跳跃再抬高；
@@ -390,25 +432,31 @@
       const knee = s => ({ pivot: [0, 0.52, s * 0.112], angle: (s > 0 ? P0.kneeL : P0.kneeR) || 0 });
       const sh = s => ({ pivot: [0, 1.32, s * 0.205], angle: (s > 0 ? P0.shL : P0.shR) || 0 });
       const el = s => ({ pivot: [0, 1.10, s * 0.205], angle: (s > 0 ? P0.elL : P0.elR) || 0 });
-      const put = (c, ctr, half, jt, yaw) => pushBoxJ(g, half[0], half[1], half[2], ctr, jt, yaw == null ? a : yaw, cx, 0, cz, c, bodyRz, bodyDy);
+      const put = (c, ctr, half, jt, yaw, part) => {
+        g.track = part ? { key: part, pid: p.id, box: null } : null;
+        pushBoxJ(g, half[0], half[1], half[2], ctr, jt, yaw == null ? a : yaw, cx, 0, cz, c, bodyRz, bodyDy);
+        if (g.track && g.track.box) limbBoxes.push(g.track);
+        g.track = null;
+      };
+      const SD = s => s > 0 ? 'L' : 'R';
       /* 腿：大腿 / 小腿 / 脚（s>0 = 左） */
       for (const s of [1, -1]) {
         const hj = hip(s), kj = knee(s), jtLeg = [hj, kj];
-        put(col, [0, 0.72, s * 0.112], [0.07, 0.20, 0.07], [hj], null);        // 大腿
-        put(col, [0, 0.33, s * 0.112], [0.058, 0.19, 0.058], jtLeg, null);     // 小腿
-        put(shoe, [0.04, 0.045, s * 0.112], [0.09, 0.045, 0.055], jtLeg, null); // 脚
+        put(col, [0, 0.72, s * 0.112], [0.07, 0.20, 0.07], [hj], null, 'hip' + SD(s));        // 大腿
+        put(col, [0, 0.33, s * 0.112], [0.058, 0.19, 0.058], jtLeg, null, 'knee' + SD(s));     // 小腿
+        put(shoe, [0.04, 0.045, s * 0.112], [0.09, 0.045, 0.055], jtLeg, null, 'knee' + SD(s)); // 脚
       }
       /* 躯干：髋 / 腹 / 胸（跟随前倾） */
       put(col, [0, 0.88, 0], [0.14, 0.085, 0.095], [], null);
       put(col, [0, 1.03, 0], [0.125, 0.085, 0.085], leanJ, null);
-      put(col, [0, 1.22, 0], [0.17, 0.115, 0.10], leanJ, null);
+      put(col, [0, 1.22, 0], [0.17, 0.115, 0.10], leanJ, null, 'lean');
       /* 肩 / 上臂 / 前臂 / 手 */
       for (const s of [1, -1]) {
         const sj = sh(s), ej = el(s);
         put(col, [0, 1.315, s * 0.205], [0.06, 0.055, 0.06], [...leanJ, sj], null);
-        put(col, [0.01, 1.165, s * 0.252], [0.045, 0.105, 0.045], [...leanJ, sj], null);
-        put(col, [0.035, 0.945, s * 0.252], [0.038, 0.10, 0.038], [...leanJ, sj, ej], null);
-        put(skin, [0.045, 0.828, s * 0.252], [0.048, 0.042, 0.042], [...leanJ, sj, ej], null);
+        put(col, [0.01, 1.165, s * 0.252], [0.045, 0.105, 0.045], [...leanJ, sj], null, 'sh' + SD(s));
+        put(col, [0.035, 0.945, s * 0.252], [0.038, 0.10, 0.038], [...leanJ, sj, ej], null, 'el' + SD(s));
+        put(skin, [0.045, 0.828, s * 0.252], [0.048, 0.042, 0.042], [...leanJ, sj, ej], null, 'el' + SD(s));
       }
       /* 颈 / 头 / 头发（跟人脸朝向） */
       put(skin, [0, 1.40, 0], [0.042, 0.032, 0.042], leanJ, null);
@@ -428,6 +476,7 @@
       if (l.hidden) continue;
       pushBox(g, 0.09, 0.09, 0.09, 0, l.x, (l.h || 2.5), l.y, hex2rgb(l.color || '#ffe9b0'));
     }
+    g.limbs = limbBoxes;
     return g;
   }
   function buildLines(state) {
@@ -684,12 +733,14 @@
     if (!gl) return;
     const t0 = performance.now();
     const g = buildGeo(state), L = buildLines(state), lp = L.grid;
+    M._limbs = g.limbs || [];
     const geoMs = performance.now() - t0;
     const eye = eyeOf(), up = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
     const view = lookAt(eye, [cam.tx, cam.ty, cam.tz], up);
     const FOV = 45 * Math.PI / 180, tanH = Math.tan(FOV / 2);
     const proj = perspective(FOV, aspect || 1, 0.1, 1000);
     const vp = mMul(proj, view);
+    M._vp = vp;
     const dark = isDark();
 
     /* 环境图：先画无穷远的背景（或立在场景里的背景板），再画白模 */
@@ -854,6 +905,21 @@
     return cands[0];
   }
 
+  /* 选中人物后，四肢本身可以直接拖 —— 摆姿势不用先找面板再猜哪个滑杆对应哪条胳膊 */
+  function pickLimb(clientX, clientY) {
+    const sel = M._sel;
+    if (!sel || sel.kind !== 'person' || !canvas) return null;
+    const boxes = (M._limbs || []).filter(b => b.pid === sel.id);
+    if (!boxes.length) return null;
+    const r = rayFromScreen(canvas, clientX, clientY); if (!r) return null;
+    let best = null;
+    for (const b of boxes) {
+      const t = rayAABB(r.o, r.d, b.box);
+      if (t != null && (!best || t < best.t)) best = { pid: b.pid, key: b.key, t };
+    }
+    return best;
+  }
+
   function bindControls(cv) {
     let drag = null;
     cv.addEventListener('contextmenu', e => e.preventDefault());
@@ -861,6 +927,16 @@
       cv.setPointerCapture(e.pointerId);
       const st = M._last;
       const spaceHeld = !!(window.MN && window.MN.spaceDown);
+      const limb = (e.button === 0 && !spaceHeld && st) ? pickLimb(e.clientX, e.clientY) : null;
+      if (limb) {
+        const p = findObjById(st, 'person', limb.pid);
+        if (p) {
+          if (typeof M.onPoseStart === 'function') M.onPoseStart(limb.pid, limb.key);
+          drag = { mode: 'limb', pid: limb.pid, key: limb.key, base: M.jointDeg(p)[limb.key], x: e.clientX, y: e.clientY, y0: e.clientY, moved: 0 };
+          cv.style.cursor = 'grabbing';
+          return;
+        }
+      }
       const hit = (e.button === 0 && !spaceHeld && st && typeof M.onSelect === 'function') ? pick(st, cv, e.clientX, e.clientY) : null;
       if (e.button === 0 && hit) {
         /* 命中物体 → 拖动移动（记住抓取偏移，避免瞬移） */
@@ -877,6 +953,16 @@
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
       drag.moved += Math.abs(dx) + Math.abs(dy);
+      if (drag.mode === 'limb') {
+        /* 往下拖 = 角度变大，往上拖 = 变小；5° 一档，跟面板滑杆同一套刻度 */
+        const deg = Math.max(-180, Math.min(180, Math.round((drag.base + (e.clientY - drag.y0) * 0.6) / 5) * 5));
+        if (typeof M.onPoseJoint === 'function') M.onPoseJoint(drag.pid, drag.key, deg);
+        else {
+          const p = findObjById(M._last, 'person', drag.pid);
+          if (p) { p.joints = p.joints || {}; p.joints[drag.key] = deg; requestDraw(); }
+        }
+        return;
+      }
       if (drag.mode === 'move') {
         const st = M._last; if (!st) return;
         const f = screenToFloor(cv, e.clientX, e.clientY); if (!f) return;
@@ -910,6 +996,10 @@
       cv.style.cursor = '';
       const wasClick = d0.moved < 5;
       const st = M._last;
+      if (d0.mode === 'limb') {
+        if (typeof M.onPoseEnd === 'function') M.onPoseEnd(d0.pid, d0.key, !wasClick);
+        return;
+      }
       if (d0.mode === 'move') {
         if (typeof M.onMoveEnd === 'function') M.onMoveEnd(d0.kind, d0.id, d0.moved >= 5);
         if (wasClick && typeof M.onSelect === 'function') M.onSelect(d0.kind, d0.id);
@@ -959,7 +1049,16 @@
   M.setCamera = function (c) { if (!c) return; cam.theta = c.theta; cam.phi = c.phi; cam.r = c.r; cam.tx = c.tx; cam.ty = (c.ty != null ? c.ty : 1.5); cam.tz = c.tz; cam.inited = true; if (M._last) draw(M._last); };
   M.capture = function () { if (!gl) return null; if (M._last) draw(M._last); try { return canvas.toDataURL('image/png'); } catch (e) { return null; } };
   /* 环境图状态查询（测试 / UI 用）：loaded = 纹理是否已经传上去 */
-  M._envSize = null; M._envErr = null;
+  M._envSize = null; M._envErr = null; M._envAvg = null; M._limbs = []; M._vp = null;
+  /* 某条肢体当前在屏幕上的位置（client 坐标）：测试和"该亮哪条胳膊"都要用 */
+  M.limbPoint = function (pid, key) {
+    const b = (M._limbs || []).find(x => x.pid === pid && x.key === key);
+    if (!b || !b.box || !M._vp || !canvas) return null;
+    const sp = projToScreen(M._vp, (b.box[0] + b.box[3]) / 2, (b.box[1] + b.box[4]) / 2, (b.box[2] + b.box[5]) / 2);
+    if (!sp) return null;
+    const r = canvas.getBoundingClientRect();
+    return { x: r.left + sp.x, y: r.top + sp.y };
+  };
   M.envInfo = function () {
     const e = M._last && M._last.scene && M._last.scene.env;
     return {
