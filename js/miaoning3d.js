@@ -64,6 +64,8 @@
   /* ---------- WebGL ---------- */
   let gl = null, canvas = null, prog = null, lineProg = null;
   let bufPos, bufNrm, bufCol, bufLine;
+  let envProg = null, boardProg = null, envQuad = null, bufEnvP = null, bufEnvT = null;
+  let envTex = null, envTexKey = null, envLoadingKey = null;
   const cam = { theta: 0.6, phi: 1.0, r: 30, tx: 7, ty: 1.5, tz: 7, inited: false };
   let bounds = { minX: 0, maxX: 14, minZ: 0, maxZ: 14 };
   let aspect = 1;
@@ -80,6 +82,13 @@
     uniform vec3 uSunDir; uniform vec3 uSunCol; uniform float uAmb;
     uniform vec3 uPtPos[4]; uniform vec3 uPtCol[4]; uniform float uPtInt[4]; uniform int uPtN;
     uniform int uMode;
+    uniform float uExp;
+    /* 只在背后有真实环境图时启用：受光面本来会加到 1.5~2.0 直接烧成白纸，跟照片一比就露馅。
+       压一档高光拐点；没环境图时原样输出，不动原来的观感。 */
+    vec3 tone(vec3 c){
+      if (uExp > 0.999) return c;
+      return c / (vec3(1.0) + c * 0.62);
+    }
     void main(){
       vec3 N = normalize(vN); vec3 base = vC;
       if(uMode==2){ float d = clamp((-vVZ)/26.0,0.0,1.0); base = vec3(1.0-d); }
@@ -89,9 +98,37 @@
         vec3 L = uPtPos[i] - vW; float dd = length(L); L/=dd;
         float diff = max(dot(N,L),0.0); float att = 1.0/(1.0+0.12*dd+0.06*dd*dd);
         col += base * uPtCol[i] * diff * att * uPtInt[i]; }
-      gl_FragColor = vec4(col, 1.0); }`;
+      gl_FragColor = vec4(tone(col * uExp), 1.0); }`;
   const LVS = `attribute vec3 aP; uniform mat4 uVP; void main(){ gl_Position = uVP*vec4(aP,1.0); }`;
   const LFS = `precision mediump float; uniform vec3 uCol; void main(){ gl_FragColor=vec4(uCol,1.0); }`;
+
+  /* ---------- 环境图着色器 ----------
+     背景 = 全屏四边形：每个像素反算一条世界射线，按射线方向去图里取色。
+     这样"环境"不需要几何体也永远在无穷远，转视角 = 转镜头，符合看全景的直觉。 */
+  const EVS = `attribute vec2 aP; varying vec2 vN; void main(){ vN = aP; gl_Position = vec4(aP, 0.0, 1.0); }`;
+  const EFS = `
+    precision mediump float;
+    varying vec2 vN;
+    uniform sampler2D uTex;
+    uniform vec3 uFwd; uniform vec3 uRight; uniform vec3 uUp;
+    uniform float uTanH; uniform float uAsp; uniform float uYaw; uniform float uBright; uniform float uVSpread;
+    uniform int uMode;
+    void main(){
+      vec3 d = normalize(uFwd + uRight * (vN.x * uTanH * uAsp) + uUp * (vN.y * uTanH));
+      float c = cos(uYaw), s = sin(uYaw);
+      d = vec3(d.x * c + d.z * s, d.y, -d.x * s + d.z * c);
+      float u = atan(d.z, d.x) / 6.2831853 + 0.5;
+      /* 0 = 等距柱状全景（2:1 图，上下是天地）；1 = 柱面（普通图横向裹一圈，纵向按俯仰摊开） */
+      float v = uMode == 0 ? acos(clamp(d.y, -1.0, 1.0)) / 3.14159265
+                           : clamp(0.5 - d.y * uVSpread, 0.0, 1.0);
+      gl_FragColor = vec4(texture2D(uTex, vec2(u, v)).rgb * uBright, 1.0);
+    }`;
+  /* 背景板 = 场景里立着的一块贴图布景（概念图/剧照当外景挡在后面） */
+  const BVS = `attribute vec3 aP; attribute vec2 aT; uniform mat4 uVP; varying vec2 vT;
+    void main(){ vT = aT; gl_Position = uVP * vec4(aP, 1.0); }`;
+  const BFS = `precision mediump float; varying vec2 vT; uniform sampler2D uTex;
+    uniform float uBright; uniform float uOpacity;
+    void main(){ gl_FragColor = vec4(texture2D(uTex, vT).rgb * uBright, uOpacity); }`;
 
   function sh(type, src) {
     const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
@@ -105,6 +142,79 @@
     return p;
   }
 
+  /* ---------- 环境图纹理 ----------
+     图是异步解码的：先占位、解码完再传纹理并补画一帧。
+     同一张 src 只传一次（envTexKey），换图才重建，避免每帧上传把显存打爆。 */
+  function ensureEnvTex(src) {
+    if (!src || !gl) return null;
+    if (envTex && envTexKey === src) return envTex;
+    if (!envTex) {
+      envTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, envTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+      envSetParams();
+    }
+    if (envLoadingKey === src) return envTex;
+    envLoadingKey = src;
+    const im = new Image();
+    im.onload = () => {
+      envLoadingKey = null;
+      if (!gl || !envTex) return;
+      gl.bindTexture(gl.TEXTURE_2D, envTex);
+      /* FLIP_Y 关掉：v=0 就是图片最上一行，正好对应全景的"天顶" */
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im);
+        envSetParams();
+        envTexKey = src;
+        M._envSize = { w: im.naturalWidth, h: im.naturalHeight, aspect: im.naturalWidth / (im.naturalHeight || 1) };
+        M._envAvg = avgColor(im);
+        if (M._last) draw(M._last);
+      } catch (e) { M._envErr = '环境图上传失败：' + e.message; }
+    };
+    im.onerror = () => { envLoadingKey = null; M._envErr = '环境图解码失败'; };
+    im.src = src;
+    return envTex;
+  }
+  /* 图片均色：背景板模式下拿它当天空色，免得照片四周露出一圈软件底色 */
+  function avgColor(im) {
+    try {
+      const c = document.createElement('canvas'); c.width = 8; c.height = 8;
+      const x = c.getContext('2d');
+      x.drawImage(im, 0, 0, 8, 8);
+      const d = x.getImageData(0, 0, 8, 8).data;
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+      const n = d.length / 4;
+      return [r / n / 255, g / n / 255, b / n / 255];
+    } catch (e) { return null; }
+  }
+  function envSetParams() {
+    /* 图基本都不是 2 的幂，WebGL1 只能用 CLAMP_TO_EDGE + LINEAR（REPEAT/mipmap 会报 incomplete） */
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  }
+
+  /* 环境图状态兜底：老数据 / AI 搭景没写过 env，这里统一补齐，UI 和渲染都读它 */
+  function envOf(state) {
+    const e = state.scene && state.scene.env;
+    if (!e || !e.src || e.on === false) return null;
+    return {
+      mode: e.mode === 'cyl' || e.mode === 'board' ? e.mode : 'sphere',
+      src: e.src,
+      yaw: (+e.yaw || 0) * Math.PI / 180,
+      bright: e.bright == null ? 1 : Math.max(0.2, Math.min(2, +e.bright)),
+      vSpread: e.vSpread == null ? 0.62 : Math.max(0.15, Math.min(2, +e.vSpread)),
+      bx: +e.bx || 0, by: e.by == null ? 4 : +e.by, bz: +e.bz || 0,
+      bw: Math.max(1, +e.bw || 16), brot: (+e.brot || 0) * Math.PI / 180,
+      opacity: e.opacity == null ? 1 : Math.max(0.15, Math.min(1, +e.opacity)),
+      /* 环境球/柱面自带地面，再铺一层米色白模就把照片盖住了；背景板模式仍然要白模地 */
+      floor: e.floor == null ? (e.mode === 'board') : !!e.floor,
+    };
+  }
+
   M.ensure = function (cv) {
     if (gl && canvas === cv) return M.ok;
     canvas = cv;
@@ -113,7 +223,13 @@
     catch (e) { gl = null; }
     if (!gl) { M.ok = false; return false; }
     prog = prog2(VS, FS); lineProg = prog2(LVS, LFS);
+    envProg = prog2(EVS, EFS); boardProg = prog2(BVS, BFS);
     bufPos = gl.createBuffer(); bufNrm = gl.createBuffer(); bufCol = gl.createBuffer(); bufLine = gl.createBuffer();
+    bufEnvP = gl.createBuffer(); bufEnvT = gl.createBuffer();
+    /* 全屏四边形（两个三角形，覆盖 NDC -1..1） */
+    envQuad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, envQuad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
     bindControls(cv); M.ok = true; return true;
   };
 
@@ -187,8 +303,11 @@
     const g = { pos: [], nrm: [], col: [] };
     const sc = state.scene, material = (state.view && state.view.material) || 'original', dark = isDark();
     let vi = 0;
+    const env = envOf(state);
     /* 三层高度错开，避免共面 z-fighting（原来地面和房间地板都在 y=0.02，会闪条纹） */
-    pushFloor(g, bounds.minX - 2, bounds.minZ - 2, bounds.maxX + 2, bounds.maxZ + 2, hex2rgb(dark ? '#26241f' : '#e9e3d8'), 0.0);
+    if (!env || env.floor) {
+      pushFloor(g, bounds.minX - 2, bounds.minZ - 2, bounds.maxX + 2, bounds.maxZ + 2, hex2rgb(dark ? '#26241f' : '#e9e3d8'), 0.0);
+    }
     for (const r of sc.rooms) {
       if (r.hidden) continue;
       const col = material === 'random' ? hashColor(vi++) : (r.color ? hex2rgb(r.color) : (dark ? [0.16, 0.15, 0.13] : [0.93, 0.91, 0.86]));
@@ -508,6 +627,53 @@
 
   /* ---------- 绘制 ---------- */
   let drawRaf = 0;
+
+  /* 环境背景：全屏四边形 + 片元里反算射线采样全景图 */
+  function drawEnvBg(env, view, tex, tanH) {
+    gl.useProgram(envProg);
+    gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.BLEND);
+    gl.bindBuffer(gl.ARRAY_BUFFER, envQuad);
+    const a = gl.getAttribLocation(envProg, 'aP');
+    gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+    const right = [view[0], view[4], view[8]], up = [view[1], view[5], view[9]];
+    const fwd = [-view[2], -view[6], -view[10]];
+    gl.uniform3fv(gl.getUniformLocation(envProg, 'uFwd'), new Float32Array(fwd));
+    gl.uniform3fv(gl.getUniformLocation(envProg, 'uRight'), new Float32Array(right));
+    gl.uniform3fv(gl.getUniformLocation(envProg, 'uUp'), new Float32Array(up));
+    gl.uniform1f(gl.getUniformLocation(envProg, 'uTanH'), tanH);
+    gl.uniform1f(gl.getUniformLocation(envProg, 'uAsp'), aspect || 1);
+    gl.uniform1f(gl.getUniformLocation(envProg, 'uYaw'), env.yaw);
+    gl.uniform1f(gl.getUniformLocation(envProg, 'uBright'), env.bright);
+    gl.uniform1f(gl.getUniformLocation(envProg, 'uVSpread'), env.vSpread);
+    gl.uniform1i(gl.getUniformLocation(envProg, 'uMode'), env.mode === 'cyl' ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(gl.getUniformLocation(envProg, 'uTex'), 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.depthMask(true); gl.enable(gl.DEPTH_TEST);
+  }
+  /* 背景板：世界空间一块贴图布景，参数全在 scene.env 上 */
+  function drawEnvBoard(env, tex, vp) {
+    const ia = (M._envSize && M._envSize.aspect) || 1.777;
+    const h = env.bw / ia;
+    const q = (lx, ly) => tfPoint(env.brot, env.bx, env.by, env.bz, [lx, ly, 0]);
+    const p = q(-env.bw / 2, -h / 2), p1 = q(env.bw / 2, -h / 2), p2 = q(env.bw / 2, h / 2), p3 = q(-env.bw / 2, h / 2);
+    const pos = [].concat(p, p1, p2, p, p2, p3);
+    const uv = [0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0];
+    gl.useProgram(boardProg);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    if (env.opacity >= 1) gl.disable(gl.BLEND);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufEnvP); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pos), gl.DYNAMIC_DRAW);
+    let a = gl.getAttribLocation(boardProg, 'aP'); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufEnvT); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(uv), gl.STATIC_DRAW);
+    a = gl.getAttribLocation(boardProg, 'aT'); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+    gl.uniformMatrix4fv(gl.getUniformLocation(boardProg, 'uVP'), false, new Float32Array(vp));
+    gl.uniform1f(gl.getUniformLocation(boardProg, 'uBright'), env.bright);
+    gl.uniform1f(gl.getUniformLocation(boardProg, 'uOpacity'), env.opacity);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(gl.getUniformLocation(boardProg, 'uTex'), 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.disable(gl.BLEND);
+  }
   /* 拖动时指针事件的频率可能比屏幕刷新还高（120~240Hz），
      每来一次就重建整份几何体会白白丢掉一半以上的帧 —— 统一按帧合并。 */
   function requestDraw() {
@@ -521,14 +687,27 @@
     const geoMs = performance.now() - t0;
     const eye = eyeOf(), up = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
     const view = lookAt(eye, [cam.tx, cam.ty, cam.tz], up);
-    const proj = perspective(45 * Math.PI / 180, aspect || 1, 0.1, 1000);
+    const FOV = 45 * Math.PI / 180, tanH = Math.tan(FOV / 2);
+    const proj = perspective(FOV, aspect || 1, 0.1, 1000);
     const vp = mMul(proj, view);
     const dark = isDark();
 
+    /* 环境图：先画无穷远的背景（或立在场景里的背景板），再画白模 */
+    const env = envOf(state);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.enable(gl.DEPTH_TEST);
-    gl.clearColor(dark ? 0.10 : 0.82, dark ? 0.10 : 0.86, dark ? 0.12 : 0.90, 1);
+    /* 背景板模式下用照片均色当天空：不然照片四周露出一圈软件底色，像没做完 */
+    const cc = (env && M._envAvg && envTexKey === env.src) ? M._envAvg : [dark ? 0.10 : 0.82, dark ? 0.10 : 0.86, dark ? 0.12 : 0.90];
+    gl.clearColor(cc[0], cc[1], cc[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    if (env) {
+      const tex = ensureEnvTex(env.src);
+      if (tex && envTexKey === env.src) {
+        if (env.mode === 'board') drawEnvBoard(env, tex, vp);
+        else drawEnvBg(env, view, tex, tanH);
+      }
+    }
 
     gl.useProgram(prog);
     gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.pos), gl.DYNAMIC_DRAW);
@@ -555,6 +734,8 @@
     gl.uniform1fv(gl.getUniformLocation(prog, 'uPtInt'), ptInt);
     gl.uniform1i(gl.getUniformLocation(prog, 'uPtN'), n);
     gl.uniform1i(gl.getUniformLocation(prog, 'uMode'), ((state.view && state.view.material) === 'depth') ? 2 : 0);
+    /* 背后铺了真实场景图时压一档曝光：白模本来会过曝成纯白，跟照片一比就像贴了张纸 */
+    gl.uniform1f(gl.getUniformLocation(prog, 'uExp'), env ? 0.95 : 1.0);
     gl.drawArrays(gl.TRIANGLES, 0, g.pos.length / 3);
 
     gl.useProgram(lineProg);
@@ -777,6 +958,15 @@
   M.getCamera = function () { return { theta: cam.theta, phi: cam.phi, r: cam.r, tx: cam.tx, ty: cam.ty, tz: cam.tz }; };
   M.setCamera = function (c) { if (!c) return; cam.theta = c.theta; cam.phi = c.phi; cam.r = c.r; cam.tx = c.tx; cam.ty = (c.ty != null ? c.ty : 1.5); cam.tz = c.tz; cam.inited = true; if (M._last) draw(M._last); };
   M.capture = function () { if (!gl) return null; if (M._last) draw(M._last); try { return canvas.toDataURL('image/png'); } catch (e) { return null; } };
+  /* 环境图状态查询（测试 / UI 用）：loaded = 纹理是否已经传上去 */
+  M._envSize = null; M._envErr = null;
+  M.envInfo = function () {
+    const e = M._last && M._last.scene && M._last.scene.env;
+    return {
+      set: !!(e && e.src && e.on !== false), mode: e ? e.mode : null,
+      loaded: !!envTexKey && (!e || envTexKey === e.src), img: M._envSize, err: M._envErr,
+    };
+  };
   M._debugGeo = function (state) { return buildGeo(state); };
   M.setSel = function (s) { M._sel = s; if (M._last) draw(M._last); };
   /* 性能计数（测试/自查用）：一次 draw 的重建几何耗时与总耗时 */
