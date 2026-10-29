@@ -655,3 +655,8 @@
 .mn-color-row > span{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .mn-color-now{width:14px;height:14px;border-radius:4px;display:inline-block;border:1px solid rgba(0,0,0,.20);box-shadow:0 0 0 2px rgba(255,255,255,.6) inset}
 .mn-color-row code{font:11px/1 ui-monospace,Menlo,monospace;color:var(--muted);letter-spacing:.02em}
+
+/* 环境图面板（3D 全景 / 背景板） */
+.mn-env-thumb{margin:2px 0 10px;border-radius:9px;overflow:hidden;border:1px solid var(--line);background:#0e0f12}
+.mn-env-thumb img{display:block;width:100%;height:82px;object-fit:cover;cursor:pointer}
+.mn-env-thumb img:hover{opacity:.88}
