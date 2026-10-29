@@ -1183,3 +1183,24 @@ body.sb-mn-open { overflow: hidden; }
 .ct-title{font-size:13.5px;font-weight:600;margin-bottom:3px}
 .ct-detail{font-size:12px;line-height:1.65}
 .ct-hint{font-size:12.5px;line-height:1.8}
+
+/* ---------- 导入环境图弹窗 ---------- */
+.ei-drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  padding:22px 14px;border:1.5px dashed var(--border);border-radius:var(--radius);
+  background:var(--bg2);text-align:center;transition:border-color .14s, background .14s}
+.ei-drop.on{border-color:var(--acc);background:var(--acc-soft,#eef3ff)}
+.ei-drop-ico{font-size:26px;line-height:1;opacity:.55}
+.ei-drop-tip{font-size:11.5px;color:var(--muted)}
+.ei-link{color:var(--acc);cursor:pointer;text-decoration:underline;font-weight:600}
+.ei-prev{display:flex;align-items:center;gap:10px;margin-top:10px}
+.ei-prev img{max-height:120px;max-width:200px;border-radius:8px;border:1px solid var(--border);object-fit:cover}
+.ei-prev .dim{font-size:11.5px}
+.ei-modes{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.ei-modes label{display:flex;gap:6px;align-items:center;font-size:12.5px}
+.ei-api{margin-top:4px;font-size:11.5px;line-height:1.6}
+.ei-status{font-size:12px;line-height:1.6;white-space:pre-wrap}
+.ei-result{padding:10px 12px;margin-top:8px;font-size:12.5px;line-height:1.7}
+.ei-issues{margin-top:4px;font-size:11.5px;color:var(--muted);line-height:1.6}
+.ei-pal{margin-left:8px}
+.ei-swatch{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:2px;
+  border:1px solid rgba(0,0,0,.15);vertical-align:-2px}
