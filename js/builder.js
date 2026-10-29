@@ -79,6 +79,7 @@ export function shotSceneToMn(scene, shot) {
         id: uid(), name: o.name || '人物', x: o.x, y: o.z, sitH: Math.max(0, Math.min(1.6, +o.sitH || 0)),
         rot: ((90 - (+o.rot || 0)) % 360 + 360) % 360,
         color: o.color || '#2e7cf6', pose: P2A[o.action] || '站立', face: 1, faceDir: 0, jump: 0, hidden: false,
+        ...(o.joints && Object.keys(o.joints).length ? { joints: Object.assign({}, o.joints) } : {}),
       });
     }
   }
@@ -164,6 +165,8 @@ export function mnToShotScene(st) {
       /* 坐在家具上：把坐面高度带给白模，预演里人才不会陷进椅子 */
       sitH: pe.sitOn ? Math.max(0, Math.min(1.6, +pe.sitH || 0)) : 0,
       color: pe.color || '#2e7cf6', name: pe.name || '',
+      /* 逐关节角度带给白模预演，不然导演台里摆好的动作一进预演就打回原形 */
+      ...(pe.joints && Object.keys(pe.joints).length ? { joints: Object.assign({}, pe.joints) } : {}),
       ...(hasPath ? { path: pathPts, speed: +pe.speed || 1.2 } : {}),
     });
   });
