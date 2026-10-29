@@ -1,4 +1,15 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.15.0（2026-10-29）：🌄 环境图真的变成 3D 环境 —— 右侧多一个「环境图」页签，原图按画幅自动铺法：
+                          2:1 = 等距柱状全景 → 环境球（左右拖 = 转头、上下拖 = 抬头低头，转视角看到的
+                          就是照片里那个方向）；普通画幅 → 立在景后面的背景板（板宽/左右/前后/离地/转向都能拖）。
+                          另有「柱面环绕」把任意图横向裹一圈。三种都自带水平旋转 + 亮度，
+                          「铺白模地面」不勾就露出照片自己的地面（默认：环境球/柱面不铺，背景板铺）。
+                          渲染是全屏四边形 + 片元里反算射线采样贴图（不是贴一张平面），所以截图 / 机位组图 /
+                          🔄 环绕 / 🎬 环绕视频全都带着环境一起出。
+                          原图进 IndexedDB、localStorage 只留一个 key（否则每镜复制一份 200KB 必爆 5MB）；
+                          「📦 导出项目 → 项目 JSON」会把原图打回文件里，导入时再自动转存回图片库。
+                          背后有照片时白模走一档高光拐点（受光面本来会加到 1.5~2.0 直接烧成白纸），
+                          背景板模式还拿照片均色当天空色，不然照片四周露出一圈软件底色。
    v1.14.0（2026-10-28）：🖼 导入环境图（新增 js/env-import.js + js/env-import-ui.js）—— 一张场景图 → 可编辑的 3D 景：
                           配了支持视觉的 AI 接口就「看图反推」房间尺寸/家具位置/人物站位/光位色温/对应这张图的机位视角
                           （复用 AI 搭景那套 schema 提示词 + sanitize 校验器，坏 kind 自动归正、越界坐标自动夹回）；
@@ -1009,6 +1020,7 @@ function renderRight() {
   let body = '';
   if (tab === 'obj') body = renderObjPanel();
   else if (tab === 'sun') body = renderSunPanel();
+  else if (tab === 'env') body = renderEnvPanel();
   else body = renderGroundPanel();
   box.innerHTML = `
     <div class="mn-quickadd">
@@ -1019,6 +1031,7 @@ function renderRight() {
     <div class="mn-panel-tabs">
       <button class="${tab === 'obj' ? 'active' : ''}" data-tab="obj">物体</button>
       <button class="${tab === 'sun' ? 'active' : ''}" data-tab="sun">光影</button>
+      <button class="${tab === 'env' ? 'active' : ''}" data-tab="env">环境图</button>
       <button class="${tab === 'grd' ? 'active' : ''}" data-tab="grd">地面</button>
     </div>
     ${body}
@@ -1056,6 +1069,7 @@ function renderRight() {
   $('#mnCamFov').oninput = e => { cam.fov = +e.target.value; e.target.previousElementSibling.querySelector('strong').textContent = cam.fov + '°'; saveSoon(); };
   bindObjPanel(body);
   bindLibrary();
+  bindEnvPanel();
 }
 
 /* 物件库预设：直接吃道具库 mn-props.js 的全部种类，每类一个精细模型 */
@@ -1300,6 +1314,104 @@ function renderGroundPanel() {
     <p class="mn-help-para" style="margin-top:8px">点一个颜色，外面一整片都换。</p>
     <label class="mn-check"><input type="checkbox" id="mnRoomGrid" ${g.grid ? 'checked' : ''} /><span>显示房间内网格<small>格子上色更稳</small></span></label>
   </section>`;
+}
+
+/* ---------- 环境图：把一张场景图变成能转着看的 3D 世界 ----------
+   2:1 认作等距柱状全景 → 环境球（转视角 = 在原地转头）；
+   普通画幅 → 背景板立在景后面（可调远近 / 宽窄 / 转向）。 */
+function envSlider(id, label, min, max, step, val, unit) {
+  return `<label class="mn-field"><span>${label}<strong>${val}${unit || ''}</strong></span>
+    <input type="range" class="mn-range" id="${id}" data-unit="${unit || ''}" min="${min}" max="${max}" step="${step}" value="${val}" /></label>`;
+}
+function renderEnvPanel() {
+  const e = MN.state.scene.env;
+  if (!e || !e.src) return `<section class="mn-section">
+    <div class="mn-sec-head"><span>3D 环境图</span><span class="mn-sec-note">转视角 = 在场景里转头</span></div>
+    <p class="mn-help-para">手里有场景图 / 概念图 / 360 全景图？选一张，它直接变成 3D 世界的环境，白模人物站在里面找机位。</p>
+    <div class="mn-chip-row">
+      <button class="mn-chip" id="mnEnvPick">${icon('film', 's12')}选一张场景图</button>
+      <button class="mn-chip" id="mnEnvFlow">${icon('sparkles', 's12')}看图自动搭景</button>
+    </div>
+    <input type="file" id="mnEnvFile" accept="image/*" hidden />
+    <p class="mn-help-para" style="margin-top:10px">2:1 的图认作<b>全景图</b>，裹成环境球，上下左右都能转；<br>普通画幅立成<b>背景板</b>，能推远近、改宽窄。</p>
+  </section>`;
+  const mode = e.mode || 'sphere';
+  const board = mode === 'board';
+  const note = mode === 'sphere' ? '图裹成一圈当世界：左右拖 = 转头，上下拖 = 抬头低头。要 2:1 全景图才对得上。'
+    : mode === 'cyl' ? '只把图横向裹一圈，纵向按俯仰摊开 —— 普通图想转着看就用它，上下边缘会拉伸。'
+      : '图立成一块布景板挡在景后面，转视角时它有视差，能推远近、改宽窄、转方向。';
+  return `<section class="mn-section">
+    <div class="mn-sec-head"><span>3D 环境图</span><button class="mn-ghost" id="mnEnvClear">清除</button></div>
+    <div class="mn-env-thumb"><img src="${e.src}" alt="环境图" title="点击换一张" id="mnEnvThumb" /></div>
+    <label class="mn-check"><input type="checkbox" id="mnEnvOn" ${e.on !== false ? 'checked' : ''} /><span>在 3D 里显示<small>关掉就只剩白模</small></span></label>
+    <label class="mn-check"><input type="checkbox" id="mnEnvFloor" ${(e.floor == null ? mode === 'board' : !!e.floor) ? 'checked' : ''} /><span>铺白模地面<small>不铺就露出环境图自己的地面</small></span></label>
+    <div class="mn-chip-row">
+      <button class="mn-chip ${mode === 'sphere' ? 'active' : ''}" data-envmode="sphere">环境球</button>
+      <button class="mn-chip ${mode === 'cyl' ? 'active' : ''}" data-envmode="cyl">柱面</button>
+      <button class="mn-chip ${mode === 'board' ? 'active' : ''}" data-envmode="board">背景板</button>
+    </div>
+    <p class="mn-help-para">${note}</p>
+    ${board ? envSlider('mnEnvBw', '板宽', 2, 60, 0.5, e.bw || 16, 'm')
+      + envSlider('mnEnvBx', '左右位置', -20, 40, 0.5, e.bx || 0, 'm')
+      + envSlider('mnEnvBz', '前后位置', -30, 30, 0.5, e.bz || 0, 'm')
+      + envSlider('mnEnvBy', '离地高度', 0, 20, 0.5, e.by == null ? 4 : e.by, 'm')
+      + envSlider('mnEnvBrot', '板面转向', -180, 180, 5, e.brot || 0, '°')
+      : envSlider('mnEnvYaw', '水平旋转', -180, 180, 1, e.yaw || 0, '°')
+      + (mode === 'cyl' ? envSlider('mnEnvV', '纵向铺开', 0.2, 1.5, 0.02, e.vSpread == null ? 0.62 : e.vSpread, '') : '')}
+    ${envSlider('mnEnvBright', '亮度', 0.3, 2, 0.05, e.bright == null ? 1 : e.bright, '×')}
+    <div class="mn-chip-row"><button class="mn-chip" id="mnEnvPick">${icon('upload', 's12')}换一张</button></div>
+    <input type="file" id="mnEnvFile" accept="image/*" hidden />
+  </section>`;
+}
+async function mnEnvSetFile(fl) {
+  const EI = window.ENV_IMPORT;
+  if (!EI) { toast('环境图模块没加载上', 'warn'); return; }
+  try {
+    toast('正在读图…');
+    const big = await EI.loadResized(fl, 1536);
+    const env = EI.envFromResult({ obj: { scene: MN.state.scene }, imgW: big.w, imgH: big.h, dataURL: big.dataURL });
+    pushUndo();
+    MN.state.scene.env = env;
+    if (MN.state.view && MN.state.view.mode !== '3d') setMode('3d');
+    renderRight(); paint3D(); saveSoon();
+    toast(env.mode === 'sphere' ? '已铺成环境球 —— 左右拖动转视角看看' : '已立成背景板 —— 拖「前后位置」推到景后面', 'ok');
+  } catch (err) { toast('读图失败：' + err.message, 'warn'); }
+}
+function bindEnvPanel() {
+  const box = $('#mnRight'); if (!box) return;
+  const f = (id) => box.querySelector('#' + id);
+  const file = f('mnEnvFile');
+  if (file) file.onchange = async (ev) => {
+    const fl = ev.target.files && ev.target.files[0];
+    if (fl) await mnEnvSetFile(fl);
+    ev.target.value = '';
+  };
+  ['mnEnvPick', 'mnEnvThumb'].forEach(id => { const b = f(id); if (b) b.onclick = () => { const i = f('mnEnvFile'); if (i) i.click(); }; });
+  const flow = f('mnEnvFlow');
+  if (flow) flow.onclick = async () => {
+    const { openEnvImport } = await import('./env-import-ui.js');
+    openEnvImport({ inDirector: true, onApplied: () => renderRight() });
+  };
+  const clear = f('mnEnvClear');
+  if (clear) clear.onclick = () => { pushUndo(); delete MN.state.scene.env; renderRight(); paint3D(); saveSoon(); toast('已清除环境图'); };
+  const e = MN.state.scene.env;
+  if (!e || !e.src) return;
+  const on = f('mnEnvOn');
+  if (on) on.onchange = () => { e.on = on.checked; paint3D(); saveSoon(); };
+  const fl = f('mnEnvFloor');
+  if (fl) fl.onchange = () => { e.floor = fl.checked; paint3D(); saveSoon(); };
+  $$('[data-envmode]', box).forEach(b => b.onclick = () => { e.mode = b.dataset.envmode; renderRight(); paint3D(); saveSoon(); });
+  const rng = (id, key) => {
+    const el = f(id); if (!el) return;
+    el.oninput = () => {
+      e[key] = +el.value;
+      const lab = el.parentElement.querySelector('strong');
+      if (lab) lab.textContent = el.value + (el.dataset.unit || '');
+      paint3D(); saveSoon();
+    };
+  };
+  rng('mnEnvYaw', 'yaw'); rng('mnEnvBright', 'bright'); rng('mnEnvV', 'vSpread');
+  rng('mnEnvBw', 'bw'); rng('mnEnvBx', 'bx'); rng('mnEnvBz', 'bz'); rng('mnEnvBy', 'by'); rng('mnEnvBrot', 'brot');
 }
 
 /* ---------- 底部镜头册 ---------- */
@@ -3754,6 +3866,8 @@ Object.assign(window, {
   mnSnapCurrent: snapCurrent, mnSnapAllCams: snapAllCams,
   mnToggleOrbit: toggleOrbit, mnOrbitStop: orbitStop, mnOrbitVideo: orbitVideo,
   mnSeatAfterDrop: seatAfterDrop, mnFindProp: findProp, mnSeatableProps: seatableProps,
+  /* 环境图（3D 全景 / 背景板） */
+  mnEnvSetFile, mnRenderRight: renderRight,
 });
 
 /* ---------- bairimeng-director 集成钩子（2026-10-25 移植时新增） ----------
