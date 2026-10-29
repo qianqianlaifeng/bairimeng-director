@@ -1204,3 +1204,7 @@ body.sb-mn-open { overflow: hidden; }
 .ei-pal{margin-left:8px}
 .ei-swatch{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:2px;
   border:1px solid rgba(0,0,0,.15);vertical-align:-2px}
+
+/* 环境图弹窗：说明原图会变成哪种 3D 环境 */
+.ei-env{margin-top:6px;font-size:13px;color:var(--text)}
+.ei-env b{color:var(--acc)}
