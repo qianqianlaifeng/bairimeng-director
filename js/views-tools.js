@@ -435,7 +435,7 @@ export function renderSettings(container) {
 
     <div class="card set-card about-card">
       <div class="card-title">🌙 关于</div>
-      <p>白日梦导演台 v1.16.0 · 纯前端 AI 影片导演工作台</p>
+      <p>白日梦导演台 v1.17.0 · 纯前端 AI 影片导演工作台</p>
       <p class="dim">剧本 → 分镜 → 运镜预演 → 动态分镜 → 剪辑 → 提示词 → 审核，一站式完成 AI 短片前期制作。<br>
       无后端、无追踪、无依赖，部署在 GitHub Pages 上，离线也能用。</p>
     </div>`;
