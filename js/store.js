@@ -23,7 +23,13 @@ function load(key, fallback) {
 }
 function save(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); return true; }
-  catch (e) { console.warn('存储失败', e); return false; }
+  catch (e) {
+    console.warn('存储失败', e);
+    /* 撑爆 5MB 时以前只在控制台叫一声，用户以为存住了 → 刷新才发现丢活儿。
+       广播出去让 app.js 弹真人能看见的提示。 */
+    try { window.dispatchEvent(new CustomEvent('bdm-save-failed', { detail: { key, name: e && e.name } })); } catch (_) { }
+    return false;
+  }
 }
 
 /* ---------------- 默认值 ---------------- */
