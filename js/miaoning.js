@@ -1,4 +1,9 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.14.0（2026-10-28）：🖼 导入环境图（新增 js/env-import.js + js/env-import-ui.js）—— 一张场景图 → 可编辑的 3D 景：
+                          配了支持视觉的 AI 接口就「看图反推」房间尺寸/家具位置/人物站位/光位色温/对应这张图的机位视角
+                          （复用 AI 搭景那套 schema 提示词 + sanitize 校验器，坏 kind 自动归正、越界坐标自动夹回）；
+                          没配接口走「本地起手」：采样图片的地面/墙主色 + 亮区当光位 + 冷暖按色相判，给一个 8×6m 的配色对得上的空景。
+                          两条路都只注入导演台草稿，看过再保存。3D 底栏另加「🔄 环绕」（16 秒一圈）和「🎬 环绕视频」（导出 8 秒 mp4）。
    v1.13.3（2026-10-28）：① 底部停靠条可收起 —— 左边多一个「▾」，收起来只剩一个小药丸
                           （展开 · 📷 截图 · 🎞 机位组图 · 💾 保存），顺带把下面那行 俯视/斜视/正视/网格… 一起藏掉，
                           看画面和出图不再被两条横栏压住；收起状态记在本地，下次进来还是收着。
@@ -767,20 +772,8 @@ function roundRectPath(c, x, y, w, h, r) {
   c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r);
   c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y); c.closePath();
 }
-/* 3D 当前视角 → PNG（带人名） */
-async function grab3DURL() {
-  const cv = $('#mn3d');
-  if (!cv || !window.MN3D) return null;
-  MN3D.render(MN.state);
-  await sleep(150);                        // 等一帧：标签层的位置要按新投影算
-  const url = MN3D.capture();
-  const im = url && await loadImg(url);
-  if (!im) return null;
-  const out = document.createElement('canvas');
-  out.width = im.naturalWidth || cv.width; out.height = im.naturalHeight || cv.height;
-  const c = out.getContext('2d');
-  c.drawImage(im, 0, 0);
-  const k = out.width / Math.max(1, cv.clientWidth || out.width);   // CSS 像素 → 画布像素
+/* 把 3D 头顶名牌画到任意 2D 上下文上（画布是设备像素，标签是 CSS 像素 → 按 k 放大） */
+function drawLabelsOn(c, k) {
   c.font = `600 ${Math.round(12 * k)}px system-ui, -apple-system, "Microsoft YaHei", sans-serif`;
   c.textBaseline = 'middle';
   Array.from(document.querySelectorAll('.mn3d-label')).forEach(lb => {
@@ -794,6 +787,21 @@ async function grab3DURL() {
     roundRectPath(c, x - w / 2, y - h / 2, w, h, 6 * k); c.stroke();
     c.fillStyle = '#fff'; c.fillText(txt, x - w / 2 + 6 * k, y + 0.5 * k);
   });
+}
+/* 3D 当前视角 → PNG（带人名） */
+async function grab3DURL() {
+  const cv = $('#mn3d');
+  if (!cv || !window.MN3D) return null;
+  MN3D.render(MN.state);
+  await sleep(150);                        // 等一帧：标签层的位置要按新投影算
+  const url = MN3D.capture();
+  const im = url && await loadImg(url);
+  if (!im) return null;
+  const out = document.createElement('canvas');
+  out.width = im.naturalWidth || cv.width; out.height = im.naturalHeight || cv.height;
+  const c = out.getContext('2d');
+  c.drawImage(im, 0, 0);
+  drawLabelsOn(c, out.width / Math.max(1, cv.clientWidth || out.width));
   return out.toDataURL('image/png');
 }
 /* 2D 平面图 → PNG（临时清掉选中框，拍完还原） */
@@ -859,6 +867,66 @@ async function snapAllCams() {
   toast(`已下载 ${imgs.length} 个机位的组图 🎞`, 'ok');
 }
 
+/* ---------- 环绕预览 / 环绕视频：绕着搭好的景转一圈 ---------- */
+let orbitRAF = null, orbitOn = false;
+const ORBIT_SEC = 16;
+function orbitStop() {
+  orbitOn = false;
+  if (orbitRAF) { cancelAnimationFrame(orbitRAF); orbitRAF = null; }
+  const b = $('#mnOrbitBtn'); if (b) { b.classList.remove('active'); b.innerHTML = icon('rotate-3d', 's12') + '环绕'; }
+}
+function toggleOrbit() {
+  if (orbitOn) { orbitStop(); toast('环绕已停', 'ok'); return; }
+  if (!window.MN3D) return toast('请先点「立起来」', 'warn');
+  if (!is3D()) { setMode('3d'); toast('已切到 3D 立体，开始环绕'); }
+  const a0 = MN3D.getCamera().theta, t0 = performance.now();
+  orbitOn = true;
+  const b = $('#mnOrbitBtn'); if (b) { b.classList.add('active'); b.innerHTML = icon('pause', 's12') + '停止环绕'; }
+  const step = (now) => {
+    if (!orbitOn) return;
+    const cv = $('#mn3d');
+    if (!cv || !document.body.contains(cv) || !is3D()) { orbitStop(); return; }
+    const c = MN3D.getCamera();
+    MN3D.setCamera({ theta: a0 + ((now - t0) / 1000 / ORBIT_SEC) * Math.PI * 2, phi: c.phi, r: c.r, tx: c.tx, ty: c.ty, tz: c.tz });
+    MN3D.render(MN.state);
+    orbitRAF = requestAnimationFrame(step);
+  };
+  orbitRAF = requestAnimationFrame(step);
+}
+async function orbitVideo() {
+  if (typeof mnExportCanvasVideo !== 'function') return toast('导出模块没加载上', 'warn');
+  if (!window.MN3D) return toast('请先点「立起来」', 'warn');
+  if (!is3D()) { setMode('3d'); await sleep(1200); }
+  const src = $('#mn3d');
+  if (!src) return toast('找不到 3D 画布', 'warn');
+  const base = MN3D.getCamera();
+  const total = 8, fps = 24;
+  const W = Math.max(320, Math.round(src.clientWidth || 960)), H = Math.max(240, Math.round(src.clientHeight || 540));
+  const k = W / Math.max(1, src.clientWidth || 1);
+  toast('正在渲染 8 秒环绕视频…', 'ok');
+  try {
+    const r = await mnExportCanvasVideo({
+      W, H, fps, total,
+      drawFrame: (t, ctx, w, h) => {
+        MN3D.setCamera({ theta: base.theta + (t / total) * Math.PI * 2, phi: base.phi, r: base.r, tx: base.tx, ty: base.ty, tz: base.tz });
+        MN3D.render(MN.state);
+        ctx.drawImage(src, 0, 0, w, h);
+        drawLabelsOn(ctx, k);
+      },
+    });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(r.blob);
+    a.download = `${shotBase()}-环绕${total}s.mp4`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 20000);
+    toast(`环绕视频已导出 🎬（${r.frames} 帧 · ${r.ext}）`, 'ok');
+  } catch (e) {
+    toast('环绕视频导出失败：' + e.message, 'warn');
+  } finally {
+    MN3D.setCamera(base); MN3D.render(MN.state);
+  }
+}
+
 function buildViewCtl() {
   const box = $('#mnViewCtl'); if (!box) return;
   box.innerHTML = `
@@ -871,6 +939,8 @@ function buildViewCtl() {
     <button class="mn-vc" id="mnFloorBtn">${icon('paintbrush', 's12')}地面上色</button>
     <button class="mn-vc" id="mnShotBtn" title="把当前画面存成 PNG（2D 平面图 / 3D 立体都行）">${icon('camera', 's12')}截图</button>
     <button class="mn-vc" id="mnShotAllBtn" title="镜头册里每个机位各截一张，拼成一张图">${icon('film', 's12')}机位组图</button>
+    <button class="mn-vc" id="mnOrbitBtn" title="绕着这套景转一圈看（16 秒一圈，再点一下停）">${icon('rotate-3d', 's12')}环绕</button>
+    <button class="mn-vc" id="mnOrbitVidBtn" title="导出 8 秒环绕 mp4">${icon('play', 's12')}环绕视频</button>
     <button class="mn-vc" id="mnFullBtn">${icon('maximize', 's12')}工作台全屏</button>
     <button class="mn-vc" id="mnHideUi">${icon('eye-off', 's12')}隐藏界面</button>`;
   $$('[data-view]', box).forEach(b => b.onclick = () => {
@@ -888,6 +958,8 @@ function buildViewCtl() {
   $('#mnFloorBtn').onclick = () => { if (MN.state) { MN.state.view.floorColor = !MN.state.view.floorColor; paint(); saveSoon(); render3D(); toast(MN.state.view.floorColor ? '房间已上色' : '房间改成线框'); } };
   $('#mnShotBtn').onclick = () => snapCurrent();
   $('#mnShotAllBtn').onclick = () => snapAllCams();
+  $('#mnOrbitBtn').onclick = () => toggleOrbit();
+  $('#mnOrbitVidBtn').onclick = () => orbitVideo();
   $('#mnFullBtn').onclick = () => toggleImmersive();
   $('#mnHideUi').onclick = () => toggleImmersive();
 }
@@ -3680,6 +3752,7 @@ Object.assign(window, {
   mnSitOn: sitOn, mnStandUp: standUp, mnSitSelToNearestSeat: sitSelToNearestSeat,
   mnSeatSomeoneOn: seatSomeoneOn, mnStandSel: standSel, mnRefitSeats: refitSeats,
   mnSnapCurrent: snapCurrent, mnSnapAllCams: snapAllCams,
+  mnToggleOrbit: toggleOrbit, mnOrbitStop: orbitStop, mnOrbitVideo: orbitVideo,
   mnSeatAfterDrop: seatAfterDrop, mnFindProp: findProp, mnSeatableProps: seatableProps,
 });
 
