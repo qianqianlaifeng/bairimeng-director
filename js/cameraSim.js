@@ -236,13 +236,17 @@ function buildActor(pose) {
     const isA = s === -1;
     const th = isA ? thighA : thighB;
     const kn = isA ? kneeA : kneeB;
-    const hipJ = { pivot: [s * 0.09, 0.84, 0], angle: th };
-    const kneeJ = { pivot: [s * 0.09, 0.50, 0], angle: kn };
+    /* 逐关节调过的角度（度）优先于程序化步态 —— 面板和 3D 拖肢体都写在这里 */
+    const ov = k => { const v = pose.joints && pose.joints[k]; return (v == null || !isFinite(+v)) ? null : (+v) * Math.PI / 180; };
+    const hipOv = ov(isA ? 'hipL' : 'hipR'), kneeOv = ov(isA ? 'kneeL' : 'kneeR');
+    const shOv = ov(isA ? 'shL' : 'shR'), elOv = ov(isA ? 'elL' : 'elR');
+    const hipJ = { pivot: [s * 0.09, 0.84, 0], angle: hipOv != null ? hipOv : th };
+    const kneeJ = { pivot: [s * 0.09, 0.50, 0], angle: kneeOv != null ? kneeOv : kn };
     add(frustumPolys(s * 0.09, 0.50, 0, 0.065, 0.052, 0.34), [hipJ]);                // 大腿
     add(frustumPolys(s * 0.09, 0.19, 0, 0.05, 0.037, 0.33), [hipJ, kneeJ]);          // 小腿
     add(boxPolys(s * 0.09, 0.035, 0.05, 0.095, 0.06, 0.19, 0.86), [hipJ, kneeJ]);    // 脚
-    const shJ = { pivot: [s * 0.215, 1.36, 0], angle: isA ? armA : armB };
-    const elJ = { pivot: [s * 0.215, 1.10, 0], angle: 0.28 + Math.max(0, isA ? armA : armB) * 0.8 };
+    const shJ = { pivot: [s * 0.215, 1.36, 0], angle: shOv != null ? shOv : (isA ? armA : armB) };
+    const elJ = { pivot: [s * 0.215, 1.10, 0], angle: elOv != null ? elOv : 0.28 + Math.max(0, isA ? armA : armB) * 0.8 };
     add(frustumPolys(s * 0.215, 1.10, 0, 0.048, 0.038, 0.26), [shJ]);                // 上臂
     add(frustumPolys(s * 0.215, 0.84, 0, 0.038, 0.03, 0.24), [shJ, elJ]);            // 前臂
     add(spherePolys(s * 0.215, 0.80, 0, 0.042, 3, 6, 0.99), [shJ, elJ]);             // 手
@@ -682,7 +686,7 @@ class WhiteModelRenderer {
           return {
             x, z, yaw, scale: o.scale || 1,
             liftY: Math.max(0, Math.min(1.6, +o.sitH || 0)),   // 坐在家具上：按坐面高度整体抬高
-            pose: { phase: t * Math.PI * 6 * (o.action === 'run' ? 1.7 : 1) + i * 1.7, walk: moving ? (o.action === 'run' ? 0.95 : 0.55) : 0, sit: o.action === 'sit' },
+            pose: { phase: t * Math.PI * 6 * (o.action === 'run' ? 1.7 : 1) + i * 1.7, walk: moving ? (o.action === 'run' ? 0.95 : 0.55) : 0, sit: o.action === 'sit', joints: o.joints || null },
           };
         })
       : (builtScene ? [] : [{ x: actor.x, z: actor.z, yaw: actor.yaw, scale: 1, pose: { phase: actor.phase, walk: actor.walk, sit: actor.sit } }]);
