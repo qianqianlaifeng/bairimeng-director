@@ -12,10 +12,11 @@
 (function () {
   'use strict';
 
-  const MAX_SIDE = 1024;   /* 发给 AI 的那版 */
-  const ENV_SIDE = 1536;   /* 存进场景当 3D 环境贴图的那版 */
+  const MAX_SIDE = 1024;    /* 发给 AI 的那版 */
+  const ENV_SIDE = 1536;    /* 普通图存进场景当环境贴图 */
+  const PANO_SIDE = 4096;   /* 2:1 全景图另说：整张图要裹满 360°，压到 1536 时 45° 视野只剩 ~190 真实像素，糊成一片 */
 
-  /* ---------- 图片 → dataURL（压到 1024 以内，别把接口撑爆） ---------- */
+  /* ---------- 图片 → dataURL ---------- */
   function readAsDataURL(file) {
     return new Promise((resolve, reject) => {
       if (!file || !/^image\//.test(file.type || '')) { reject(new Error('请选图片文件（png / jpg / webp）')); return; }
@@ -31,7 +32,20 @@
   }
   /* 连真尺寸和解码好的 Image 一起给（采样必须用原图，aspect 才对） */
   async function loadResized(file, maxSide) {
-    return resizeDataURL(await readAsDataURL(file), maxSide || MAX_SIDE);
+    const raw = await readAsDataURL(file);
+    const nat = await measureDataURL(raw);
+    /* 没显式给尺寸就按画幅自动选：2:1 认作全景图，保 4096 */
+    const ia = nat.w / (nat.h || 1);
+    const side = maxSide || (ia > 1.85 && ia < 2.15 ? PANO_SIDE : ENV_SIDE);
+    return resizeDataURL(raw, side);
+  }
+  function measureDataURL(dataURL) {
+    return new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onerror = () => reject(new Error('图片解码失败'));
+      im.onload = () => resolve({ w: im.naturalWidth, h: im.naturalHeight });
+      im.src = dataURL;
+    });
   }
   function resizeDataURL(dataURL, maxSide) {
     return new Promise((resolve, reject) => {
@@ -43,7 +57,7 @@
         const c = document.createElement('canvas'); c.width = w; c.height = h;
         const cx = c.getContext('2d');
         cx.drawImage(im, 0, 0, w, h);
-        try { resolve({ dataURL: c.toDataURL('image/jpeg', 0.82), w, h, img: im }); }
+        try { resolve({ dataURL: c.toDataURL('image/jpeg', w >= 3000 ? 0.87 : 0.82), w, h, img: im }); }
         catch (e) { reject(new Error('图片转码失败：' + e.message)); }
       };
       im.src = dataURL;
@@ -216,8 +230,8 @@
 
   /* ---------- 主流程：文件 → 结果 ---------- */
   async function fromFile(file, opts = {}) {
-    /* 环境图要当贴图铺进 3D，压太狠一放大就糊；AI 那张另出一版小的省 token */
-    const big = await loadResized(file, opts.maxSide || ENV_SIDE);
+    /* 环境图要当贴图铺进 3D，压太狠一放大就糊；2:1 全景会自动保 4096。AI 那张另出一版小的省 token */
+    const big = await loadResized(file, opts.maxSide);
     const smp = sampleImage(big.img, big.w, big.h);       // 采样用原图，aspect 才是真画幅
     const mode = opts.mode || 'auto';
     const api = (opts.settings && opts.settings.api) || {};
@@ -242,6 +256,11 @@
     res.imgW = big.w; res.imgH = big.h;
     res.samples = smp;
     res.env = envFromResult(res);
+    /* 真 360 全景本身就是一个房间：本地猜的那两面墙只会挡在照片前面 */
+    if (res.env.mode === 'sphere' && String(res.from).indexOf('本地') === 0 && (res.obj.scene.walls || []).length) {
+      res.obj.scene.walls = [];
+      res.issues.push('原图是 360 全景，不再叠本地猜的墙 —— 照片本身就是房间，要加墙在导演台里画');
+    }
     return res;
   }
 
