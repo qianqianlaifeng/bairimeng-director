@@ -26,11 +26,12 @@ export function openEnvImport(opts = {}) {
     title: '🖼 导入环境图（看图生成 3D 场景）',
     wide: true,
     body: `
-      <p class="dim" style="margin-top:0">把场景图（概念图 / 剧照 / 美术设定稿 / 实拍）拖进来，自动反推出导演台能编辑的 3D 景：房间尺寸、家具位置、人物站位、光位色温，还有对应这张图的机位视角。</p>
+      <p class="dim" style="margin-top:0">把场景图拖进来：<b>原图会直接铺成 3D 环境</b>（2:1 全景图 → 环境球，转视角就是在原地转头；普通图 → 立在景后面的背景板），
+      同时反推出导演台能编辑的白模景：房间尺寸、家具位置、人物站位、光位色温，还有对应这张图的机位视角。</p>
       <div id="eiDrop" class="ei-drop">
         <div class="ei-drop-ico">🖼</div>
         <div><b>把图片拖到这里</b>，或 <label class="ei-link">选文件<input type="file" id="eiFile" accept="image/*" style="display:none"></label></div>
-        <div class="ei-drop-tip">png / jpg / webp · 也可以直接 Ctrl+V 粘截图 · 图越清楚越准（最长边会压到 1024）</div>
+        <div class="ei-drop-tip">png / jpg / webp · 也可以直接 Ctrl+V 粘截图 · 最长边会压到 1536（2:1 的图认作全景图）</div>
       </div>
       <div id="eiPrevWrap" class="ei-prev" style="display:none"><img id="eiPrev" alt=""><div id="eiMeta" class="dim"></div></div>
       <div class="form-row" style="margin-top:10px"><label>补充说明（可选，越具体越准）</label>
@@ -39,6 +40,9 @@ export function openEnvImport(opts = {}) {
         <label><input type="radio" name="eiMode" value="auto" checked> 自动（有 AI 用 AI，没有走本地）</label>
         <label><input type="radio" name="eiMode" value="ai"> 只用 AI 视觉反推</label>
         <label><input type="radio" name="eiMode" value="local"> 只用本地起手景</label>
+      </div>
+      <div class="form-row ei-modes">
+        <label><input type="checkbox" id="eiEnv" checked> 把原图铺成 3D 环境（不勾就只出白模）</label>
       </div>
       <div id="eiApiHint" class="dim ei-api"></div>
       <div id="eiStatus" class="dim ei-status"></div>
@@ -98,9 +102,13 @@ export function openEnvImport(opts = {}) {
     const n = a => (a || []).length;
     const pal = ((res.samples && res.samples.palette) || []).slice(0, 5)
       .map(c => `<i class="ei-swatch" style="background:${c}"></i>`).join('');
+    const envTxt = res.env ? (res.env.mode === 'sphere'
+      ? `原图 2:1 → 认作<b>全景图</b>，铺成环境球（转视角 = 在原地转头）`
+      : `原图 ${(res.imgW || 0) }×${res.imgH} → 立成<b>背景板</b>挡在景后面`) : '';
     $('#eiOut').innerHTML = `
       <div class="card ei-result">
         <div><b>${esc(res.from)}</b> · 房 ${n(sc.rooms)} · 墙 ${n(sc.walls)} · 道具 ${n(sc.props)} · 人物 ${n(sc.persons)} · 光源 ${n(sc.lights)}${pal ? `<span class="ei-pal">取色 ${pal}</span>` : ''}</div>
+        ${envTxt ? `<div class="ei-env">🌄 ${envTxt}</div>` : ''}
         ${(res.issues || []).length ? `<div class="ei-issues">${res.issues.slice(0, 5).map(x => esc(x)).join('<br>')}</div>` : ''}
         ${res.note ? `<div class="ei-issues">💡 ${esc(res.note)}</div>` : ''}
       </div>`;
@@ -141,9 +149,11 @@ export function openEnvImport(opts = {}) {
         openSceneBuilder(shot || null, () => { }, shot ? {} : { library: true });
         if (!await waitDirector()) throw new Error('导演台没起来，刷新页面再试一次');
       }
+      const envOn = $('#eiEnv');
+      if (envOn && !envOn.checked) res.env = null;
       const msg = window.ENV_IMPORT.applyToDirector(res);
       m.close();
-      toast(msg + ' · 点「🔄 环绕」转一圈看，「📷 截图」出站位图', 'ok');
+      toast(msg + (res.env ? ' · 图已铺进 3D，点「🔄 环绕」转一圈看' : ' · 点「🔄 环绕」转一圈看'), 'ok');
       if (opts.onApplied) opts.onApplied(res);
     } catch (e) {
       $('#eiApply').disabled = false;
