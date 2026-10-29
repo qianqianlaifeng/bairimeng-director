@@ -372,7 +372,96 @@ function slimMnState(st) {
   return copy;
 }
 
-function saveAndClose() {
+/* ---------- 环境图原图：只进 IndexedDB，localStorage 里只留一个 key ----------
+   一张全景贴图压完也有 100~300KB，直接塞进 mnState 会被每个镜头复制一份，
+   几镜就把 5MB 的 localStorage 撑爆（表现是"保存成功但其实没存进去"）。 */
+function srcHash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i += 11) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36) + '_' + s.length;
+}
+function dataURLToBlob(u) {
+  const i = u.indexOf(',');
+  const bin = atob(u.slice(i + 1));
+  const arr = new Uint8Array(bin.length);
+  for (let k = 0; k < bin.length; k++) arr[k] = bin.charCodeAt(k);
+  return new Blob([arr], { type: (u.slice(5, i).split(';')[0] || 'image/jpeg') });
+}
+/* 存之前：src → IndexedDB，state 里只留 ref/hash（返回副本，不动正在编辑的那份） */
+export async function refEnvState(st) {
+  const e = st && st.scene && st.scene.env;
+  if (!e || !e.src || !/^data:/.test(e.src)) return st;
+  const copy = JSON.parse(JSON.stringify(st));
+  const ce = copy.scene.env, h = srcHash(e.src);
+  if (ce.ref && ce.hash === h) { delete ce.src; return copy; }
+  let key = null;
+  try { key = await window.__bdm.putImage(dataURLToBlob(e.src)); } catch (err) { key = null; }
+  if (key) { ce.ref = key; ce.hash = h; delete ce.src; }   /* IDB 挂了就不搬，宁可占点 localStorage */
+  return copy;
+}
+/* 打开时：ref → 原图（图丢了就把 env 摘掉，退回纯白模，别留一个黑背景） */
+function blobToDataURL(blob) {
+  return new Promise(res => {
+    const fr = new FileReader();
+    fr.onload = () => res(String(fr.result));
+    fr.onerror = () => res(null);
+    fr.readAsDataURL(blob);
+  });
+}
+export async function resolveEnvState(st) {
+  const e = st && st.scene && st.scene.env;
+  if (!e || e.src || !e.ref) return st;
+  let blob = null;
+  try { blob = await window.__bdm.getImage(e.ref); } catch (err) { blob = null; }
+  if (!blob) { delete st.scene.env; return st; }
+  e.src = await blobToDataURL(blob);
+  if (!e.src) delete st.scene.env;
+  return st;
+}
+/* 导出成 JSON 文件时把原图塞回去：ref 只是这台电脑 IndexedDB 的编号，换台机器就是死链。
+   返回改了多少处，让调用方能提示一句。 */
+export async function inlineEnvForExport(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 7 || !window.__bdm) return 0;
+  if (Array.isArray(node)) {
+    let n = 0;
+    for (const v of node) n += await inlineEnvForExport(v, depth + 1);
+    return n;
+  }
+  let n = 0;
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    if (k === 'env' && v && typeof v === 'object' && v.ref && !v.src) {
+      const url = await blobToDataURL(await window.__bdm.getImage(v.ref).catch(() => null));
+      if (url) { v.src = url; n++; }
+    } else {
+      n += await inlineEnvForExport(v, depth + 1);
+    }
+  }
+  return n;
+}
+/* 导入的反方向：文件里带的原图立刻转存进 IndexedDB，别让它躺在 localStorage 里占额度 */
+export async function refEnvEverywhere(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 7 || !window.__bdm) return 0;
+  if (Array.isArray(node)) {
+    let n = 0;
+    for (const v of node) n += await refEnvEverywhere(v, depth + 1);
+    return n;
+  }
+  let n = 0;
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    if (k === 'env' && v && typeof v === 'object' && v.src && !v.ref && /^data:/.test(v.src)) {
+      let key = null;
+      try { key = await window.__bdm.putImage(dataURLToBlob(v.src)); } catch (e) { key = null; }
+      if (key) { v.ref = key; v.hash = srcHash(v.src); delete v.src; n++; }
+    } else {
+      n += await refEnvEverywhere(v, depth + 1);
+    }
+  }
+  return n;
+}
+
+async function saveAndClose() {
   const st = window.miaoningGetScene ? window.miaoningGetScene() : null;
   if (!st) { toast('导演台还没准备好，稍等一下再试', 'warn'); return; }
   /* 存镜头前把穿家具的走位绕一遍：预演和导出的 mp4 里人不会从茶几/沙发里穿过去 */
@@ -386,11 +475,12 @@ function saveAndClose() {
   const has = scene.objects.length > 0;
   /* 独立建景模式（从场景库进入，没有绑定镜头）：只入库 */
   if (libraryMode || !curShot) { saveToLibrary(st, scene, has); return; }
+  const stSave = await refEnvState(st);
   window.__bdm.updateShot(curShot.id, {
     scene: has ? scene : null,
     /* 2026-10-26：额外存一份导演台原生状态。
        否则「房间」保存后再打开会变成 4 面墙（房间概念丢失），改不动了。 */
-    mnState: has ? slimMnState(st) : null,
+    mnState: has ? slimMnState(stSave) : null,
     sceneId: null,       // 本镜自己改过的场景 → 与场景库条目解绑（库里的仍保留）
     ...(has ? { cameraMove: 'free' } : {}),
   });
@@ -423,10 +513,11 @@ async function saveToLibrary(st0, scene0, has0) {
   if (name == null) return;
   const shots = (st.directorShots || []);
   const thumb = shots.length ? (shots[shots.length - 1].image || shots[shots.length - 1].url) : null;
-  const it = window.__bdm.saveScene({ id: editing ? editing.id : undefined, name: name.trim() || defName, scene, mnState: st, thumb: typeof thumb === 'string' ? thumb : null });
+  const stRef = await refEnvState(st);
+  const it = window.__bdm.saveScene({ id: editing ? editing.id : undefined, name: name.trim() || defName, scene, mnState: stRef, thumb: typeof thumb === 'string' ? thumb : null });
   /* 当前镜头同时指向这条场景，便于「这个景用在哪几镜」统计 */
   if (curShot && !libraryMode) {
-    window.__bdm.updateShot(curShot.id, { scene, mnState: slimMnState(st), sceneId: it.id, cameraMove: 'free' });
+    window.__bdm.updateShot(curShot.id, { scene, mnState: slimMnState(stRef), sceneId: it.id, cameraMove: 'free' });
   }
   window.__bdm.addXP(4, '存入场景库');
   attachLatestShot(st);
@@ -489,7 +580,7 @@ export function openSceneBuilder(shot, onSaved, opts = {}) {
       const seedShot = curShot ? curShot.scene : (libItem ? libItem.scene : null);
       const seedState = (curShot && curShot.mnState && curShot.mnState.scene) ? curShot.mnState
         : (libItem && libItem.mnState && libItem.mnState.scene) ? libItem.mnState : null;
-      const st = seedState || shotSceneToMn(seedShot, curShot || libItem || { desc: '新场景' });
+      const st = await resolveEnvState(seedState || shotSceneToMn(seedShot, curShot || libItem || { desc: '新场景' }));
       if (libItem && st && st.scene) st.title = libItem.name;
       window.miaoningSeed(st);
     } catch (e) {
