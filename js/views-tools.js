@@ -435,7 +435,7 @@ export function renderSettings(container) {
 
     <div class="card set-card about-card">
       <div class="card-title">🌙 关于</div>
-      <p>白日梦导演台 v1.14.0 · 纯前端 AI 影片导演工作台</p>
+      <p>白日梦导演台 v1.15.0 · 纯前端 AI 影片导演工作台</p>
       <p class="dim">剧本 → 分镜 → 运镜预演 → 动态分镜 → 剪辑 → 提示词 → 审核，一站式完成 AI 短片前期制作。<br>
       无后端、无追踪、无依赖，部署在 GitHub Pages 上，离线也能用。</p>
     </div>`;
@@ -493,6 +493,13 @@ export function renderSettings(container) {
     try {
       const data = JSON.parse(await f.text());
       store.importAll(data);
+      /* 文件里若带着环境图原图，立刻转存进 IndexedDB：
+         留在 localStorage 里几套景就能把 5MB 撑爆（表现为"导入成功但没存住"） */
+      try {
+        const { refEnvEverywhere } = await import('./builder.js');
+        const n = await refEnvEverywhere(store.projects);
+        if (n) { store.persistProjects(); toast('已把 ' + n + ' 张环境图转存到本机图片库 🌄', 'ok'); }
+      } catch (e) { /* 转存失败不影响导入本身 */ }
       toast('备份已导入 ✅ 页面即将刷新', 'ok');
       setTimeout(() => location.reload(), 900);
     } catch (e) { toast('导入失败：' + e.message, 'warn'); }
@@ -532,9 +539,20 @@ export function openProjectExport() {
         <button class="btn btn-ghost" data-k="prompts">🪄 提示词清单 TXT</button>
       </div>`,
   });
-  m.body.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
+  m.body.querySelectorAll('[data-k]').forEach(b => b.onclick = async () => {
     const k = b.dataset.k;
-    if (k === 'json') downloadText(`${p.name}.json`, JSON.stringify({ app: 'bairimeng-director', ...p }, null, 2));
+    if (k === 'json') {
+      /* 环境图平时只在本机 IndexedDB 里留个编号，导出必须把原图塞回文件里，
+         否则这份 JSON 换台电脑 / 换浏览器打开就只剩白模。 */
+      let out;
+      try {
+        out = JSON.parse(JSON.stringify(p));
+        const { inlineEnvForExport } = await import('./builder.js');
+        const n = await inlineEnvForExport(out);
+        if (n) toast('已把 ' + n + ' 张环境图原图打进文件里 🌄', 'ok');
+      } catch (e) { out = JSON.parse(JSON.stringify(p)); }
+      downloadText(`${p.name}.json`, JSON.stringify({ app: 'bairimeng-director', ...out }, null, 2));
+    }
     if (k === 'csv') downloadText(`${p.name}-分镜表.csv`, '\ufeff' + toCSV(p));
     if (k === 'md') downloadText(`${p.name}-分镜表.md`, toMarkdown(p));
     if (k === 'prompts') downloadText(`${p.name}-提示词.txt`, toPromptList(p));
