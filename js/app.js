@@ -71,7 +71,7 @@ const appEl = el(`<div class="app">
       <button class="btn btn-ghost btn-sm" id="btnCheckin">📅 签到</button>
     </header>
     <div class="content" id="viewRoot"></div>
-    <footer class="foot dim">白日梦导演台 v1.14.0 · 场景搭建可右键操作 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
+    <footer class="foot dim">白日梦导演台 v1.15.0 · 环境图能铺成 3D 环境 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
   </main>
 </div>`);
 document.body.appendChild(appEl);
@@ -256,6 +256,11 @@ setTimeout(() => { store.checkIn(true); renderXPMini(); }, 1200);
 /* 路由启动：支持 #/view 直达 */
 const initial = (location.hash.match(/^#\/(\w+)/) || [])[1];
 navigate(VIEWS[initial] ? initial : 'home');
+
+/* 本机存储写爆了：以前只是控制台 warn，用户以为存住了，刷新才发现丢活儿 */
+window.addEventListener('bdm-save-failed', () => {
+  toast('本机存储满了，这次改动没存上 —— 删掉几镜的镜头册截图、或把场景的环境图清一下再试', 'warn');
+});
 
 /* Service Worker（离线可用） */
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
