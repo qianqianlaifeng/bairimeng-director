@@ -31,7 +31,7 @@ export function openEnvImport(opts = {}) {
       <div id="eiDrop" class="ei-drop">
         <div class="ei-drop-ico">🖼</div>
         <div><b>把图片拖到这里</b>，或 <label class="ei-link">选文件<input type="file" id="eiFile" accept="image/*" style="display:none"></label></div>
-        <div class="ei-drop-tip">png / jpg / webp · 也可以直接 Ctrl+V 粘截图 · 最长边会压到 1536（2:1 的图认作全景图）</div>
+        <div class="ei-drop-tip">png / jpg / webp · 也可以直接 Ctrl+V 粘截图 · 2:1 全景图保 4096，其它压到 1536</div>
       </div>
       <div id="eiPrevWrap" class="ei-prev" style="display:none"><img id="eiPrev" alt=""><div id="eiMeta" class="dim"></div></div>
       <div class="form-row" style="margin-top:10px"><label>补充说明（可选，越具体越准）</label>
