@@ -1,4 +1,9 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.17.0（2026-10-29）：人物不再浮空 —— ① 每个人 / 每件道具脚下都有一片接触阴影
+                          （贴地半透明椭圆盘，单独一遍 blend、不写深度，所以不会把脚埋进地里；
+                          坐着的人不叠，阴影归椅子）。实测脚前那块地亮度 251 → 109。
+                          ② 环境图不铺白模地面时，那圈有边的网格"筏子"也一起收掉 —— 它才是浮空感的主因。
+                          ③ 环境球/柱面多一条「上下对齐」滑杆（±40%），把照片里的地面挪到人物脚边。
    v1.16.0（2026-10-29）：① 🌄 全景图终于看得清了 —— 2:1 全景不再压到 1536（那等于 45° 视野只剩 ~190 真实像素，
                           糊成一片米色），改保 4096 并开 mipmap + 横向 REPEAT（接缝也没了）；
                           环境球模式默认连房间地板一起不铺，露出照片自己的地面；
@@ -1417,6 +1422,7 @@ function renderEnvPanel() {
   const mode = e.mode || 'sphere';
   const board = mode === 'board';
   const note = mode === 'sphere' ? '图裹成一圈当世界：左右拖 = 转头，上下拖 = 抬头低头。要 2:1 全景图才对得上。'
+    + '觉得人踩空，就拖下面的「上下对齐」把照片的地面挪到脚边。'
     : mode === 'cyl' ? '只把图横向裹一圈，纵向按俯仰摊开 —— 普通图想转着看就用它，上下边缘会拉伸。'
       : '图立成一块布景板挡在景后面，转视角时它有视差，能推远近、改宽窄、转方向。';
   return `<section class="mn-section">
@@ -1436,6 +1442,7 @@ function renderEnvPanel() {
       + envSlider('mnEnvBy', '离地高度', 0, 20, 0.5, e.by == null ? 4 : e.by, 'm')
       + envSlider('mnEnvBrot', '板面转向', -180, 180, 5, e.brot || 0, '°')
       : envSlider('mnEnvYaw', '水平旋转', -180, 180, 1, e.yaw || 0, '°')
+      + envSlider('mnEnvVOff', '上下对齐', -40, 40, 1, Math.round((e.vOff || 0) * 100), '%')
       + (mode === 'cyl' ? envSlider('mnEnvV', '纵向铺开', 0.2, 1.5, 0.02, e.vSpread == null ? 0.62 : e.vSpread, '') : '')}
     ${envSlider('mnEnvBright', '亮度', 0.3, 2, 0.05, e.bright == null ? 1 : e.bright, '×')}
     <div class="mn-chip-row"><button class="mn-chip" id="mnEnvPick">${icon('upload', 's12')}换一张</button></div>
@@ -1480,16 +1487,17 @@ function bindEnvPanel() {
   const fl = f('mnEnvFloor');
   if (fl) fl.onchange = () => { e.floor = fl.checked; paint3D(); saveSoon(); };
   $$('[data-envmode]', box).forEach(b => b.onclick = () => { e.mode = b.dataset.envmode; renderRight(); paint3D(); saveSoon(); });
-  const rng = (id, key) => {
+  const rng = (id, key, scale) => {
     const el = f(id); if (!el) return;
     el.oninput = () => {
-      e[key] = +el.value;
+      e[key] = +el.value * (scale || 1);
       const lab = el.parentElement.querySelector('strong');
       if (lab) lab.textContent = el.value + (el.dataset.unit || '');
       paint3D(); saveSoon();
     };
   };
   rng('mnEnvYaw', 'yaw'); rng('mnEnvBright', 'bright'); rng('mnEnvV', 'vSpread');
+  rng('mnEnvVOff', 'vOff', 0.01);
   rng('mnEnvBw', 'bw'); rng('mnEnvBx', 'bx'); rng('mnEnvBz', 'bz'); rng('mnEnvBy', 'by'); rng('mnEnvBrot', 'brot');
 }
 
