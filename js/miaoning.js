@@ -1,4 +1,14 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.16.0（2026-10-29）：① 🌄 全景图终于看得清了 —— 2:1 全景不再压到 1536（那等于 45° 视野只剩 ~190 真实像素，
+                          糊成一片米色），改保 4096 并开 mipmap + 横向 REPEAT（接缝也没了）；
+                          环境球模式默认连房间地板一起不铺，露出照片自己的地面；
+                          本地起手不再往全景前面叠那两面猜出来的墙（照片本身就是房间）。
+                          ②  四肢关节可编辑 —— 人物面板多一组九条滑杆（上身前倾 / 左右上臂 / 左右肘 /
+                          左右大腿 / 左右膝，单位度，5° 一档），3D 里还能**直接点着胳膊腿拖**；
+                          「回预设」一键还原，「套给同名角色」把这套动作复制给同名的其他人。
+                          关节值落在 p.joints 上覆盖姿势预设，白模预演 / 动态分镜（cameraSim）同步吃这套值。
+                          ③ 环境图原图不再进 undo 快照（一张 4096 全景 base64 有 1MB+，攒 60 条就是内存炸弹），
+                          撤销后原图照样在。
    v1.15.0（2026-10-29）：🌄 环境图真的变成 3D 环境 —— 右侧多一个「环境图」页签，原图按画幅自动铺法：
                           2:1 = 等距柱状全景 → 环境球（左右拖 = 转头、上下拖 = 抬头低头，转视角看到的
                           就是照片里那个方向）；普通画幅 → 立在景后面的背景板（板宽/左右/前后/离地/转向都能拖）。
@@ -288,21 +298,37 @@ async function saveNow(id, st) {
     }
   } catch (e) { /* 存储失败不打断操作 */ }
 }
+/* 快照不带环境图原图：一张 4096 全景 base64 有 2~3MB，undo 攒满 60 条就是 180MB 内存 */
+function snapState(st, snapStr) {
+  if (snapStr) return snapStr;
+  const e = st && st.scene && st.scene.env;
+  if (!e || !e.src) return JSON.stringify(st);
+  const keep = e.src;
+  e.src = '';
+  try { return JSON.stringify(st); } finally { e.src = keep; }
+}
+function loadState(s, live) {
+  const st = JSON.parse(s);
+  const e = st && st.scene && st.scene.env;
+  const le = live && live.scene && live.scene.env;
+  if (e && !e.src && le && le.src) e.src = le.src;   /* 原图没进快照，从当前状态接回来 */
+  return st;
+}
 function pushUndo(snapStr) {
-  MN.undo.push(snapStr || JSON.stringify(MN.state));
+  MN.undo.push(snapState(MN.state, snapStr));
   if (MN.undo.length > 60) MN.undo.shift();
   MN.redo = [];
 }
 function undo() {
   if (!MN.undo.length) return toast('没有可撤销的');
-  MN.redo.push(JSON.stringify(MN.state));
-  MN.state = JSON.parse(MN.undo.pop());
+  MN.redo.push(snapState(MN.state));
+  MN.state = loadState(MN.undo.pop(), MN.state);
   MN.sel = null; renderAll(); saveSoon();
 }
 function redo() {
   if (!MN.redo.length) return toast('没有可重做的');
-  MN.undo.push(JSON.stringify(MN.state));
-  MN.state = JSON.parse(MN.redo.pop());
+  MN.undo.push(snapState(MN.state));
+  MN.state = loadState(MN.redo.pop(), MN.state);
   MN.sel = null; renderAll(); saveSoon();
 }
 
@@ -442,6 +468,19 @@ function bindShell() {
     window.MN3D.onRotateStart = () => { pushUndo(); };
     window.MN3D.onRotate = () => { };
     window.MN3D.onRotateEnd = () => { refitSeats(); refreshSel(); renderAll(); saveSoon(); toast('已旋转（Ctrl+Z 可撤销）'); };
+    /* 3D 里直接拖四肢摆姿势：按下记一次快照，拖动只重绘 3D，松手才刷面板 */
+    window.MN3D.onPoseStart = () => { pushUndo(); };
+    window.MN3D.onPoseJoint = (pid, key, deg) => {
+      const o = findObj('person', pid); if (!o) return;
+      o.joints = o.joints || {};
+      o.joints[key] = deg;
+      saveSoon(); paint3D();
+    };
+    window.MN3D.onPoseEnd = (pid, key, changed) => {
+      if (!changed) { const o = findObj('person', pid); if (o) { delete o.joints; } }
+      refreshSel(); renderRight(); paint(); saveSoon();
+      if (changed) toast('关节已调（' + key + '）· Ctrl+Z 可撤销');
+    };
     window.MN3D.onContext = (kind, id, x, y) => {
       if (kind) { selectOnly(kind, id); refreshSel(); }
       openCtx(x, y, kind ? { kind, id } : null);
@@ -1078,6 +1117,23 @@ const PRESETS = (window.MN_PROP_ORDER || []).map(k => {
   return { kind: k, name: K.name || k, w: K.w || 1, d: K.d || 1, h: K.h || 1, color: K.color || '#d9b382' };
 });
 
+/* 四肢关节：预设只有六个档，剧情里那些动作得逐关节调 */
+function renderJoints(o) {
+  const J = (window.MN3D && window.MN3D.JOINTS) || [];
+  if (!J.length) return '';
+  const cur = window.MN3D.jointDeg(o);
+  const edited = !!(o.joints && Object.keys(o.joints).length);
+  const row = d => `<label class="mn-field"><span>${d.name}<strong>${cur[d.k]}°</strong></span>
+    <input type="range" class="mn-range" data-joint="${d.k}" min="${d.min}" max="${d.max}" step="${d.step}" value="${Math.max(d.min, Math.min(d.max, cur[d.k]))}" /></label>`;
+  return `<div class="mn-joint-head"><span>四肢关节</span><small>3D 里直接拖胳膊也行</small></div>
+    <div class="mn-joint-grid">${J.map(row).join('')}</div>
+    <p class="mn-help-para">正面胳膊和胸口在屏幕上会叠在一起，拖的时候先转到侧面再点你要的那条。</p>
+    <div class="mn-chip-row">
+      <button class="mn-chip" data-act="jointreset">${icon('undo-2', 's12')}回「${o.pose || '站立'}」预设</button>
+      ${edited ? `<button class="mn-chip" data-act="jointcopy">${icon('copy', 's12')}套给同名角色</button>` : ''}
+    </div>`;
+}
+
 function renderObjPanel() {
   const sel = MN.sel && findObj(MN.sel.kind, MN.sel.id) ? MN.sel : null;
   if (!sel) return renderLibrary();
@@ -1139,6 +1195,7 @@ function renderObjPanel() {
     <label class="mn-field"><span>人物姿态</span>
       <select data-f="pose">${['站立', '走路', '坐下', '招手', '躺下', '运动'].map(p => `<option ${o.pose === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
     </label>
+    ${renderJoints(o)}
     <label class="mn-field"><span>座位<strong>${o.sitOn ? ('已坐上「' + esc((findProp(o.sitOn.id) || {}).name || '家具') + '」· 坐面 ' + ((o.sitH || 0) * 100).toFixed(0) + 'cm') : '未入座'}</strong></span></label>
     <div class="mn-chip-row">
       ${o.sitOn
@@ -1255,9 +1312,31 @@ function bindObjPanel() {
     o[b.dataset.sw] = b.dataset.c;
     renderRight(); paint(); saveSoon();
   });
+  /* 四肢关节滑杆：写进 o.joints（度），渲染时覆盖在姿势预设之上 */
+  $$('[data-joint]', box).forEach(inp => {
+    const k = inp.dataset.joint;
+    inp.addEventListener('input', () => {
+      if (!o._jointTouched) { pushUndo(); o._jointTouched = true; }
+      o.joints = o.joints || {};
+      o.joints[k] = +inp.value;
+      const s = inp.parentElement.querySelector('strong');
+      if (s) s.textContent = inp.value + '°';
+      paint(); saveSoon();
+    });
+  });
   $$('[data-act]', box).forEach(b => b.onclick = () => {
     const a = b.dataset.act;
-    if (a === 'del') { delSel(); }
+    if (a === 'jointreset') {
+      pushUndo(); delete o.joints; renderRight(); paint(); saveSoon(); toast('已回到「' + (o.pose || '站立') + '」预设姿势');
+    }
+    else if (a === 'jointcopy') {
+      const same = (MN.state.scene.persons || []).filter(p => p.id !== o.id && p.name && p.name === o.name);
+      if (!same.length) return toast('没有同名角色', 'warn');
+      pushUndo();
+      same.forEach(p => { p.joints = JSON.parse(JSON.stringify(o.joints || {})); });
+      renderRight(); paint(); saveSoon(); toast('已把这套关节套给 ' + same.length + ' 个同名角色', 'ok');
+    }
+    else if (a === 'del') { delSel(); }
     else if (a === 'hide') { hideSel(); }
     else if (a === 'seat') { seatSomeoneOn(o.id); }
     else if (a === 'seatnear') { sitSelToNearestSeat(); }
@@ -1368,7 +1447,7 @@ async function mnEnvSetFile(fl) {
   if (!EI) { toast('环境图模块没加载上', 'warn'); return; }
   try {
     toast('正在读图…');
-    const big = await EI.loadResized(fl, 1536);
+    const big = await EI.loadResized(fl);
     const env = EI.envFromResult({ obj: { scene: MN.state.scene }, imgW: big.w, imgH: big.h, dataURL: big.dataURL });
     pushUndo();
     MN.state.scene.env = env;
