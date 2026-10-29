@@ -240,6 +240,7 @@ function buildOverlay() {
       <button class="sb-mn-fold" id="sbMnFold" title="收起工具条（挡画面时用）">▾</button>
       <span class="sb-mn-dock-tip" id="sbMnTip">搭建好后点「保存到镜头」——运镜预演 / 动态分镜就会用这个场景</span>
       <button class="btn btn-ghost btn-sm" id="sbMnAi">🤖 AI 搭景</button>
+      <button class="btn btn-ghost btn-sm" id="sbMnEnv" title="导入一张场景图，看图反推成 3D 景">🖼 环境图</button>
       <button class="btn btn-ghost btn-sm" id="sbMnLib">📚 存入场景库</button>
       <button class="btn btn-primary btn-sm" id="sbMnSave">💾 保存到镜头</button>
       <button class="btn btn-ghost btn-sm" id="sbMnClose">直接返回</button>
@@ -253,6 +254,10 @@ function buildOverlay() {
   /* ⚠️ 不能直接绑 saveToLibrary：click 事件对象会被当成 st0 传进去，场景被判空 */
   ovEl.querySelector('#sbMnLib').onclick = () => saveToLibrary();
   ovEl.querySelector('#sbMnAi').onclick = () => runAiBuild();
+  ovEl.querySelector('#sbMnEnv').onclick = async () => {
+    const { openEnvImport } = await import('./env-import-ui.js');
+    openEnvImport({ inDirector: true });
+  };
   ovEl.querySelector('#sbMnClose').onclick = () => { closeOverlay(); };
   ovEl.querySelector('#sbMnFold').onclick = () => setFolded(!ovEl.classList.contains('folded'));
   ovEl.querySelector('#sbMnFoldShot').onclick = () => window.mnSnapCurrent && window.mnSnapCurrent();
@@ -339,6 +344,7 @@ async function runAiBuild() {
 
 function closeOverlay() {
   if (!ovEl) return;
+  window.mnOrbitStop && window.mnOrbitStop();   // 关掉浮层要停掉环绕，否则 rAF 一直在后台跑
   ovEl.classList.remove('open');
   document.body.classList.remove('sb-mn-open');
 }
