@@ -12,7 +12,8 @@
 (function () {
   'use strict';
 
-  const MAX_SIDE = 1024;
+  const MAX_SIDE = 1024;   /* 发给 AI 的那版 */
+  const ENV_SIDE = 1536;   /* 存进场景当 3D 环境贴图的那版 */
 
   /* ---------- 图片 → dataURL（压到 1024 以内，别把接口撑爆） ---------- */
   function readAsDataURL(file) {
@@ -215,7 +216,8 @@
 
   /* ---------- 主流程：文件 → 结果 ---------- */
   async function fromFile(file, opts = {}) {
-    const big = await loadResized(file, opts.maxSide);
+    /* 环境图要当贴图铺进 3D，压太狠一放大就糊；AI 那张另出一版小的省 token */
+    const big = await loadResized(file, opts.maxSide || ENV_SIDE);
     const smp = sampleImage(big.img, big.w, big.h);       // 采样用原图，aspect 才是真画幅
     const mode = opts.mode || 'auto';
     const api = (opts.settings && opts.settings.api) || {};
@@ -228,7 +230,8 @@
       res.issues.unshift('没配 AI 接口，改走本地起手景');
     } else {
       try {
-        res = await analyzeByAI(big.dataURL, opts.hint, opts.settings, big.w / big.h);
+        const aiURL = Math.max(big.w, big.h) > 1030 ? (await resizeDataURL(big.dataURL, 1024)).dataURL : big.dataURL;
+        res = await analyzeByAI(aiURL, opts.hint, opts.settings, big.w / big.h);
       } catch (e) {
         if (mode === 'ai') throw e;
         res = localScene(smp, opts.hint);
@@ -238,7 +241,27 @@
     res.dataURL = big.dataURL;
     res.imgW = big.w; res.imgH = big.h;
     res.samples = smp;
+    res.env = envFromResult(res);
     return res;
+  }
+
+  /* ---------- 把原图变成 3D 环境 ----------
+     2:1 画幅 = 等距柱状全景图 → 环境球，转视角就是在原地转头；
+     其它画幅（概念图 / 剧照 / 实拍）→ 背景板立在景后面，转视角能看到它是"立着的"。 */
+  function envFromResult(res) {
+    const w = res.imgW || 16, h = res.imgH || 9, ia = w / (h || 1);
+    const r = (res.obj.scene.rooms || [])[0] || { x: 2, y: 2, w: 8, d: 6 };
+    const cx = r.x + r.w / 2, cz = r.y + r.d / 2;
+    const pano = ia > 1.85 && ia < 2.15;
+    const bw = Math.round(Math.max(r.w, r.d) * 2.2 * 10) / 10;
+    return {
+      on: true,
+      mode: pano ? 'sphere' : 'board',
+      src: res.dataURL,
+      yaw: 0, bright: 1, vSpread: 0.62,
+      bx: Math.round(cx * 10) / 10, bz: Math.round((r.y - bw * 0.42) * 10) / 10,
+      by: Math.round(bw / ia / 2 * 10) / 10, bw: bw, brot: 0, opacity: 1,
+    };
   }
 
   /* ---------- 落到导演台（只注入草稿，不落库） ---------- */
@@ -246,6 +269,13 @@
     const A = window.AI_SCENE;
     const data = { scene: res.obj.scene, sun: res.obj.sun, camera: res.obj.camera };
     const msg = window.miaoningAPI.importAiData(data, 'model').msg;   // 'model' 只换场景，保留机位册
+    /* 环境图本体（全景球 / 背景板）跟着景一起装上 —— 这一步才是"能转着看的 3D 场景" */
+    try {
+      if (res.env && res.env.src && window.MN && window.MN.state) {
+        window.MN.state.scene.env = res.env;
+        if (window.MN.state.view && window.MN.state.view.mode !== '3d' && typeof window.setMode === 'function') window.setMode('3d');
+      }
+    } catch (e) { console.warn('[环境图] 环境贴图应用失败', e); }
     /* 机位：按参考图视角推进镜头册并跳过去 */
     try {
       const cam = A && A.toDirectorCam ? A.toDirectorCam(res.obj.camera, res.box || { cx: 5, cy: 4 }) : null;
@@ -263,5 +293,5 @@
     return msg;
   }
 
-  window.ENV_IMPORT = { fileToDataURL, loadResized, resizeDataURL, sampleImage, analyzeByAI, localScene, fromFile, applyToDirector, visionSys, visionUser, warmOrCool };
+  window.ENV_IMPORT = { fileToDataURL, loadResized, resizeDataURL, sampleImage, analyzeByAI, localScene, fromFile, applyToDirector, envFromResult, visionSys, visionUser, warmOrCool };
 })();
