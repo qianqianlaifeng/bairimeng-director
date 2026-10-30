@@ -418,7 +418,35 @@
     if (capBot) cap(rings[0], false);
     if (capTop) cap(rings[rings.length - 1], true);
   }
-  /* 椭球：肩 / 肘 / 膝 / 髋的关节球、头、手 */
+  /* 连续放样管：rings 里每一圈都带自己的关节链和左右偏移。
+     同一条肢体从根到梢是一张连续曲面 —— 弯折处两边共用同一圈，物理上不存在接缝。 */
+  function pushChainJ(g, rings, seg, yaw, tx, ty, tz, col, bodyRz, bodyDy, capEnd) {
+    const P = (r, a) => xfPerson([Math.cos(a) * r.rx, r.y, (r.z0 || 0) + Math.sin(a) * r.rz], r.jt, bodyRz, bodyDy, yaw, tx, ty, tz);
+    const N = (r, a) => xfNrm(norm([
+      Math.cos(a) / Math.max(0.004, r.rx), 0, Math.sin(a) / Math.max(0.004, r.rz),
+    ]), r.jt, bodyRz, yaw);
+    for (let k = 0; k < rings.length - 1; k++) {
+      const A = rings[k], B = rings[k + 1];
+      for (let i = 0; i < seg; i++) {
+        const a0 = (i / seg) * TAU, a1 = ((i + 1) / seg) * TAU;
+        const p00 = P(A, a0), p10 = P(A, a1), p01 = P(B, a0), p11 = P(B, a1);
+        const n00 = N(A, a0), n10 = N(A, a1), n01 = N(B, a0), n11 = N(B, a1);
+        emitV(g, p00, n00, col); emitV(g, p10, n10, col); emitV(g, p11, n11, col);
+        emitV(g, p00, n00, col); emitV(g, p11, n11, col); emitV(g, p01, n01, col);
+      }
+    }
+    if (capEnd) {
+      const R = rings[rings.length - 1];
+      const c = xfPerson([0, R.y, R.z0 || 0], R.jt, bodyRz, bodyDy, yaw, tx, ty, tz);
+      const n = xfNrm([0, -1, 0], R.jt, bodyRz, yaw);
+      for (let i = 0; i < seg; i++) {
+        const a0 = (i / seg) * TAU, a1 = ((i + 1) / seg) * TAU;
+        emitV(g, c, n, col); emitV(g, P(R, a1), n, col); emitV(g, P(R, a0), n, col);
+      }
+    }
+  }
+
+  /* 椭球：头 / 手 / 关节 */
   function pushSphJ(g, ctr, rx, ry, rz, latN, lonN, jt, yaw, tx, ty, tz, col, bodyRz, bodyDy) {
     const P = (la, lo) => xfPerson([
       ctr[0] + Math.cos(lo) * Math.sin(la) * rx,
@@ -651,16 +679,25 @@
 
       /* 腿：髋球 + 锥筒大腿 + 膝球 + 锥筒小腿 + 脚 */
       for (const s of [1, -1]) {
-        const hj = hip(s), kj = knee(s), jtLeg = [hj, kj], z = s * Z;
-        part('hip' + SD(s), () => {
-          ball(col, [0, 0.855, z], 0.078, [hj]);
-          tube(col, 0.88, 0.46, 0.080, 0.056, [hj]);          /* 两头各插进髋球/膝球 */
-        });
+        const hj = hip(s), kj = knee(s), z = s * Z;
+        /* 从骨盆内部一路排到脚踝：髋部那几圈往里收，直接长进身体，根上就没有"接口" */
+        const rings = [
+          { y: 0.915 * HS, rx: 0.088 * RL, rz: 0.086 * RL, z0: s * 0.045 * BPD.W, jt: [] },
+          { y: 0.870 * HS, rx: 0.086 * RL, rz: 0.084 * RL, z0: s * 0.078 * BPD.W, jt: [hj] },
+          { y: 0.780 * HS, rx: 0.078 * RL, rz: 0.076 * RL, z0: s * 0.096 * BPD.W, jt: [hj] },
+          { y: 0.640 * HS, rx: 0.066 * RL, rz: 0.064 * RL, z0: s * 0.098 * BPD.W, jt: [hj] },
+          { y: 0.505 * HS, rx: 0.057 * RL, rz: 0.056 * RL, z0: s * 0.098 * BPD.W, jt: [hj] },
+          { y: 0.505 * HS, rx: 0.057 * RL, rz: 0.056 * RL, z0: s * 0.098 * BPD.W, jt: [hj, kj] },
+          { y: 0.400 * HS, rx: 0.056 * RL, rz: 0.055 * RL, z0: s * 0.098 * BPD.W, jt: [hj, kj] },
+          { y: 0.250 * HS, rx: 0.042 * RL, rz: 0.042 * RL, z0: s * 0.098 * BPD.W, jt: [hj, kj] },
+          { y: 0.135 * HS, rx: 0.033 * RL, rz: 0.036 * RL, z0: s * 0.098 * BPD.W, jt: [hj, kj] },
+          { y: 0.075 * HS, rx: 0.040 * RL, rz: 0.046 * RL, z0: s * 0.098 * BPD.W, jt: [hj, kj] },
+        ];
+        part('hip' + SD(s), () => pushChainJ(g, rings.slice(0, 5), 10, a, cx, 0, cz, col, bodyRz, dyS, false));
         part('knee' + SD(s), () => {
-          ball(col, [0, 0.505, z], 0.058, jtLeg);
-          tube(col, 0.56, 0.09, 0.057, 0.033, jtLeg);         /* 上端埋进膝球，下端埋进踝球 */
-          ball(col, [0, 0.085, z], [0.038, 0.048, 0.038], jtLeg);
-          box(shoe, [0.042, 0.034, z], [0.092, 0.052, 0.051], jtLeg);   /* 鞋面顶到踝球里 */
+          pushChainJ(g, rings.slice(4), 10, a, cx, 0, cz, col, bodyRz, dyS, true);
+          /* 鞋：踝口那圈埋进鞋面里，脚底面贴地 */
+          box(shoe, [0.045, 0.036, s * 0.098 * BPD.W], [0.094, 0.036, 0.052], [hj, kj]);
         });
       }
       /* 躯干：放样筒。腰围跟着体型走 —— 胖的人腰不收，瘦的人收得更狠 */
@@ -679,20 +716,32 @@
       });
       /* 肩 / 上臂 / 肘 / 前臂 / 手 */
       for (const s of [1, -1]) {
-        const sj = sh(s), ej = el(s), z = s * 0.150 * BPD.W;
-        part('sh' + SD(s), () => {
-          /* 三角肌：一半埋在胸廓里，一半盖住上臂根 —— 肩肘不再像挂上去的 */
-          ball(col, [0, 1.288, s * 0.128 * BPD.W], [0.074, 0.080, 0.076], [...leanJ, sj]);
-          tube(col, 1.30, 1.06, 0.052, 0.040, [...leanJ, sj]);
-        });
-        part('el' + SD(s), () => {
-          ball(col, [0, 1.105, z], 0.041, [...leanJ, sj, ej]);
-          tube(col, 1.15, 0.87, 0.040, 0.028, [...leanJ, sj, ej]);   /* 上端进肘球、下端进手掌 */
-          ball(skin, [0.012, 0.845, z], [0.038, 0.056, 0.027], [...leanJ, sj, ej]);
-        });
+        const sj = sh(s), ej = el(s);
+        const zW = 0.150 * BPD.W;
+        const SE = [...leanJ, sj], SEE = [...leanJ, sj, ej];
+        const armRings = [
+          { y: 1.340 * HS, rx: 0.052 * RL, rz: 0.054 * RL, z0: s * 0.070 * BPD.W, jt: leanJ },      // 埋在胸廓里
+          { y: 1.310 * HS, rx: 0.064 * RL, rz: 0.066 * RL, z0: s * zW * 0.72, jt: SE },             // 三角肌
+          { y: 1.270 * HS, rx: 0.062 * RL, rz: 0.062 * RL, z0: s * zW * 0.94, jt: SE },
+          { y: 1.200 * HS, rx: 0.052 * RL, rz: 0.052 * RL, z0: s * zW, jt: SE },
+          { y: 1.105 * HS, rx: 0.044 * RL, rz: 0.044 * RL, z0: s * zW, jt: SE },                     // 肘（上）
+          { y: 1.105 * HS, rx: 0.044 * RL, rz: 0.044 * RL, z0: s * zW, jt: SEE },                    // 肘（下，同一圈）
+          { y: 1.010 * HS, rx: 0.042 * RL, rz: 0.042 * RL, z0: s * zW, jt: SEE },
+          { y: 0.920 * HS, rx: 0.032 * RL, rz: 0.032 * RL, z0: s * zW, jt: SEE },
+          { y: 0.878 * HS, rx: 0.027 * RL, rz: 0.034 * RL, z0: s * zW, jt: SEE },                    // 腕（开始变扁）
+          { y: 0.838 * HS, rx: 0.026 * RL, rz: 0.046 * RL, z0: s * zW, jt: SEE },                    // 手掌
+          { y: 0.792 * HS, rx: 0.023 * RL, rz: 0.042 * RL, z0: s * zW, jt: SEE },                    // 指尖
+        ];
+        part('sh' + SD(s), () => pushChainJ(g, armRings.slice(0, 5), 10, a, cx, 0, cz, col, bodyRz, dyS, false));
+        part('el' + SD(s), () => pushChainJ(g, armRings.slice(4), 10, a, cx, 0, cz, col, bodyRz, dyS, true));
       }
       /* 颈 / 头 / 头发（跟人脸朝向）。小孩的头靠 HD 放大，而不是整个人缩小 */
-      tube(skin, 1.295, 1.405, 0.038, 0.043, leanJ);
+      pushChainJ(g, [
+        { y: 1.255 * HS, rx: 0.052 * RL, rz: 0.052 * RL, jt: [] },
+        { y: 1.330 * HS, rx: 0.045 * RL, rz: 0.045 * RL, jt: leanJ },
+        { y: 1.395 * HS, rx: 0.041 * RL, rz: 0.041 * RL, jt: leanJ },
+        { y: 1.440 * HS, rx: 0.050 * RL, rz: 0.050 * RL, jt: leanJ },
+      ], 10, a, cx, 0, cz, skin, bodyRz, dyS, false);
       ball(skin, [0, 1.523, 0], [0.090 * HD, 0.108 * HD, 0.092 * HD], leanJ, fd);
       ball(hair, [0, 1.585, -0.012], [0.096 * HD, 0.072 * HD, 0.098 * HD], leanJ, fd);
       /* 五官（贴在头的正面 local +x）：双眼 / 双眉 / 鼻 / 嘴 —— 之前只有一个深色块，像单眼怪 */
