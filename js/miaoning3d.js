@@ -364,6 +364,81 @@
     }
   }
   const SHADOW_Y = 0.045;
+  const TAU = Math.PI * 2;
+
+  /* 所有人体基元最后都走 emitV：一个口子出顶点，顺手累计"这条肢体的世界包围盒"（3D 拖关节要用） */
+  function emitV(g, p, n, col) {
+    g.pos.push(p[0], p[1], p[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]);
+    if (g.track) {
+      const b = g.track.box;
+      if (!b) g.track.box = [p[0], p[1], p[2], p[0], p[1], p[2]];
+      else {
+        b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.min(b[2], p[2]);
+        b[3] = Math.max(b[3], p[0]); b[4] = Math.max(b[4], p[1]); b[5] = Math.max(b[5], p[2]);
+      }
+    }
+  }
+  /* 人物局部点 → 世界：关节链 → 全身侧倾 → 全身升降 → 朝向 → 平移（跟 pushBoxJ 同一套） */
+  function xfPerson(v, jt, bodyRz, bodyDy, yaw, tx, ty, tz) {
+    let p = v;
+    for (let i = (jt || []).length - 1; i >= 0; i--) p = rotZp(p, jt[i].pivot, jt[i].angle);
+    if (bodyRz) p = rotZp(p, [0, 0, 0], bodyRz);
+    if (bodyDy) p = [p[0], p[1] + bodyDy, p[2]];
+    return tfPoint(yaw, tx, ty, tz, p);
+  }
+  function xfNrm(n, jt, bodyRz, yaw) {
+    let v = [n[0], n[1], n[2]];
+    for (let i = (jt || []).length - 1; i >= 0; i--) v = rotZp(v, [0, 0, 0], jt[i].angle);
+    if (bodyRz) v = rotZp(v, [0, 0, 0], bodyRz);
+    return tfDir(yaw, v);
+  }
+  /* 放样筒：rings = [{y, rx, rz}] 从下往上；椭圆截面 + 逐顶点法线，所以腿是圆的不是方的 */
+  function pushLoftJ(g, rings, seg, jt, yaw, tx, ty, tz, col, bodyRz, bodyDy, capBot, capTop) {
+    const P = (a, r, y) => xfPerson([Math.cos(a) * r.rx, y, Math.sin(a) * r.rz], jt, bodyRz, bodyDy, yaw, tx, ty, tz);
+    const N = (a, r) => xfNrm(norm([Math.cos(a) / Math.max(0.004, r.rx), 0, Math.sin(a) / Math.max(0.004, r.rz)]), jt, bodyRz, yaw);
+    for (let k = 0; k < rings.length - 1; k++) {
+      const A = rings[k], B = rings[k + 1];
+      for (let i = 0; i < seg; i++) {
+        const a0 = (i / seg) * TAU, a1 = ((i + 1) / seg) * TAU;
+        const n0 = N(a0, A), n1 = N(a1, A), m0 = N(a0, B), m1 = N(a1, B);
+        const p00 = P(a0, A, A.y), p10 = P(a1, A, A.y), p01 = P(a0, B, B.y), p11 = P(a1, B, B.y);
+        emitV(g, p00, n0, col); emitV(g, p10, n1, col); emitV(g, p11, m1, col);
+        emitV(g, p00, n0, col); emitV(g, p11, m1, col); emitV(g, p01, m0, col);
+      }
+    }
+    const cap = (r, up) => {
+      const c = xfPerson([0, r.y, 0], jt, bodyRz, bodyDy, yaw, tx, ty, tz);
+      const n = xfNrm([0, up ? 1 : -1, 0], jt, bodyRz, yaw);
+      for (let i = 0; i < seg; i++) {
+        const a0 = (i / seg) * TAU, a1 = ((i + 1) / seg) * TAU;
+        const q0 = P(a0, r, r.y), q1 = P(a1, r, r.y);
+        emitV(g, c, n, col); emitV(g, up ? q0 : q1, n, col); emitV(g, up ? q1 : q0, n, col);
+      }
+    };
+    if (capBot) cap(rings[0], false);
+    if (capTop) cap(rings[rings.length - 1], true);
+  }
+  /* 椭球：肩 / 肘 / 膝 / 髋的关节球、头、手 */
+  function pushSphJ(g, ctr, rx, ry, rz, latN, lonN, jt, yaw, tx, ty, tz, col, bodyRz, bodyDy) {
+    const P = (la, lo) => xfPerson([
+      ctr[0] + Math.cos(lo) * Math.sin(la) * rx,
+      ctr[1] + Math.cos(la) * ry,
+      ctr[2] + Math.sin(lo) * Math.sin(la) * rz,
+    ], jt, bodyRz, bodyDy, yaw, tx, ty, tz);
+    const N = (la, lo) => xfNrm(norm([
+      Math.cos(lo) * Math.sin(la) / rx, Math.cos(la) / ry, Math.sin(lo) * Math.sin(la) / rz,
+    ]), jt, bodyRz, yaw);
+    for (let i = 0; i < latN; i++) {
+      const la0 = (i / latN) * Math.PI, la1 = ((i + 1) / latN) * Math.PI;
+      for (let j = 0; j < lonN; j++) {
+        const lo0 = (j / lonN) * TAU, lo1 = ((j + 1) / lonN) * TAU;
+        const a = P(la0, lo0), b = P(la0, lo1), c = P(la1, lo1), d = P(la1, lo0);
+        const na = N(la0, lo0), nb = N(la0, lo1), nc = N(la1, lo1), nd = N(la1, lo0);
+        emitV(g, a, na, col); emitV(g, b, nb, col); emitV(g, c, nc, col);
+        emitV(g, a, na, col); emitV(g, c, nc, col); emitV(g, d, nd, col);
+      }
+    }
+  }
   /* 绕局部 z 轴（侧向轴）旋转：四肢前后摆动都在这条轴上 */
   const rotZp = (pt, pv, ang) => {
     if (!ang) return pt;
@@ -391,18 +466,7 @@
         if (bodyDy) v = [v[0], v[1] + bodyDy, v[2]];
         return tfPoint(yaw, tx, ty, tz, v);
       });
-      for (const k of [0, 1, 2, 0, 2, 3]) {
-        const p = wp[k]; g.pos.push(p[0], p[1], p[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]);
-        /* 摆姿势要能直接点四肢拖：顺手把这条肢体的世界包围盒记下来供拾取 */
-        if (g.track) {
-          const b = g.track.box;
-          if (!b) g.track.box = [p[0], p[1], p[2], p[0], p[1], p[2]];
-          else {
-            b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.min(b[2], p[2]);
-            b[3] = Math.max(b[3], p[0]); b[4] = Math.max(b[4], p[1]); b[5] = Math.max(b[5], p[2]);
-          }
-        }
-      }
+      for (const k of [0, 1, 2, 0, 2, 3]) emitV(g, wp[k], n, col);
     }
   }
   /* 姿势预设：hip/sh 正 = 向前摆；knee/el 负 = 向后弯（膝盖生理方向）
@@ -431,6 +495,17 @@
   /* 人物整体缩放：0.3× ~ 3×，环境里房子大就得把人放大才搭得上 */
   const personScale = (p) => Math.max(0.3, Math.min(3, +((p && p.scale) || 1)));
   M.personScale = personScale;
+  /* 体型预设：H=骨架高度系数，W=左右宽，D=前后厚，L=四肢粗细，HEAD=头身比
+     小孩不是"缩小的大人"—— 头要相对更大、肩更窄、腿更短，不然一眼就是假人 */
+  const BODIES = {
+    '标准': { H: 1.00, W: 1.00, D: 1.00, L: 1.00, HEAD: 1.00, waist: 1.00 },
+    '瘦':   { H: 1.03, W: 0.84, D: 0.90, L: 0.78, HEAD: 0.96, waist: 0.86 },
+    '胖':   { H: 0.99, W: 1.26, D: 1.24, L: 1.34, HEAD: 1.04, waist: 1.20 },
+    '小孩': { H: 0.66, W: 0.90, D: 0.92, L: 0.88, HEAD: 1.40, waist: 1.12 },
+  };
+  const bodyOf = (p) => BODIES[(p && p.build) || '标准'] || BODIES['标准'];
+  M.BODIES = BODIES;
+  M.bodyOf = bodyOf;
   /* 头顶名牌高度也要跟着缩放，不然放大的人名牌还在原地 */
   function labelTopY(p) {
     const pose = p.pose || '站立', S = personScale(p);
@@ -547,49 +622,87 @@
       const knee = s => ({ pivot: [0, 0.52, s * 0.112], angle: (s > 0 ? P0.kneeL : P0.kneeR) || 0 });
       const sh = s => ({ pivot: [0, 1.32, s * 0.205], angle: (s > 0 ? P0.shL : P0.shR) || 0 });
       const el = s => ({ pivot: [0, 1.10, s * 0.205], angle: (s > 0 ? P0.elL : P0.elR) || 0 });
-      const put = (c, ctr, half, jt, yaw, part) => {
-        g.track = part ? { key: part, pid: p.id, box: null } : null;
-        /* 整体缩放：骨架所有尺寸、关节枢轴、坐/跳抬升都乘一遍，人才能跟环境对得上大小 */
-        const S = personScale(p);
-        const jt2 = (jt || []).map(j => ({ pivot: [j.pivot[0] * S, j.pivot[1] * S, j.pivot[2] * S], angle: j.angle }));
-        pushBoxJ(g, half[0] * S, half[1] * S, half[2] * S, [ctr[0] * S, ctr[1] * S, ctr[2] * S], jt2,
-          yaw == null ? a : yaw, cx, 0, cz, c, bodyRz, bodyDy * S);
+      /* 整体缩放 × 体型：S 是用户拖的大小，体型再改比例 */
+      const BPD = bodyOf(p);
+      const S = personScale(p);
+      const HS = S * BPD.H;                        /* 骨架高度/位置 */
+      const RW = HS * BPD.W, RD = HS * BPD.D;      /* 左右宽 / 前后厚 */
+      const RL = HS * BPD.L, HD = HS * BPD.HEAD;   /* 四肢粗细 / 头身比 */
+      const JL = (jt) => (jt || []).map(j => ({ pivot: [j.pivot[0] * HS, j.pivot[1] * HS, j.pivot[2] * HS], angle: j.angle }));
+      const dyS = bodyDy * HS;
+      const part = (key, fn) => {
+        g.track = key ? { key, pid: p.id, box: null } : null;
+        fn();
         if (g.track && g.track.box) limbBoxes.push(g.track);
         g.track = null;
       };
+      const tube = (c, y0, y1, r0, r1, jt, seg) => pushLoftJ(g, [
+        { y: y0 * HS, rx: r0 * RL, rz: r0 * RL },
+        { y: ((y0 + y1) / 2) * HS, rx: ((r0 + r1) / 2) * RL, rz: ((r0 + r1) / 2) * RL },
+        { y: y1 * HS, rx: r1 * RL, rz: r1 * RL },
+      ], seg || 10, JL(jt), a, cx, 0, cz, c, bodyRz, dyS, false, false);
+      const ball = (c, ctr, r, jt, yaw2) => pushSphJ(g, [ctr[0] * HS, ctr[1] * HS, ctr[2] * HS],
+        (r[0] != null ? r[0] : r) * (r[0] != null ? HS : RL), (r[1] != null ? r[1] : r) * HS, (r[2] != null ? r[2] : r) * (r[2] != null ? HS : RL),
+        7, 12, JL(jt), yaw2 == null ? a : yaw2, cx, 0, cz, c, bodyRz, dyS);
+      const box = (c, ctr, half, jt, yaw2) => pushBoxJ(g, half[0] * HS, half[1] * HS, half[2] * HS,
+        [ctr[0] * HS, ctr[1] * HS, ctr[2] * HS], JL(jt), yaw2 == null ? a : yaw2, cx, 0, cz, c, bodyRz, dyS);
       const SD = s => s > 0 ? 'L' : 'R';
-      /* 腿：大腿 / 小腿 / 脚（s>0 = 左） */
+      const Z = 0.098;                              /* 两腿的左右间距（半宽，标准体型） */
+
+      /* 腿：髋球 + 锥筒大腿 + 膝球 + 锥筒小腿 + 脚 */
       for (const s of [1, -1]) {
-        const hj = hip(s), kj = knee(s), jtLeg = [hj, kj];
-        put(col, [0, 0.72, s * 0.112], [0.07, 0.20, 0.07], [hj], null, 'hip' + SD(s));        // 大腿
-        put(col, [0, 0.33, s * 0.112], [0.058, 0.19, 0.058], jtLeg, null, 'knee' + SD(s));     // 小腿
-        put(shoe, [0.04, 0.045, s * 0.112], [0.09, 0.045, 0.055], jtLeg, null, 'knee' + SD(s)); // 脚
+        const hj = hip(s), kj = knee(s), jtLeg = [hj, kj], z = s * Z;
+        part('hip' + SD(s), () => {
+          ball(col, [0, 0.845, z], 0.074, [hj]);
+          tube(col, 0.845, 0.505, 0.077, 0.056, [hj]);
+        });
+        part('knee' + SD(s), () => {
+          ball(col, [0, 0.505, z], 0.055, jtLeg);
+          tube(col, 0.505, 0.135, 0.056, 0.031, jtLeg);
+          ball(col, [0, 0.10, z], [0.034, 0.030, 0.034], jtLeg);
+          box(shoe, [0.035, 0.032, z], [0.088, 0.032, 0.049], jtLeg);
+        });
       }
-      /* 躯干：髋 / 腹 / 胸（跟随前倾） */
-      put(col, [0, 0.88, 0], [0.14, 0.085, 0.095], [], null);
-      put(col, [0, 1.03, 0], [0.125, 0.085, 0.085], leanJ, null);
-      put(col, [0, 1.22, 0], [0.17, 0.115, 0.10], leanJ, null, 'lean');
-      /* 肩 / 上臂 / 前臂 / 手 */
+      /* 躯干：放样筒。腰围跟着体型走 —— 胖的人腰不收，瘦的人收得更狠 */
+      const waistK = BPD.waist;
+      part('lean', () => {
+        pushLoftJ(g, [
+          { y: 0.795 * HS, rx: 0.100 * RD, rz: 0.126 * RW },
+          { y: 0.875 * HS, rx: 0.109 * RD, rz: 0.150 * RW },
+          { y: 0.965 * HS, rx: 0.096 * RD * waistK, rz: 0.129 * RW * waistK },
+          { y: 1.045 * HS, rx: 0.093 * RD * waistK, rz: 0.123 * RW * waistK },
+          { y: 1.135 * HS, rx: 0.101 * RD, rz: 0.146 * RW },
+          { y: 1.225 * HS, rx: 0.106 * RD, rz: 0.167 * RW },
+          { y: 1.300 * HS, rx: 0.097 * RD, rz: 0.176 * RW },
+          { y: 1.335 * HS, rx: 0.083 * RD, rz: 0.134 * RW },
+        ], 14, JL(leanJ), a, cx, 0, cz, col, bodyRz, dyS, true, true);
+      });
+      /* 肩 / 上臂 / 肘 / 前臂 / 手 */
       for (const s of [1, -1]) {
-        const sj = sh(s), ej = el(s);
-        put(col, [0, 1.315, s * 0.205], [0.06, 0.055, 0.06], [...leanJ, sj], null);
-        put(col, [0.01, 1.165, s * 0.252], [0.045, 0.105, 0.045], [...leanJ, sj], null, 'sh' + SD(s));
-        put(col, [0.035, 0.945, s * 0.252], [0.038, 0.10, 0.038], [...leanJ, sj, ej], null, 'el' + SD(s));
-        put(skin, [0.045, 0.828, s * 0.252], [0.048, 0.042, 0.042], [...leanJ, sj, ej], null, 'el' + SD(s));
+        const sj = sh(s), ej = el(s), z = s * 0.176 * BPD.W;
+        part('sh' + SD(s), () => {
+          ball(col, [0, 1.283, z], [0.058, 0.062, 0.060], [...leanJ, sj]);
+          tube(col, 1.285, 1.105, 0.049, 0.038, [...leanJ, sj]);
+        });
+        part('el' + SD(s), () => {
+          ball(col, [0, 1.105, z], 0.038, [...leanJ, sj, ej]);
+          tube(col, 1.105, 0.895, 0.038, 0.027, [...leanJ, sj, ej]);
+          ball(skin, [0.012, 0.845, z], [0.040, 0.052, 0.028], [...leanJ, sj, ej]);
+        });
       }
-      /* 颈 / 头 / 头发（跟人脸朝向） */
-      put(skin, [0, 1.40, 0], [0.042, 0.032, 0.042], leanJ, null);
-      put(skin, [0, 1.545, 0], [0.098 * fs, 0.112 * fs, 0.098 * fs], leanJ, fd);
-      put(hair, [0, 1.638, 0], [0.104 * fs, 0.028, 0.104 * fs], leanJ, fd);
+      /* 颈 / 头 / 头发（跟人脸朝向）。小孩的头靠 HD 放大，而不是整个人缩小 */
+      tube(skin, 1.295, 1.405, 0.038, 0.043, leanJ);
+      ball(skin, [0, 1.523, 0], [0.090 * HD, 0.108 * HD, 0.092 * HD], leanJ, fd);
+      ball(hair, [0, 1.585, -0.012], [0.096 * HD, 0.072 * HD, 0.098 * HD], leanJ, fd);
       /* 五官（贴在头的正面 local +x）：双眼 / 双眉 / 鼻 / 嘴 —— 之前只有一个深色块，像单眼怪 */
-      const faceX = 0.099 * fs, eyeZ = 0.034 * fs;
-      const eyeC = [0.10, 0.12, 0.14], browC = [0.28, 0.22, 0.20], mouthC = [0.62, 0.34, 0.34];
+      const faceX = 0.083 * fs * HD, eyeZ = 0.032 * fs * HD;
+      const eyeC = [0.13, 0.15, 0.17], browC = [0.34, 0.26, 0.24], mouthC = [0.60, 0.34, 0.34];
       for (const s of [1, -1]) {
-        put(eyeC, [faceX, 1.564, s * eyeZ], [0.007, 0.014, 0.014], leanJ, fd);   // 眼睛
-        put(browC, [faceX, 1.589, s * eyeZ], [0.007, 0.005, 0.020], leanJ, fd);  // 眉毛
+        box(eyeC, [faceX, 1.543 * HS, s * eyeZ], [0.006 * HD, 0.010 * HD, 0.011 * HD], leanJ, fd);   // 眼睛
+        box(browC, [faceX - 0.002, 1.566 * HS, s * eyeZ], [0.006 * HD, 0.004 * HD, 0.017 * HD], leanJ, fd);  // 眉
       }
-      put([0.93, 0.85, 0.79], [faceX + 0.008, 1.542, 0], [0.014, 0.020, 0.013], leanJ, fd); // 鼻
-      put(mouthC, [faceX, 1.507, 0], [0.005, 0.006, 0.022], leanJ, fd);                      // 嘴
+      ball([0.94, 0.86, 0.80], [faceX + 0.004, 1.522 * HS, 0], [0.012 * HD, 0.016 * HD, 0.011 * HD], leanJ, fd); // 鼻
+      box(mouthC, [faceX - 0.002, 1.489 * HS, 0], [0.005 * HD, 0.005 * HD, 0.019 * HD], leanJ, fd);                // 嘴
       /* 脚底一片阴影 —— 坐着的时候阴影归椅子，不再叠一层 */
       if (!p.sitOn) {
         const rr = (P0.lie ? 0.55 : 0.30) * personScale(p);
