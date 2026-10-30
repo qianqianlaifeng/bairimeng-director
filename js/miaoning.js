@@ -297,6 +297,10 @@ const TEMPLATES = [
 async function loadCanvas(id) {
   // 切走前把上一张画布的待存立即落库（saveSoon 是 500ms 防抖，不冲的话快速切页会丢）
   if (MN.saveT) { clearTimeout(MN.saveT); MN.saveT = null; if (MN.state) await saveNow(MN.canvasId, MN.state); }
+  /* 每张画布各留一份撤销栈：以前切换一律清空，切回来发现撤销也没了 */
+  MN._undoStash = MN._undoStash || {};
+  const oldId = MN.canvasId;
+  if (oldId && MN.undo) MN._undoStash[oldId] = { u: MN.undo.slice(), r: MN.redo.slice() };
   MN.canvasId = id;
   let st = await dbGet('canvas:' + id);
   if (!st) {
@@ -307,7 +311,9 @@ async function loadCanvas(id) {
     try { await dbPut('canvas:' + id, st); } catch (e) { /* 存储失败不打断，内存里照样能用 */ }
   }
   MN.state = st;
-  MN.sel = null; MN.selList = []; MN.pending = null; MN.pathDraft = null; MN.undo = []; MN.redo = [];
+  MN.sel = null; MN.selList = []; MN.pending = null; MN.pathDraft = null;
+  const stash = MN._undoStash[id];
+  MN.undo = stash ? stash.u : []; MN.redo = stash ? stash.r : [];
   MN.view = { x: 0, y: 0, k: st.view && st.view.zoom || 1 };
   MN.grid = !!(st.view && st.view.grid !== false);
   fitView();
@@ -4080,10 +4086,14 @@ Object.assign(window, {
    场景搭建浮层用：打开时把镜头场景种子注入画布 01，保存时读回完整状态。 */
 window.miaoningSeed = function (st) {
   if (!st || !st.scene || !MN.built) return false;
+  /* seed 会整份替换画布：以前直接把撤销栈清空，等于"打开一次场景搭建，原来搭好的景再也回不来"。
+     现在先把旧状态存成一条撤销，Ctrl+Z 能退回去。 */
+  const prevSnap = (MN.state && MN.state.scene) ? snapState(MN.state) : null;
   const fresh = blankState((st.scene && st.scene.title) || '未命名画布');
   MN.state = Object.assign(fresh, st);
   MN.state.format = 'aistudio-director';
-  MN.sel = null; MN.selList = []; MN.pending = null; MN.pathDraft = null; MN.undo = []; MN.redo = [];
+  MN.sel = null; MN.selList = []; MN.pending = null; MN.pathDraft = null;
+  MN.undo = prevSnap ? [prevSnap] : []; MN.redo = [];
   MN.view = { x: 0, y: 0, k: (st.view && st.view.zoom) || 1 };
   MN.grid = !(st.view && st.view.grid === false);
   fitView();
