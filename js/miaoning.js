@@ -913,7 +913,15 @@ async function snapCurrent() {
   const url = is3D() ? await grab3DURL() : await grab2DURL();
   if (!url) return toast('截图失败：画布还没准备好', 'warn');
   dlURL(url, `${shotBase()}-${is3D() ? '3D站位图' : '平面图'}.png`);
-  toast(is3D() ? '已下载 3D 站位图 📷（带人名）' : '已下载平面图 📷', 'ok');
+  /* 顺手存进镜头册：这样「保存到镜头」时它会自动挂成这一镜的参考图，不用再手动去分镜板挂 */
+  if (is3D() && window.MN3D && MN3D.getCamera) {
+    try {
+      pushUndo();
+      MN.state.directorShots.push({ image: url, name: '截图 ' + ((MN.state.directorShots || []).length + 1), cam: MN3D.getCamera() });
+      renderShots(); saveSoon();
+    } catch (e) { console.warn('[截图] 存镜头册失败', e); }
+  }
+  toast(is3D() ? '已下载 3D 站位图 📷，并已存进镜头册（保存到镜头时自动当参考图）' : '已下载平面图 📷', 'ok');
 }
 /* 镜头册里每个机位各拍一张，拼成一张组图 */
 async function snapAllCams() {
