@@ -1,4 +1,13 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.18.0（2026-10-29）：① 照片的地面真的接上了布景地面 —— 环境球下半部分改「地面重投影」：
+                          射线先打 y=0 平面，再按拍摄者眼高反推该点在全景图里的方向。人物站 y=0 就是踩在
+                          照片地面上，镜头平移地面还会正确视差滑动；面板多一条「拍摄高度」做标定。
+                          ② 真·方向投影（shadow map）：从太阳方向渲 1024² 深度图（RGBA 打包，不挑设备），
+                          主着色器 3×3 PCF 采样，人物道具互相投出跟太阳方向走的影子；「光影」页签可关。
+                          ③ 人物/道具可缩放对齐尺寸：人物面板「整体大小」0.3~3×（量的是身高），道具面板
+                          「等比缩放」按道具库标准件算几倍，「环境图」页签还有整套场景 ×0.5/×0.8/×1.25/×2 一键缩放。
+                          ④ 修：光影/地面两个页签的滑杆以前一个都没绑定（拖太阳方向没反应），并修好滑杆读数
+                          只在字段名叫 range 时才更新的错条件；面板上那个只弹 toast 的「缩放」按钮接真。
    v1.17.0（2026-10-29）：人物不再浮空 —— ① 每个人 / 每件道具脚下都有一片接触阴影
                           （贴地半透明椭圆盘，单独一遍 blend、不写深度，所以不会把脚埋进地里；
                           坐着的人不叠，阴影归椅子）。实测脚前那块地亮度 251 → 109。
@@ -1114,6 +1123,7 @@ function renderRight() {
   bindObjPanel(body);
   bindLibrary();
   bindEnvPanel();
+  bindLightPanel();
 }
 
 /* 物件库预设：直接吃道具库 mn-props.js 的全部种类，每类一个精细模型 */
@@ -1121,6 +1131,17 @@ const PRESETS = (window.MN_PROP_ORDER || []).map(k => {
   const K = window.MN_PROP_KINDS[k] || {};
   return { kind: k, name: K.name || k, w: K.w || 1, d: K.d || 1, h: K.h || 1, color: K.color || '#d9b382' };
 });
+
+/* 滑杆读数：单位写在一处，免得每加一个字段就改一遍三元 */
+function fieldText(f, v, o) {
+  if (f === 'faceDir') return v + '°';
+  if (f === 'face') return v + ' 倍';
+  if (f === 'speed') return v + ' m/s';
+  if (f === 'fov') return v + '°';
+  if (f === 'scale') return v + '× · 身高 ' + (1.75 * (+v || 1)).toFixed(2) + 'm';
+  if (f === 'sizeX') return '宽 ' + (+o.w || 0).toFixed(2) + 'm · 深 ' + (+o.d || 0).toFixed(2) + 'm · 高 ' + (+o.h || 0).toFixed(2) + 'm';
+  return String(v);
+}
 
 /* 四肢关节：预设只有六个档，剧情里那些动作得逐关节调 */
 function renderJoints(o) {
@@ -1180,6 +1201,8 @@ function renderObjPanel() {
       <label class="mn-field"><span>旋转 Z</span><input type="number" step="15" data-f="rot" value="${o.rot || 0}" /></label>
       <label class="mn-field"><span>模型</span><input type="text" value="${(window.MN_PROP_KINDS[o.kind] || {}).name || o.kind || '方块'}" disabled /></label>
     </div>
+    <label class="mn-field"><span>等比缩放<strong>${(o.w / ((window.MN_PROP_KINDS[o.kind] || {}).w || o.w || 1)).toFixed(2)}× · 宽 ${(o.w).toFixed(2)}m · 深 ${(o.d).toFixed(2)}m · 高 ${(o.h).toFixed(2)}m</strong></span>
+      <input type="range" class="mn-range" id="mnPropScale" min="0.2" max="4" step="0.05" value="${(o.w / ((window.MN_PROP_KINDS[o.kind] || {}).w || o.w || 1)).toFixed(2)}" /></label>
     <label class="mn-field"><span>颜色</span></label>${swatches(PROP_COLORS, o.color, 'color')}
     ${nSeats ? `<div class="mn-chip-row">
       <button class="mn-chip" data-act="seat" title="让离这把椅子最近的人物坐上来（坐好后椅子挪动他会跟着走）">${icon('armchair', 's12')}请人坐下 · ${nSeats} 个座位 · 已坐 ${sitters}</button>
@@ -1208,6 +1231,7 @@ function renderObjPanel() {
         : `<button class="mn-chip" data-act="seatnear" title="就近找一把空椅子坐下">${icon('armchair', 's12')}坐到最近的座位</button>`}
     </div>
     <label class="mn-field"><span>人脸大小<strong>${o.face || 1} 倍</strong></span><input type="range" class="mn-range" data-f="face" min="0.5" max="2" step="0.1" value="${o.face || 1}" /></label>
+    <label class="mn-field"><span>整体大小<strong>${(+(o.scale) || 1)}× · 身高 ${(1.75 * (+(o.scale) || 1)).toFixed(2)}m</strong></span><input type="range" class="mn-range" data-f="scale" min="0.3" max="3" step="0.05" value="${+(o.scale) || 1}" /></label>
     <label class="mn-field"><span>人物颜色</span></label>${swatches(PERSON_COLORS, o.color, 'color')}
     <label class="mn-field mn-color-row"><span>人物颜色 <b class="mn-color-now" style="background:${o.color || '#2e7cf6'}"></b><code>${esc(o.color || '#2e7cf6')}</code></span><input type="color" class="mn-color" data-f="color" value="${o.color || '#2e7cf6'}" /></label>
     ${((MN.state.scene && MN.state.scene.persons) || []).some(p => p.id !== o.id && p.name === o.name) ? `<div class="mn-chip-row"><button class="mn-chip" data-act="samecolor">${icon('users', 's12')}同名角色一起换</button></div>` : ''}
@@ -1302,7 +1326,11 @@ function bindObjPanel() {
         } else if (o.sitOn) standUp(o);
         renderRight();
       }
-      if (f === 'range' && inp.previousElementSibling) { const s = inp.previousElementSibling.querySelector('strong'); if (s) s.textContent = (f === 'fov' ? '' : '') + v + (f === 'faceDir' ? '°' : f === 'face' ? ' 倍' : f === 'jump' ? '' : f === 'intensity' ? '' : ''); }
+      /* 滑杆读数以前只在字段名恰好叫 "range" 时才更新（条件写错了），所以脸大小/朝向/跳跃拖完数字一直不动 */
+      if (inp.type === 'range') {
+        const s = inp.parentElement && inp.parentElement.querySelector('strong');
+        if (s) s.textContent = fieldText(f, v, o);
+      }
       renderTree(); paint(); saveSoon();
       /* 换色时把「当前色」色块也刷一下（不然面板上还是旧颜色，看着像没生效） */
       if (f === 'color') {
@@ -1329,6 +1357,23 @@ function bindObjPanel() {
       paint(); saveSoon();
     });
   });
+  /* 道具等比缩放：基准取道具库的标准尺寸，滑杆就是「几倍标准件」 */
+  const ps = box.querySelector('#mnPropScale');
+  if (ps && MN.sel && MN.sel.kind === 'prop') {
+    const K = (window.MN_PROP_KINDS || {})[o.kind] || {};
+    const bw = +K.w || +o.w || 1, bh = +K.h || +o.h || 1, bd = +K.d || +o.d || 1;
+    ps.oninput = () => {
+      if (!o._scaleTouched) { pushUndo(); o._scaleTouched = true; }
+      const k = +ps.value;
+      o.w = Math.round(bw * k * 100) / 100;
+      o.d = Math.round(bd * k * 100) / 100;
+      o.h = Math.round(bh * k * 100) / 100;
+      const s = ps.parentElement.querySelector('strong');
+      if (s) s.textContent = fieldText('sizeX', k, o);
+      if (window.MN_LAYOUT) refitSeats(o.id);
+      renderTree(); paint(); saveSoon();
+    };
+  }
   $$('[data-act]', box).forEach(b => b.onclick = () => {
     const a = b.dataset.act;
     if (a === 'jointreset') {
@@ -1384,6 +1429,7 @@ function renderSunPanel() {
   return `<section class="mn-section">
     <div class="mn-sec-head"><span>光影调节</span><span class="mn-sec-note">太阳比我有前途</span></div>
     <label class="mn-check"><input type="checkbox" id="mnSunOn" ${s.on ? 'checked' : ''} /><span>显示太阳<small>关掉就是阴天，全局变暗</small></span></label>
+    <label class="mn-check"><input type="checkbox" id="mnShadowOn" ${(MN.state.view && MN.state.view.shadows) !== false ? 'checked' : ''} /><span>方向投影<small>人物道具互相投出真实影子，跟太阳方向走</small></span></label>
     <label class="mn-field"><span>太阳方向<strong>${s.dir}°</strong></span><input type="range" class="mn-range" id="mnSunDir" min="0" max="360" value="${s.dir}" /></label>
     <label class="mn-field"><span>太阳高度<strong>${s.alt}°</strong></span><input type="range" class="mn-range" id="mnSunAlt" min="5" max="90" value="${s.alt}" /></label>
     <p class="mn-help-para">3D 导演视图（M2）里，太阳方向和高度会实时照亮每个房间。</p>
@@ -1398,6 +1444,43 @@ function renderGroundPanel() {
     <p class="mn-help-para" style="margin-top:8px">点一个颜色，外面一整片都换。</p>
     <label class="mn-check"><input type="checkbox" id="mnRoomGrid" ${g.grid ? 'checked' : ''} /><span>显示房间内网格<small>格子上色更稳</small></span></label>
   </section>`;
+}
+
+/* 光影 / 地面 两个页签的控件以前一个都没绑（只有「光影调节」弹窗那套是活的），
+   拖半天太阳方向没反应 —— 这里补上。 */
+function bindLightPanel() {
+  const box = $('#mnRight'); if (!box) return;
+  const f = (id) => box.querySelector('#' + id);
+  const sun = MN.state.sun, grd = MN.state.scene.ground, vw = MN.state.view;
+  const readout = (el) => { const s = el && el.parentElement && el.parentElement.querySelector('strong'); return s; };
+  const sd = f('mnSunDir');
+  if (sd) sd.oninput = () => { sun.dir = +sd.value; const s = readout(sd); if (s) s.textContent = sun.dir + '°'; paint3D(); saveSoon(); };
+  const sa = f('mnSunAlt');
+  if (sa) sa.oninput = () => { sun.alt = +sa.value; const s = readout(sa); if (s) s.textContent = sun.alt + '°'; paint3D(); saveSoon(); };
+  const so = f('mnSunOn');
+  if (so) so.onchange = () => { sun.on = so.checked; paint3D(); saveSoon(); };
+  const sh = f('mnShadowOn');
+  if (sh) sh.onchange = () => { vw.shadows = sh.checked; paint3D(); saveSoon(); };
+  const rg = f('mnRoomGrid');
+  if (rg) rg.onchange = () => { grd.grid = rg.checked; paint(); saveSoon(); };
+  $$('[data-g]', box).forEach(b => b.onclick = () => { grd.color = b.dataset.g; renderRight(); paint(); paint3D(); saveSoon(); });
+}
+
+/* 整套场景一起缩放：环境图里房子明显比默认布景大时，一个个调太慢 */
+function scaleAllScene(k) {
+  const sc = MN.state.scene;
+  const props = (sc.props || []).filter(p => !p.hidden), persons = (sc.persons || []).filter(p => !p.hidden);
+  if (!props.length && !persons.length) return toast('场景里还没有道具和人物', 'warn');
+  pushUndo();
+  props.forEach(p => {
+    p.w = Math.max(0.05, Math.min(60, (+p.w || 1) * k));
+    p.d = Math.max(0.05, Math.min(60, (+p.d || 1) * k));
+    p.h = Math.max(0.05, Math.min(20, (+p.h || 1) * k));
+  });
+  persons.forEach(p => { p.scale = Math.max(0.3, Math.min(3, (+(p.scale) || 1) * k)); });
+  if (window.MN_LAYOUT) window.MN_LAYOUT.refitSeats(sc);
+  renderAll(); saveSoon();
+  toast(`已把 ${props.length} 件道具 + ${persons.length} 个人物整体 ×${k}（Ctrl+Z 可撤销）`, 'ok');
 }
 
 /* ---------- 环境图：把一张场景图变成能转着看的 3D 世界 ----------
@@ -1422,7 +1505,8 @@ function renderEnvPanel() {
   const mode = e.mode || 'sphere';
   const board = mode === 'board';
   const note = mode === 'sphere' ? '图裹成一圈当世界：左右拖 = 转头，上下拖 = 抬头低头。要 2:1 全景图才对得上。'
-    + '觉得人踩空，就拖下面的「上下对齐」把照片的地面挪到脚边。'
+    + '照片的地面已经按「拍摄高度」重投影到布景地面上 —— 人物站 y=0 就是踩在照片地面上，镜头移动地面还会跟着滑；'
+    + '踩不准就调「拍摄高度」（拍这张图时人眼离地几米）。'
     : mode === 'cyl' ? '只把图横向裹一圈，纵向按俯仰摊开 —— 普通图想转着看就用它，上下边缘会拉伸。'
       : '图立成一块布景板挡在景后面，转视角时它有视差，能推远近、改宽窄、转方向。';
   return `<section class="mn-section">
@@ -1442,9 +1526,18 @@ function renderEnvPanel() {
       + envSlider('mnEnvBy', '离地高度', 0, 20, 0.5, e.by == null ? 4 : e.by, 'm')
       + envSlider('mnEnvBrot', '板面转向', -180, 180, 5, e.brot || 0, '°')
       : envSlider('mnEnvYaw', '水平旋转', -180, 180, 1, e.yaw || 0, '°')
+      + envSlider('mnEnvCapH', '拍摄高度', 0.3, 3.5, 0.05, e.capH == null ? 1.5 : e.capH, 'm')
       + envSlider('mnEnvVOff', '上下对齐', -40, 40, 1, Math.round((e.vOff || 0) * 100), '%')
       + (mode === 'cyl' ? envSlider('mnEnvV', '纵向铺开', 0.2, 1.5, 0.02, e.vSpread == null ? 0.62 : e.vSpread, '') : '')}
     ${envSlider('mnEnvBright', '亮度', 0.3, 2, 0.05, e.bright == null ? 1 : e.bright, '×')}
+    <div class="mn-joint-head"><span>整套场景尺寸</span><small>跟环境对不上就一起缩放</small></div>
+    <div class="mn-chip-row">
+      <button class="mn-chip" data-scaleall="0.8">缩小 0.8×</button>
+      <button class="mn-chip" data-scaleall="1.25">放大 1.25×</button>
+      <button class="mn-chip" data-scaleall="2">×2</button>
+      <button class="mn-chip" data-scaleall="0.5">÷2</button>
+    </div>
+    <p class="mn-help-para">现在场景里有道具 ${(MN.state.scene.props || []).length} 件 · 人物 ${(MN.state.scene.persons || []).length} 个。只改尺寸不改站位，坐在椅子上的人会跟着坐面重新落座；单个调还是用「物体」页签里的缩放。</p>
     <div class="mn-chip-row"><button class="mn-chip" id="mnEnvPick">${icon('upload', 's12')}换一张</button></div>
     <input type="file" id="mnEnvFile" accept="image/*" hidden />
   </section>`;
@@ -1487,6 +1580,7 @@ function bindEnvPanel() {
   const fl = f('mnEnvFloor');
   if (fl) fl.onchange = () => { e.floor = fl.checked; paint3D(); saveSoon(); };
   $$('[data-envmode]', box).forEach(b => b.onclick = () => { e.mode = b.dataset.envmode; renderRight(); paint3D(); saveSoon(); });
+  $$('[data-scaleall]', box).forEach(b => b.onclick = () => scaleAllScene(+b.dataset.scaleall));
   const rng = (id, key, scale) => {
     const el = f(id); if (!el) return;
     el.oninput = () => {
@@ -1497,7 +1591,7 @@ function bindEnvPanel() {
     };
   };
   rng('mnEnvYaw', 'yaw'); rng('mnEnvBright', 'bright'); rng('mnEnvV', 'vSpread');
-  rng('mnEnvVOff', 'vOff', 0.01);
+  rng('mnEnvVOff', 'vOff', 0.01); rng('mnEnvCapH', 'capH');
   rng('mnEnvBw', 'bw'); rng('mnEnvBx', 'bx'); rng('mnEnvBz', 'bz'); rng('mnEnvBy', 'by'); rng('mnEnvBrot', 'brot');
 }
 
