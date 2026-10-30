@@ -77,7 +77,7 @@ export function shotSceneToMn(scene, shot) {
       const P2A = { stand: '站立', walk: '走路', run: '运动', turn: '站立', sit: '坐下' };
       st.scene.persons.push({
         id: uid(), name: o.name || '人物', x: o.x, y: o.z, sitH: Math.max(0, Math.min(1.6, +o.sitH || 0)),
-        rot: ((90 - (+o.rot || 0)) % 360 + 360) % 360,
+        rot: ((90 - (+o.rot || 0)) % 360 + 360) % 360, scale: Math.max(0.3, Math.min(3, +o.scale || 1)),
         color: o.color || '#2e7cf6', pose: P2A[o.action] || '站立', face: 1, faceDir: 0, jump: 0, hidden: false,
         ...(o.joints && Object.keys(o.joints).length ? { joints: Object.assign({}, o.joints) } : {}),
       });
@@ -160,7 +160,7 @@ export function mnToShotScene(st) {
     const hasPath = pathPts.length >= 2;
     push({
       type: 'actor', id: pe.id, name: pe.name || '', x: +pe.x || 0, z: +pe.y || 0,
-      rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: 1,
+      rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: Math.max(0.3, Math.min(3, +pe.scale || 1)),
       action: hasPath ? 'walk' : (A2P[pe.pose] || 'stand'),
       /* 坐在家具上：把坐面高度带给白模，预演里人才不会陷进椅子 */
       sitH: pe.sitOn ? Math.max(0, Math.min(1.6, +pe.sitH || 0)) : 0,
