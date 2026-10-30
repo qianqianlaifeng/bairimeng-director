@@ -64,7 +64,8 @@
   /* ---------- WebGL ---------- */
   let gl = null, canvas = null, prog = null, lineProg = null;
   let bufPos, bufNrm, bufCol, bufLine;
-  let envProg = null, boardProg = null, shadowProg = null, envQuad = null, bufEnvP = null, bufEnvT = null, bufShadow = null;
+  let envProg = null, boardProg = null, shadowProg = null, depthProg = null, envQuad = null, bufEnvP = null, bufEnvT = null, bufShadow = null;
+  let shadowFb = null, shadowTex = null;
   let envTex = null, envTexKey = null, envLoadingKey = null;
   const cam = { theta: 0.6, phi: 1.0, r: 30, tx: 7, ty: 1.5, tz: 7, inited: false };
   let bounds = { minX: 0, maxX: 14, minZ: 0, maxZ: 14 };
@@ -83,22 +84,58 @@
     uniform vec3 uPtPos[4]; uniform vec3 uPtCol[4]; uniform float uPtInt[4]; uniform int uPtN;
     uniform int uMode;
     uniform float uExp;
+    uniform sampler2D uShadow; uniform mat4 uLightVP; uniform float uShadowOn; uniform float uShadowTex;
     /* 只在背后有真实环境图时启用：受光面本来会加到 1.5~2.0 直接烧成白纸，跟照片一比就露馅。
        压一档高光拐点；没环境图时原样输出，不动原来的观感。 */
     vec3 tone(vec3 c){
       if (uExp > 0.999) return c;
       return c / (vec3(1.0) + c * 0.62);
     }
+    float unpackD(vec4 c){ return dot(c, vec4(1.0, 1.0 / 255.0, 1.0 / 65025.0, 1.0 / 16581375.0)); }
+    /* 3×3 PCF：方向性投影不该有硬边 */
+    float shadowAt(vec3 wp){
+      if (uShadowOn < 0.5) return 1.0;
+      vec4 lc = uLightVP * vec4(wp, 1.0);
+      if (abs(lc.w) < 1e-4) return 1.0;
+      vec3 pr = vec3(lc.xy, lc.z) / lc.w * 0.5 + 0.5;
+      if (pr.x < 0.0 || pr.x > 1.0 || pr.y < 0.0 || pr.y > 1.0 || pr.z > 1.0) return 1.0;
+      float px = 1.5 / uShadowTex, s = 0.0;
+      for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+          float d = unpackD(texture2D(uShadow, pr.xy + vec2(float(x), float(y)) * px));
+          s += (pr.z - 0.0035 > d) ? 0.0 : 1.0;
+        }
+      }
+      return s / 9.0;
+    }
     void main(){
       vec3 N = normalize(vN); vec3 base = vC;
       if(uMode==2){ float d = clamp((-vVZ)/26.0,0.0,1.0); base = vec3(1.0-d); }
       vec3 col = base * uAmb;
-      float s = max(dot(N, normalize(uSunDir)), 0.0); col += base * uSunCol * s;
+      float s = max(dot(N, normalize(uSunDir)), 0.0);
+      col += base * uSunCol * s * shadowAt(vW);
       for(int i=0;i<4;i++){ if(i>=uPtN) break;
         vec3 L = uPtPos[i] - vW; float dd = length(L); L/=dd;
         float diff = max(dot(N,L),0.0); float att = 1.0/(1.0+0.12*dd+0.06*dd*dd);
         col += base * uPtCol[i] * diff * att * uPtInt[i]; }
       gl_FragColor = vec4(tone(col * uExp), 1.0); }`;
+  /* 深度预通道：把光视空间深度打包进 RGBA（不依赖 WEBGL_depth_texture，哪都能跑） */
+  const DVS = `
+    attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol;
+    uniform mat4 uVP;
+    varying float vVZ;
+    void main(){
+      vec4 lc = uVP * vec4(aPos, 1.0);
+      vVZ = lc.z / lc.w * 0.5 + 0.5;
+      gl_Position = lc; }`;
+  const DFS = `precision mediump float; varying float vVZ;
+    vec4 packD(float v){
+      const vec4 b = vec4(1.0, 255.0, 65025.0, 16581375.0);
+      vec4 f = fract(vec4(v) * b);
+      f -= f.yzwz * (1.0 / 255.0);
+      return f; }
+    void main(){ gl_FragColor = packD(clamp(vVZ, 0.0, 1.0)); }`;
+
   const LVS = `attribute vec3 aP; uniform mat4 uVP; void main(){ gl_Position = uVP*vec4(aP,1.0); }`;
   const LFS = `precision mediump float; uniform vec3 uCol; void main(){ gl_FragColor=vec4(uCol,1.0); }`;
 
@@ -111,6 +148,7 @@
     varying vec2 vN;
     uniform sampler2D uTex;
     uniform vec3 uFwd; uniform vec3 uRight; uniform vec3 uUp;
+    uniform vec3 uEye; uniform vec2 uCap; uniform float uCapH;
     uniform float uTanH; uniform float uAsp; uniform float uYaw; uniform float uBright; uniform float uVSpread;
     uniform float uVOff;
     uniform int uMode;
@@ -118,11 +156,21 @@
       vec3 d = normalize(uFwd + uRight * (vN.x * uTanH * uAsp) + uUp * (vN.y * uTanH));
       float c = cos(uYaw), s = sin(uYaw);
       d = vec3(d.x * c + d.z * s, d.y, -d.x * s + d.z * c);
-      float u = atan(d.z, d.x) / 6.2831853 + 0.5;
+      /* 下半球按「地面重投影」取样：先把射线打到我们的 y=0 地面上，再按拍摄者的眼高反推
+         这个地面点在全景图里该出现在哪个方向。这样人物站在 y=0 就是真的踩在照片的地面上，
+         而且镜头平移时地面会跟着正确滑动（视差）。地平线处两种算法收敛，看不出接缝。 */
+      vec3 dir = d;
+      if (uMode == 0 && uCapH > 0.05 && d.y < 0.0 && uEye.y > 0.05) {
+        float tt = uEye.y / -d.y;
+        vec2 rel = uEye.xz + d.xz * tt - uCap;
+        float rl = length(rel);
+        if (rl > 0.001 && tt < 900.0) dir = normalize(vec3(rel.x, -uCapH, rel.y));
+      }
+      float u = atan(dir.z, dir.x) / 6.2831853 + 0.5;
       /* 0 = 等距柱状全景（2:1 图，上下是天地）；1 = 柱面（普通图横向裹一圈，纵向按俯仰摊开）
          uVOff 用来把照片里的地面上下挪到布景地面上 —— 不然人物就像踩在照片的半空中 */
-      float v = uMode == 0 ? acos(clamp(d.y, -1.0, 1.0)) / 3.14159265
-                           : clamp(0.5 - d.y * uVSpread, 0.0, 1.0);
+      float v = uMode == 0 ? acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265
+                           : clamp(0.5 - dir.y * uVSpread, 0.0, 1.0);
       v = clamp(v + uVOff, 0.0, 1.0);
       gl_FragColor = vec4(texture2D(uTex, vec2(u, v)).rgb * uBright, 1.0);
     }`;
@@ -141,11 +189,43 @@
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error('MN3D shader', gl.getShaderInfoLog(s));
     return s;
   }
-  function prog2(vs, fs) {
+  function prog2(vs, fs, attrs) {
     const p = gl.createProgram();
-    gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+    /* 主通道和深度预通道必须用同一套 attribute 槽位，才能绑一次缓冲、画两遍 */
+    if (attrs) for (const name in attrs) gl.bindAttribLocation(p, attrs[name], name);
+    gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error('MN3D link', gl.getProgramInfoLog(p));
     return p;
+  }
+  const MESH_ATTRS = { aPos: 0, aNrm: 1, aCol: 2 };
+
+  /* ---------- 阴影贴图（方向光投影）---------- */
+  const SHADOW_RES = 1024;
+  function ortho(l, r, b, t, n, f) {
+    return [2 / (r - l), 0, 0, 0, 0, 2 / (t - b), 0, 0, 0, 0, -2 / (f - n), 0,
+      -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1];
+  }
+  function ensureShadowMap() {
+    if (shadowFb || !gl) return shadowFb;
+    shadowTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SHADOW_RES, SHADOW_RES, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const rb = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, SHADOW_RES, SHADOW_RES);
+    shadowFb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, shadowTex, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!ok) { shadowFb = null; shadowTex = null; M._shadowErr = '这台设备的 WebGL 不支持离屏阴影贴图'; }
+    return shadowFb;
   }
 
   /* ---------- 环境图纹理 ----------
@@ -218,6 +298,10 @@
       bright: e.bright == null ? 1 : Math.max(0.2, Math.min(2, +e.bright)),
       vSpread: e.vSpread == null ? 0.62 : Math.max(0.15, Math.min(2, +e.vSpread)),
       vOff: Math.max(-0.5, Math.min(0.5, +e.vOff || 0)),
+      /* 拍摄点：拍这张全景的人站在哪、眼睛多高 —— 地面重投影靠它把照片的地面摆到 y=0 */
+      capH: e.capH == null ? 1.5 : Math.max(0, Math.min(4, +e.capH)),
+      capX: e.capX == null ? (bounds.minX + bounds.maxX) / 2 : +e.capX,
+      capZ: e.capZ == null ? (bounds.minZ + bounds.maxZ) / 2 : +e.capZ,
       bx: +e.bx || 0, by: e.by == null ? 4 : +e.by, bz: +e.bz || 0,
       bw: Math.max(1, +e.bw || 16), brot: (+e.brot || 0) * Math.PI / 180,
       opacity: e.opacity == null ? 1 : Math.max(0.15, Math.min(1, +e.opacity)),
@@ -233,8 +317,9 @@
                  cv.getContext('experimental-webgl', { preserveDrawingBuffer: true, antialias: true }); }
     catch (e) { gl = null; }
     if (!gl) { M.ok = false; return false; }
-    prog = prog2(VS, FS); lineProg = prog2(LVS, LFS);
+    prog = prog2(VS, FS, MESH_ATTRS); lineProg = prog2(LVS, LFS);
     envProg = prog2(EVS, EFS); boardProg = prog2(BVS, BFS); shadowProg = prog2(SVS, SFS);
+    depthProg = prog2(DVS, DFS, MESH_ATTRS);
     bufPos = gl.createBuffer(); bufNrm = gl.createBuffer(); bufCol = gl.createBuffer(); bufLine = gl.createBuffer();
     bufEnvP = gl.createBuffer(); bufEnvT = gl.createBuffer(); bufShadow = gl.createBuffer();
     /* 全屏四边形（两个三角形，覆盖 NDC -1..1） */
@@ -343,6 +428,17 @@
     { k: 'kneeR', name: '右膝', min: -140, max: 20, step: 5 },
   ];
   const DEG = Math.PI / 180;
+  /* 人物整体缩放：0.3× ~ 3×，环境里房子大就得把人放大才搭得上 */
+  const personScale = (p) => Math.max(0.3, Math.min(3, +((p && p.scale) || 1)));
+  M.personScale = personScale;
+  /* 头顶名牌高度也要跟着缩放，不然放大的人名牌还在原地 */
+  function labelTopY(p) {
+    const pose = p.pose || '站立', S = personScale(p);
+    const base = pose === '躺下' ? 0.55 : pose === '坐下' ? 1.62 : 1.82;
+    return (base * S) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22 * S
+      + (p.sitOn ? Math.max(0, Math.min(1.6, +p.sitH || 0)) : 0);
+  }
+  M.labelTopY = labelTopY;
   function poseOf(name, p) {
     const out = Object.assign({}, POSE_PRESETS[name] || POSE_PRESETS['站立']);
     const j = (p && p.joints) || {};
@@ -453,7 +549,11 @@
       const el = s => ({ pivot: [0, 1.10, s * 0.205], angle: (s > 0 ? P0.elL : P0.elR) || 0 });
       const put = (c, ctr, half, jt, yaw, part) => {
         g.track = part ? { key: part, pid: p.id, box: null } : null;
-        pushBoxJ(g, half[0], half[1], half[2], ctr, jt, yaw == null ? a : yaw, cx, 0, cz, c, bodyRz, bodyDy);
+        /* 整体缩放：骨架所有尺寸、关节枢轴、坐/跳抬升都乘一遍，人才能跟环境对得上大小 */
+        const S = personScale(p);
+        const jt2 = (jt || []).map(j => ({ pivot: [j.pivot[0] * S, j.pivot[1] * S, j.pivot[2] * S], angle: j.angle }));
+        pushBoxJ(g, half[0] * S, half[1] * S, half[2] * S, [ctr[0] * S, ctr[1] * S, ctr[2] * S], jt2,
+          yaw == null ? a : yaw, cx, 0, cz, c, bodyRz, bodyDy * S);
         if (g.track && g.track.box) limbBoxes.push(g.track);
         g.track = null;
       };
@@ -492,7 +592,7 @@
       put(mouthC, [faceX, 1.507, 0], [0.005, 0.006, 0.022], leanJ, fd);                      // 嘴
       /* 脚底一片阴影 —— 坐着的时候阴影归椅子，不再叠一层 */
       if (!p.sitOn) {
-        const rr = P0.lie ? 0.55 : 0.30;
+        const rr = (P0.lie ? 0.55 : 0.30) * personScale(p);
         pushDisc(g, cx, cz, rr, P0.lie ? rr * 0.55 : rr * 0.88, SHADOW_Y);
       }
     }
@@ -603,9 +703,8 @@
     persons.forEach((p, i) => {
       let el = layer.children[i];
       if (!el) { el = document.createElement('div'); el.className = 'mn3d-label'; layer.appendChild(el); }
-      /* 名牌高度跟着姿势走：躺下贴地、坐着在头顶、站立在头顶上方 */
-      const pose = p.pose || '站立';
-      const topY = (pose === '躺下' ? 0.55 : pose === '坐下' ? 1.62 : 1.82) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22 + (p.sitOn ? Math.max(0, Math.min(1.6, +p.sitH || 0)) : 0);
+      /* 名牌高度跟着姿势和缩放走：躺下贴地、坐着在头顶、站立在头顶上方 */
+      const topY = labelTopY(p);
       const sp = projToScreen(vp, p.x, topY, p.y);
       if (!sp) { el.style.display = 'none'; return; }
       el.style.display = '';
@@ -708,7 +807,7 @@
   let drawRaf = 0;
 
   /* 环境背景：全屏四边形 + 片元里反算射线采样全景图 */
-  function drawEnvBg(env, view, tex, tanH) {
+  function drawEnvBg(env, view, eye, tex, tanH) {
     gl.useProgram(envProg);
     gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.BLEND);
     gl.bindBuffer(gl.ARRAY_BUFFER, envQuad);
@@ -719,6 +818,9 @@
     gl.uniform3fv(gl.getUniformLocation(envProg, 'uFwd'), new Float32Array(fwd));
     gl.uniform3fv(gl.getUniformLocation(envProg, 'uRight'), new Float32Array(right));
     gl.uniform3fv(gl.getUniformLocation(envProg, 'uUp'), new Float32Array(up));
+    gl.uniform3fv(gl.getUniformLocation(envProg, 'uEye'), new Float32Array(eye));
+    gl.uniform2fv(gl.getUniformLocation(envProg, 'uCap'), new Float32Array([env.capX, env.capZ]));
+    gl.uniform1f(gl.getUniformLocation(envProg, 'uCapH'), env.capH);
     gl.uniform1f(gl.getUniformLocation(envProg, 'uTanH'), tanH);
     gl.uniform1f(gl.getUniformLocation(envProg, 'uAsp'), aspect || 1);
     gl.uniform1f(gl.getUniformLocation(envProg, 'uYaw'), env.yaw);
@@ -787,26 +889,65 @@
       const tex = ensureEnvTex(env.src);
       if (tex && envTexKey === env.src) {
         if (env.mode === 'board') drawEnvBoard(env, tex, vp);
-        else drawEnvBg(env, view, tex, tanH);
+        else drawEnvBg(env, view, eye, tex, tanH);
       }
     }
 
-    gl.useProgram(prog);
+    /* 几何体只上传一次，深度预通道和主通道共用（attribute 槽位在链接时已钉死 0/1/2） */
     gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.pos), gl.DYNAMIC_DRAW);
-    let a = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.nrm), gl.DYNAMIC_DRAW);
-    a = gl.getAttribLocation(prog, 'aNrm'); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, bufCol); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.col), gl.DYNAMIC_DRAW);
-    a = gl.getAttribLocation(prog, 'aCol'); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+    const triCount = g.pos.length / 3;
 
-    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uVP'), false, new Float32Array(vp));
-    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uView'), false, new Float32Array(view));
     const sun = state.sun || { on: true, dir: 300, alt: 53 };
     const al = (sun.alt || 53) * Math.PI / 180, az = (sun.dir || 300) * Math.PI / 180;
     const sdir = [Math.cos(al) * Math.sin(az), Math.sin(al), Math.cos(al) * Math.cos(az)];
+
+    /* ---------- 阴影预通道：从太阳方向渲一张深度图 ---------- */
+    const wantShadow = (state.view && state.view.shadows) !== false && sun.on !== false && triCount > 0;
+    let lightVP = null;
+    if (wantShadow && ensureShadowMap()) {
+      const cx = (bounds.minX + bounds.maxX) / 2, cz = (bounds.minZ + bounds.maxZ) / 2;
+      const ext = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 8) / 2 + 3;
+      const ctr = [cx, 1.2, cz];
+      const lev = [cx + sdir[0] * (ext * 2 + 12), 1.2 + sdir[1] * (ext * 2 + 12), cz + sdir[2] * (ext * 2 + 12)];
+      const lup = Math.abs(sdir[1]) > 0.985 ? [0, 0, 1] : [0, 1, 0];
+      lightVP = mMul(ortho(-ext, ext, -ext, ext, 0.5, ext * 4 + 30), lookAt(lev, ctr, lup));
+      gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFb);
+      gl.viewport(0, 0, SHADOW_RES, SHADOW_RES);
+      gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
+      gl.clearColor(1, 1, 1, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      /* 多边形偏移把自身前后推远一点，不然平地上全是条纹状 self-shadow acne */
+      gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(2.0, 2.0);
+      gl.useProgram(depthProg);
+      gl.uniformMatrix4fv(gl.getUniformLocation(depthProg, 'uVP'), false, new Float32Array(lightVP));
+      gl.drawArrays(gl.TRIANGLES, 0, triCount);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uVP'), false, new Float32Array(vp));
+    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uView'), false, new Float32Array(view));
     gl.uniform3fv(gl.getUniformLocation(prog, 'uSunDir'), new Float32Array(sdir));
     gl.uniform3fv(gl.getUniformLocation(prog, 'uSunCol'), new Float32Array([0.95, 0.88, 0.72]));
     gl.uniform1f(gl.getUniformLocation(prog, 'uAmb'), 0.55);
+    /* 方向投影：把光视深度图按世界坐标采样一遍，只有太阳直射项被挡 */
+    if (lightVP) {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+      gl.uniform1i(gl.getUniformLocation(prog, 'uShadow'), 1);
+      gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uLightVP'), false, new Float32Array(lightVP));
+      gl.uniform1f(gl.getUniformLocation(prog, 'uShadowOn'), 1.0);
+      gl.uniform1f(gl.getUniformLocation(prog, 'uShadowTex'), SHADOW_RES);
+    } else {
+      gl.uniform1f(gl.getUniformLocation(prog, 'uShadowOn'), 0.0);
+    }
     const lights = (state.scene.lights || []).filter(l => !l.hidden);
     const ptPos = new Float32Array(12), ptCol = new Float32Array(12), ptInt = new Float32Array(4);
     const n = Math.min(lights.length, 4);
@@ -818,7 +959,7 @@
     gl.uniform1i(gl.getUniformLocation(prog, 'uMode'), ((state.view && state.view.material) === 'depth') ? 2 : 0);
     /* 背后铺了真实场景图时压一档曝光：白模本来会过曝成纯白，跟照片一比就像贴了张纸 */
     gl.uniform1f(gl.getUniformLocation(prog, 'uExp'), env ? 0.95 : 1.0);
-    gl.drawArrays(gl.TRIANGLES, 0, g.pos.length / 3);
+    gl.drawArrays(gl.TRIANGLES, 0, triCount);
 
     /* 接触阴影：半透明、不写深度，必须画在实体之后 —— 不然脚会被"埋"进地里 */
     if (g.shadows && g.shadows.length) {
@@ -838,7 +979,7 @@
 
     gl.useProgram(lineProg);
     gl.bindBuffer(gl.ARRAY_BUFFER, bufLine); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lp), gl.DYNAMIC_DRAW);
-    a = gl.getAttribLocation(lineProg, 'aP'); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 3, gl.FLOAT, false, 0, 0);
+    const la = gl.getAttribLocation(lineProg, 'aP'); gl.enableVertexAttribArray(la); gl.vertexAttribPointer(la, 3, gl.FLOAT, false, 0, 0);
     gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, 'uVP'), false, new Float32Array(vp));
     gl.uniform3fv(gl.getUniformLocation(lineProg, 'uCol'), new Float32Array(dark ? [0.30, 0.28, 0.25] : [0.62, 0.58, 0.50]));
     gl.drawArrays(gl.LINES, 0, lp.length / 3);
@@ -921,7 +1062,10 @@
   }
   /* 各类物体的包围盒 [x0,y0,z0,x1,y1,z1] */
   function objBox(kind, o) {
-    if (kind === 'person') return [o.x - 0.32, 0, o.y - 0.32, o.x + 0.32, 1.78, o.y + 0.32];
+    if (kind === 'person') {
+      const S = personScale(o), hw = 0.32 * S, hh = 1.78 * S;
+      return [o.x - hw, 0, o.y - hw, o.x + hw, hh, o.y + hw];
+    }
     if (kind === 'prop') {
       /* 道具现在会真的转起来：拾取盒用旋转后的外接矩形，不然转 90° 后点不准 */
       const b = (window.MN_propAABB ? window.MN_propAABB(o)
