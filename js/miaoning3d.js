@@ -368,6 +368,11 @@
 
   /* 所有人体基元最后都走 emitV：一个口子出顶点，顺手累计"这条肢体的世界包围盒"（3D 拖关节要用） */
   function emitV(g, p, n, col) {
+    /* 人物整体缩放只在这里生效：几何按 1× 建，出门绕脚下中心乘一次 —— 结构上不可能乘两遍 */
+    if (g.ps && g.ps.k !== 1) {
+      const k = g.ps.k, ox = g.ps.ox || 0, oz = g.ps.oz || 0;
+      p = [ox + (p[0] - ox) * k, p[1] * k, oz + (p[2] - oz) * k];
+    }
     g.pos.push(p[0], p[1], p[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]);
     if (g.track) {
       const b = g.track.box;
@@ -653,11 +658,12 @@
       /* 整体缩放 × 体型：S 是用户拖的大小，体型再改比例 */
       const BPD = bodyOf(p);
       const S = personScale(p);
-      const HS = S * BPD.H;                        /* 骨架高度/位置 */
+      const HS = BPD.H;                            /* 按 1× 建；用户的 S 在 emitV 出口统一乘 */
       const RW = HS * BPD.W, RD = HS * BPD.D;      /* 左右宽 / 前后厚 */
       const RL = HS * BPD.L, HD = HS * BPD.HEAD;   /* 四肢粗细 / 头身比 */
       const JL = (jt) => (jt || []).map(j => ({ pivot: [j.pivot[0] * HS, j.pivot[1] * HS, j.pivot[2] * HS], angle: j.angle }));
-      const dyS = bodyDy * HS;
+      /* 坐/跳抬升是世界高度，不能被缩放再放大一次：先除 S，出口乘回来正好 */
+      const dyS = bodyDy * HS / Math.max(0.001, S);
       const part = (key, fn) => {
         g.track = key ? { key, pid: p.id, box: null } : null;
         fn();
@@ -676,6 +682,7 @@
         [ctr[0] * HS, ctr[1] * HS, ctr[2] * HS], JL(jt), yaw2 == null ? a : yaw2, cx, 0, cz, c, bodyRz, dyS);
       const SD = s => s > 0 ? 'L' : 'R';
       const Z = 0.098;                              /* 两腿的左右间距（半宽，标准体型） */
+      g.ps = { k: S, ox: cx, oz: cz };               /* 出口统一缩放（见 emitV） */
 
       /* 腿：髋球 + 锥筒大腿 + 膝球 + 锥筒小腿 + 脚 */
       for (const s of [1, -1]) {
@@ -717,12 +724,12 @@
       /* 肩 / 上臂 / 肘 / 前臂 / 手 */
       for (const s of [1, -1]) {
         const sj = sh(s), ej = el(s);
-        const zW = 0.150 * BPD.W;
+        const zW = 0.196 * BPD.W;
         const SE = [...leanJ, sj], SEE = [...leanJ, sj, ej];
         const armRings = [
           { y: 1.340 * HS, rx: 0.052 * RL, rz: 0.054 * RL, z0: s * 0.070 * BPD.W, jt: leanJ },      // 埋在胸廓里
-          { y: 1.310 * HS, rx: 0.064 * RL, rz: 0.066 * RL, z0: s * zW * 0.72, jt: SE },             // 三角肌
-          { y: 1.270 * HS, rx: 0.062 * RL, rz: 0.062 * RL, z0: s * zW * 0.94, jt: SE },
+          { y: 1.310 * HS, rx: 0.070 * RL, rz: 0.072 * RL, z0: s * zW * 0.70, jt: SE },             // 三角肌
+          { y: 1.270 * HS, rx: 0.059 * RL, rz: 0.059 * RL, z0: s * zW * 0.93, jt: SE },
           { y: 1.200 * HS, rx: 0.052 * RL, rz: 0.052 * RL, z0: s * zW, jt: SE },
           { y: 1.105 * HS, rx: 0.044 * RL, rz: 0.044 * RL, z0: s * zW, jt: SE },                     // 肘（上）
           { y: 1.105 * HS, rx: 0.044 * RL, rz: 0.044 * RL, z0: s * zW, jt: SEE },                    // 肘（下，同一圈）
@@ -753,6 +760,7 @@
       }
       ball([0.94, 0.86, 0.80], [faceX + 0.004, 1.522 * HS, 0], [0.012 * HD, 0.016 * HD, 0.011 * HD], leanJ, fd); // 鼻
       box(mouthC, [faceX - 0.002, 1.489 * HS, 0], [0.005 * HD, 0.005 * HD, 0.019 * HD], leanJ, fd);                // 嘴
+      g.ps = null;
       /* 脚底一片阴影 —— 坐着的时候阴影归椅子，不再叠一层 */
       if (!p.sitOn) {
         const rr = (P0.lie ? 0.55 : 0.30) * personScale(p);
