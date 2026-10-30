@@ -261,7 +261,19 @@ function buildOverlay() {
     const { openEnvImport } = await import('./env-import-ui.js');
     openEnvImport({ inDirector: true });
   };
-  ovEl.querySelector('#sbMnClose').onclick = () => { closeOverlay(); };
+  /* 直接返回：有未保存改动先拦一下（从场景库打开编辑的尤其容易白改） */
+  /* 直接返回：有未保存改动先拦一下——但不弹原生 confirm（会挡住点击、也拖死自动化），改成再点一次 */
+  ovEl.querySelector('#sbMnClose').onclick = (e) => {
+    const b = e.currentTarget;
+    if (isBuilderDirty() && !b.dataset.armed) {
+      b.dataset.armed = '1';
+      b.textContent = '真的返回？再点一次';
+      toast('改动还没保存，再点一次就真的返回（会丢掉这次改动）', 'warn');
+      setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = '直接返回'; } }, 4000);
+      return;
+    }
+    closeOverlay();
+  };
   ovEl.querySelector('#sbMnFold').onclick = () => setFolded(!ovEl.classList.contains('folded'));
   ovEl.querySelector('#sbMnFoldShot').onclick = () => window.mnSnapCurrent && window.mnSnapCurrent();
   ovEl.querySelector('#sbMnFoldGrid').onclick = () => window.mnSnapAllCams && window.mnSnapAllCams();
@@ -368,6 +380,17 @@ async function attachLatestShot(st) {
 
 /* 场景快照瘦身：镜头册截图是 base64 PNG，整包塞进 localStorage 会爆 5MB 配额，
    所以只留机位参数（cam/name），图片本身已经挂在镜头的参考图里了。 */
+/* 进搭建时记一份场景快照，返回时对比一下就知道有没有白改 */
+let openSnap = '';
+export function markBuilderSnap() {
+  try { openSnap = (window.MN && window.MN.state) ? JSON.stringify(window.MN.state.scene) : ''; } catch (e) { openSnap = ''; }
+}
+export function isBuilderDirty() {
+  try {
+    if (!openSnap || !window.MN || !window.MN.state) return false;
+    return JSON.stringify(window.MN.state.scene) !== openSnap;
+  } catch (e) { return false; }
+}
 function slimMnState(st) {
   const copy = JSON.parse(JSON.stringify(st));
   copy.directorShots = (copy.directorShots || []).map(s => ({ name: s && s.name, cam: s && s.cam }));
@@ -515,7 +538,11 @@ async function saveToLibrary(st0, scene0, has0) {
   });
   if (name == null) return;
   const shots = (st.directorShots || []);
-  const thumb = shots.length ? (shots[shots.length - 1].image || shots[shots.length - 1].url) : null;
+  /* 缩略图：优先用镜头册最后一张；没有就当场从 3D 抓一张 —— 场景库卡片不该是空白方块 */
+  let thumb = shots.length ? (shots[shots.length - 1].image || shots[shots.length - 1].url) : null;
+  if (!thumb && window.MN3D && MN3D.ok) {
+    try { if (window.MN.state.view.mode !== '3d' && window.setMode) window.setMode('3d'); thumb = MN3D.capture(); } catch (e) { console.warn('[场景库] 缩略图抓取失败', e); }
+  }
   const stRef = await refEnvState(st);
   const it = window.__bdm.saveScene({ id: editing ? editing.id : undefined, name: name.trim() || defName, scene, mnState: stRef, thumb: typeof thumb === 'string' ? thumb : null });
   /* 当前镜头同时指向这条场景，便于「这个景用在哪几镜」统计 */
@@ -586,6 +613,7 @@ export function openSceneBuilder(shot, onSaved, opts = {}) {
       const st = await resolveEnvState(seedState || shotSceneToMn(seedShot, curShot || libItem || { desc: '新场景' }));
       if (libItem && st && st.scene) st.title = libItem.name;
       window.miaoningSeed(st);
+      markBuilderSnap();
     } catch (e) {
       console.error('[场景搭建] 初始化失败', e);
       toast('导演台初始化失败：' + e.message, 'warn');
