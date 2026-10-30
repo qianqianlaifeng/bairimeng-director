@@ -27,7 +27,8 @@
       const w = Math.abs(+o.w || 1), d = Math.abs(+o.d || 1);
       return { cx: (+o.x || 0) + w / 2, cy: (+o.y || 0) + d / 2, hw: w / 2, hd: d / 2, rot: (+o.rot || 0) * Math.PI / 180 };
     }
-    if (kind === 'person') { const fp = PERSON_FP * Math.max(0.3, Math.min(3, +o.scale || 1)); return { cx: +o.x || 0, cy: +o.y || 0, hw: fp / 2, hd: fp / 2, rot: 0 }; }
+    if (kind === 'person') { const bH = ((window.MN3D && window.MN3D.BODIES && window.MN3D.BODIES[o.build || '标准']) || { H: 1 }).H;
+      const fp = PERSON_FP * Math.max(0.3, Math.min(3, +o.scale || 1)) * bH; return { cx: +o.x || 0, cy: +o.y || 0, hw: fp / 2, hd: fp / 2, rot: 0 }; }
     if (kind === 'wall') {
       const x1 = +o.x1 || 0, y1 = +o.y1 || 0, x2 = +o.x2 || 0, y2 = +o.y2 || 0;
       const L = Math.hypot(x2 - x1, y2 - y1);
