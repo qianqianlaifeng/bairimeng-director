@@ -1,4 +1,9 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.21.0（2026-10-29）：🧍 人物模型从「方块人」换成曲面人体 —— 躯干是放样筒（髋宽→腰收→胸阔，有腰身），
+                          四肢是锥筒 + 肩/肘/膝/髋关节球，头和手是椭球，五官贴在新头的正面。
+                          新增**四种体型**：标准 / 瘦 / 胖 / 小孩（小孩不是缩小的大人 —— 头更大、肩更窄、腿更短；
+                          胖的人腰不收）。2D 占地和白模预演的高度也跟着体型走。
+                          修：躯干截面轴写反过（rx 是前后厚、rz 才是左右宽），人是薄板、胳膊还悬空 —— 已归位。
    v1.20.0（2026-10-29）：① 拉片台每个镜头卡多了「焦段 / 机高 / 距离 / 方位」四条滑杆 —— 把复刻从对眼睛变成填数字：
                           焦段按 16:9 全画幅换算成垂直 FOV，机高+距离换算成极角/半径，点「进 3D 复刻」机位就已经摆好。
                           ② 进 3D 复刻会自动建/复用分镜里对应的那一镜并**绑定**它，调完点「💾 保存到镜头」就是写回分镜；
@@ -1231,6 +1236,9 @@ function renderObjPanel() {
       <button class="mn-chip" data-act="autolayout" title="把重叠的家具/人物排开">${icon('sparkles', 's12')}自动摆好</button>
     </div>
     <label class="mn-field"><span>人物名称</span><input type="text" data-f="name" value="${esc(o.name || '')}" placeholder="给这个角色起个名字（3D 里显示在头顶）" /></label>
+    <label class="mn-field"><span>体型</span>
+      <select data-f="build">${['标准','瘦','胖','小孩'].map(b => `<option ${(o.build || '标准') === b ? 'selected' : ''}>${b}</option>`).join('')}</select>
+    </label>
     <label class="mn-field"><span>人物姿态</span>
       <select data-f="pose">${['站立', '走路', '坐下', '招手', '躺下', '运动'].map(p => `<option ${o.pose === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
     </label>
