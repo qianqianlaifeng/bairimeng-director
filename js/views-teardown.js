@@ -33,6 +33,8 @@ async function urlOf(key) {
   return u;
 }
 const fmt = (t) => (window.TEAR_DOWN ? TEAR_DOWN.fmt(t) : String(t));
+/* 焦段 → 垂直视场角：16:9 全画幅片高 20.25mm */
+const lensToFov = (mm) => +(2 * Math.atan(10.125 / Math.max(4, +mm || 35)) * 180 / Math.PI).toFixed(1);
 
 export async function renderTeardown(container) {
   const p = store.active;
@@ -92,6 +94,12 @@ export async function renderTeardown(container) {
             <select data-f="angle" data-i="${s.i}">${AN.map(([k, n]) => `<option value="${k}" ${s.angle === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
           </div>
           <input class="input td-note" data-f="note" data-i="${s.i}" value="${esc(s.note || '')}" placeholder="这一镜在讲什么 / 光怎么打" />
+          <div class="td-cam">
+            <label title="焦段决定景深和视野宽窄"><span>焦段</span><input type="range" data-f="lens" data-i="${s.i}" min="16" max="200" step="1" value="${s.lens == null ? 35 : s.lens}" /><b>${s.lens == null ? 35 : s.lens}mm</b></label>
+            <label title="摄影机离地高度"><span>机高</span><input type="range" data-f="camH" data-i="${s.i}" min="0.2" max="3" step="0.05" value="${s.camH == null ? 1.5 : s.camH}" /><b>${(s.camH == null ? 1.5 : s.camH)}m</b></label>
+            <label title="摄影机到主体的水平距离"><span>距离</span><input type="range" data-f="dist" data-i="${s.i}" min="1" max="30" step="0.5" value="${s.dist == null ? 8 : s.dist}" /><b>${(s.dist == null ? 8 : s.dist)}m</b></label>
+            <label title="绕主体转多少度"><span>方位</span><input type="range" data-f="az" data-i="${s.i}" min="-180" max="180" step="5" value="${s.az || 0}" /><b>${s.az || 0}°</b></label>
+          </div>
           <div class="td-card-act">
             <button class="btn btn-ghost btn-xs" data-act="seek" data-i="${s.i}">▶ 跳到这里</button>
             <button class="btn btn-ghost btn-xs" data-act="copy" data-i="${s.i}">进 3D 复刻</button>
@@ -154,7 +162,8 @@ export async function renderTeardown(container) {
       td.shots = [];
       for (const s of res.shots) {
         const key = await keyOf(s.thumb);
-        td.shots.push({ i: s.i, t0: s.t0, t1: s.t1, dur: s.dur, thumbKey: key, shotSize: '', cameraMove: '', angle: '', note: '' });
+        td.shots.push({ i: s.i, t0: s.t0, t1: s.t1, dur: s.dur, thumbKey: key, shotSize: '', cameraMove: '', angle: '', note: '',
+          lens: 35, camH: 1.5, dist: 8, az: 0 });
       }
       store.persistProjects();
       await drawShots();
@@ -217,6 +226,18 @@ export async function renderTeardown(container) {
     toast('已清空');
   };
 
+  const UNIT = { lens: 'mm', camH: 'm', dist: 'm', az: '°' };
+  $('#tdShots').addEventListener('input', (e) => {
+    const el = e.target;
+    if (el.type !== 'range') return;
+    const i = +el.dataset.i, f2 = el.dataset.f;
+    const s2 = td.shots.find(x => x.i === i);
+    if (!s2) return;
+    s2[f2] = +el.value;
+    const b = el.parentElement.querySelector('b');
+    if (b) b.textContent = el.value + (UNIT[f2] || '');
+    store.persistProjects();
+  });
   $('#tdShots').addEventListener('change', (e) => {
     const el = e.target;
     const i = +el.dataset.i, f = el.dataset.f;
@@ -249,11 +270,50 @@ export async function renderTeardown(container) {
   });
 
   /* 进导演台 3D 复刻：把这一镜的参考帧铺成背景板，站进去对机位 */
+  /* 这一镜对应的分镜条目（没有就建一条），复刻完直接「保存到镜头」写回去 */
+  const boardShotFor = (s) => {
+    const p2 = store.active;
+    if (s.boardId) {
+      const ex = (p2.shots || []).find(x => x.id === s.boardId);
+      if (ex) return ex;
+    }
+    const sh = store.addShot ? store.addShot({
+      desc: s.note || ('拉片 · 第 ' + s.i + ' 镜'),
+      duration: Math.max(0.5, Math.round(s.dur * 10) / 10),
+      shotSize: s.shotSize || 'MS',
+      cameraMove: s.cameraMove || 'static',
+      angle: s.angle || 'eye',
+    }) : null;
+    if (!sh) return null;
+    if (s.thumbKey) store.updateShot(sh.id, { image: s.thumbKey });
+    s.boardId = sh.id;
+    store.persistProjects();
+    return sh;
+  };
+
+  /* 把卡片上那四个数字变成 3D 机位：焦段 → 垂直 FOV，机高+距离 → 极角/半径 */
+  const applyShotCam = (s) => {
+    if (!window.MN3D || !window.MN3D.getCamera) return;
+    const c = window.MN3D.getCamera();
+    const dist = Math.max(0.6, +(s.dist == null ? 8 : s.dist));
+    const camH = Math.max(0.15, +(s.camH == null ? 1.5 : s.camH));
+    const az = (+(s.az) || 0) * Math.PI / 180;
+    const dy = camH - (c.ty || 1.2);
+    const r = Math.max(0.8, Math.hypot(dist, dy));
+    const phi = Math.max(0.08, Math.min(1.54, Math.atan2(dist, Math.abs(dy) < 0.05 ? 0.05 : dy)));
+    if (window.MN && window.MN.state && window.MN.state.camera) {
+      window.MN.state.camera.fov = lensToFov(s.lens == null ? 35 : s.lens);
+    }
+    window.MN3D.setCamera({ theta: az, phi, r, tx: c.tx, ty: c.ty, tz: c.tz });
+  };
+
   const replicateIn3D = async (s) => {
     const url = await urlOf(s.thumbKey || s.thumb);
     if (!url) return toast('这一镜没有缩略图', 'warn');
     const { openSceneBuilder } = await import('./builder.js');
-    openSceneBuilder(null, () => { }, { library: true });
+    const sh = boardShotFor(s);
+    /* 传真实分镜条目进去 → 导演台里「保存到镜头」就是"写回分镜"那一步 */
+    openSceneBuilder(sh || null, () => { }, sh ? {} : { library: true });
     /* 等导演台起来，再把参考帧塞成背景板 */
     const t0 = Date.now();
     const wait = () => new Promise(r => setTimeout(r, 150));
@@ -273,7 +333,9 @@ export async function renderTeardown(container) {
     });
     if (window.MN.state.view.mode !== '3d' && window.setMode) window.setMode('3d');
     window.renderAll && window.renderAll();
-    toast('参考帧已铺成背景板 —— 调机位把它对准', 'ok');
+    await new Promise(r => setTimeout(r, 260));
+    applyShotCam(s);
+    toast(sh ? '机位已按卡片上的数字摆好 · 调完点「💾 保存到镜头」就写回分镜' : '机位已摆好（独立建景，存进场景库）', 'ok');
   };
 
   await drawShots();
