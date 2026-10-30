@@ -160,7 +160,7 @@ export function mnToShotScene(st) {
     const hasPath = pathPts.length >= 2;
     push({
       type: 'actor', id: pe.id, name: pe.name || '', x: +pe.x || 0, z: +pe.y || 0,
-      rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: Math.max(0.3, Math.min(3, +pe.scale || 1)),
+      rot: ((90 - (+pe.rot || 0)) % 360 + 360) % 360, scale: Math.max(0.3, Math.min(3, +pe.scale || 1)) * (((window.MN3D && window.MN3D.BODIES && window.MN3D.BODIES[pe.build || '标准']) || { H: 1 }).H),
       action: hasPath ? 'walk' : (A2P[pe.pose] || 'stand'),
       /* 坐在家具上：把坐面高度带给白模，预演里人才不会陷进椅子 */
       sitH: pe.sitOn ? Math.max(0, Math.min(1.6, +pe.sitH || 0)) : 0,
