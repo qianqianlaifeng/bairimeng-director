@@ -870,7 +870,9 @@
     const geoMs = performance.now() - t0;
     const eye = eyeOf(), up = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
     const view = lookAt(eye, [cam.tx, cam.ty, cam.tz], up);
-    const FOV = 45 * Math.PI / 180, tanH = Math.tan(FOV / 2);
+    /* 3D 视图真的吃「镜头视角」——以前硬编码 45°，面板上那条滑杆等于死的 */
+    const fovDeg = Math.max(12, Math.min(90, +((state.camera && state.camera.fov) || 45)));
+    const FOV = fovDeg * Math.PI / 180, tanH = Math.tan(FOV / 2);
     const proj = perspective(FOV, aspect || 1, 0.1, 1000);
     const vp = mMul(proj, view);
     M._vp = vp;
@@ -1011,7 +1013,7 @@
     const xAxis = norm(cross(upv, zAxis));
     const yAxis = cross(zAxis, xAxis);
     const fwd = [-zAxis[0], -zAxis[1], -zAxis[2]];
-    const tanH = Math.tan((45 * Math.PI / 180) / 2);
+    const tanH = Math.tan((Math.max(12, Math.min(90, +((M._last && M._last.camera && M._last.camera.fov) || 45))) * Math.PI / 180) / 2);
     const aspect = rect.width / rect.height;
     const dir = norm([
       fwd[0] + xAxis[0] * ndcX * tanH * aspect + yAxis[0] * ndcY * tanH,
@@ -1036,7 +1038,7 @@
     const xAxis = norm(cross(upv, zAxis));
     const yAxis = cross(zAxis, xAxis);
     const fwd = [-zAxis[0], -zAxis[1], -zAxis[2]];
-    const tanH = Math.tan((45 * Math.PI / 180) / 2);
+    const tanH = Math.tan((Math.max(12, Math.min(90, +((M._last && M._last.camera && M._last.camera.fov) || 45))) * Math.PI / 180) / 2);
     const aspect = rect.width / rect.height;
     return {
       o: eye,
