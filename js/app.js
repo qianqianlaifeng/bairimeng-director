@@ -9,6 +9,7 @@ import { initViewsCore, renderHome, renderScript, renderStoryboard, openProjectR
 import { initViewsStage, renderDict, renderPreview, renderScenes, renderContinuity } from './views-stage.js';
 import { initViewsPlayer, renderAnimatic, renderEditor } from './views-player.js';
 import { initViewsTools, renderPrompts, renderReview, renderAchievements, renderSettings, openProjectExport } from './views-tools.js';
+import { initViewsTeardown, renderTeardown } from './views-teardown.js';
 
 /* ---------- 初始化 ---------- */
 const store = new Store();
@@ -17,6 +18,7 @@ initViewsCore(store);
 initViewsStage(store);
 initViewsPlayer(store);
 initViewsTools(store);
+initViewsTeardown(store);
 
 const VIEWS = {
   home:        { title: '项目台',   icon: '🏠', render: renderHome,        group: '创作' },
@@ -24,6 +26,7 @@ const VIEWS = {
   storyboard:  { title: '分镜板',   icon: '🎞️', render: renderStoryboard,  group: '创作', needProject: true },
   scenes:      { title: '场景库',   icon: '🏗', render: renderScenes,      group: '创作', needProject: true },
   continuity:  { title: '连戏检查', icon: '🔗', render: renderContinuity,  group: '创作', needProject: true },
+  teardown:    { title: '拉片台',   icon: '🎞', render: renderTeardown,  group: '创作', needProject: true },
   dict:        { title: '运镜词典', icon: '🧭', render: renderDict,        group: '创作' },
   preview:     { title: '运镜预演', icon: '👁️', render: renderPreview,     group: '创作' },
   animatic:    { title: '动态分镜', icon: '🌟', render: renderAnimatic,    group: '创作', needProject: true },
@@ -71,7 +74,7 @@ const appEl = el(`<div class="app">
       <button class="btn btn-ghost btn-sm" id="btnCheckin">📅 签到</button>
     </header>
     <div class="content" id="viewRoot"></div>
-    <footer class="foot dim">白日梦导演台 v1.18.0 · 地面接上了 · 人物可缩放 · 方向投影 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
+    <footer class="foot dim">白日梦导演台 v1.19.0 · 视频拉片台 · 自动拆镜 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
   </main>
 </div>`);
 document.body.appendChild(appEl);
