@@ -539,12 +539,22 @@
   const bodyOf = (p) => BODIES[(p && p.build) || '标准'] || BODIES['标准'];
   M.BODIES = BODIES;
   M.bodyOf = bodyOf;
+  /* ---------- 坐姿升降 ----------
+     站立时髋枢轴离地 0.84m（见 hip() 与躯干定义），屁股那块底面在 0.795。
+     坐到 0.445m 的椅面上 = 整体下沉 0.84-0.06-0.445 ≈ 0.33m。
+     以前是「坐下姿势自带 -0.28」再「+ 坐面高」，两笔加下来人反而被抬到坐面上方半米，
+     就是用户说的「人浮在天上/坐在空气里」。现在只按坐面高算一次。 */
+  const SIT_HIP_DROP = 0.78;
+  function sitDy(p) { return Math.max(0, Math.min(1.6, +p.sitH || 0)) - SIT_HIP_DROP; }
+  function jumpDy(p) { return Math.max(0, Math.min(3, +p.jump || 0)) * 0.22; }
+  function bodyDyOf(P0, p) { return (p.sitOn ? sitDy(p) : (P0.dy || 0)) + jumpDy(p); }
+  M.bodyDyOf = bodyDyOf;
   /* 头顶名牌高度也要跟着缩放，不然放大的人名牌还在原地 */
   function labelTopY(p) {
     const pose = p.pose || '站立', S = personScale(p);
-    const base = pose === '躺下' ? 0.55 : pose === '坐下' ? 1.62 : 1.82;
-    return (base * S) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22 * S
-      + (p.sitOn ? Math.max(0, Math.min(1.6, +p.sitH || 0)) : 0);
+    /* 站/躺按姿势取定值；真坐在家具上 = 头顶(1.68+下沉量) 再抬 0.14，和站立的口径一致 */
+    const base = pose === '躺下' ? 0.55 : p.sitOn ? (1.68 + sitDy(p) + 0.14) : pose === '坐下' ? 1.62 : 1.82;
+    return base * S + jumpDy(p) * S;
   }
   M.labelTopY = labelTopY;
   function poseOf(name, p) {
@@ -648,8 +658,8 @@
       /* 全身变换：躺下 = 整体后仰 90°，其余按姿势校准的升降量；跳跃再抬高 */
       const bodyRz = P0.lie ? -Math.PI / 2 : 0;
       /* 全身变换：躺下 = 整体后仰 90°，其余按姿势校准的升降量；跳跃再抬高；
-         坐在家具上（sitOn/sitH 由座位算出）再按坐面高度抬一次，人才会真的落到椅子面上 */
-      const bodyDy = (P0.dy || 0) + Math.max(0, Math.min(3, +p.jump || 0)) * 0.22 + (p.sitOn ? Math.max(0, Math.min(1.6, +p.sitH || 0)) : 0);
+         坐在家具上（sitOn/sitH 由座位算出）时改成「按坐面高把髋部沉下去」，人才真的落在椅子面上 */
+      const bodyDy = bodyDyOf(P0, p);
       const leanJ = P0.lean ? [{ pivot: [0, 0.84, 0], angle: P0.lean }] : [];
       const hip = s => ({ pivot: [0, 0.84, s * 0.112], angle: (s > 0 ? P0.hipL : P0.hipR) || 0 });
       const knee = s => ({ pivot: [0, 0.52, s * 0.112], angle: (s > 0 ? P0.kneeL : P0.kneeR) || 0 });
