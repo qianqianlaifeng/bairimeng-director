@@ -508,6 +508,7 @@ async function saveAndClose() {
        否则「房间」保存后再打开会变成 4 面墙（房间概念丢失），改不动了。 */
     mnState: has ? slimMnState(stSave) : null,
     sceneId: null,       // 本镜自己改过的场景 → 与场景库条目解绑（库里的仍保留）
+    autoBuiltAt: null,   // 手动存过就不再挂「🎬 自动搭景」的标，卡片说的是「这一镜是你自己定的」
     ...(has ? { cameraMove: 'free' } : {}),
   });
   window.__bdm.addXP(3, '搭建场景');
