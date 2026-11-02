@@ -5,7 +5,8 @@
 import { CAMERA_MOVES, MOVE_CATS, SHOT_SIZES, ANGLES, TRANSITIONS, PROMPT_TEMPLATES, STYLE_BANK, ACTOR_ACTIONS, STAGE_SCENES } from './data.js';
 import { localBreakdown, aiBreakdown, aiEnhancePrompt, buildPrompt, moveByKey } from './breakdown.js';
 import { WhiteModelRenderer, solveCamera, focusPointOf } from './cameraSim.js';
-import { openSceneBuilder } from './builder.js';
+import { openSceneBuilder, mnToShotScene } from './builder.js';
+import { planProject, hasScene } from './auto-build.js';
 import { esc, el, modal, confirmDlg, toast, copyText, pickFile, fmtDur, opts } from './ui.js';
 
 let store;   // 由 init 注入
@@ -266,6 +267,7 @@ export function renderStoryboard(container) {
       <h2>🎞️ 分镜板 <span class="dim">· ${esc(p.name)} · ${p.shots.length} 镜 · ${fmtDur(store.totalDuration(p))}</span></h2>
       <div class="page-head-actions">
         <button class="btn btn-ghost btn-sm" id="btnImportShots">📥 导入分镜</button>
+        <button class="btn btn-ghost btn-sm" id="btnAutoBuild" title="按每张卡的景别 / 角度 / 运镜，自动搭出 3D 场景和机位">🎬 一键搭景</button>
         <button class="btn btn-ghost btn-sm" id="btnExportShots">📤 导出</button>
         <button class="btn btn-ghost btn-sm" id="btnBatch">☑ 批量</button>
         <button class="btn btn-ghost btn-sm" id="btnClearShots">🧹 清空</button>
@@ -299,13 +301,15 @@ export function renderStoryboard(container) {
     const left = Math.max(0, Math.ceil((u.at + 60000 - Date.now()) / 1000));
     undoBar.innerHTML = `
       <div class="card" style="display:flex;gap:10px;align-items:center;padding:8px 14px;margin:8px 0;border-color:var(--warn,#b98900)">
-        <span>🗑 ${esc(u.label)}${u.shots.length ? `（原 ${u.shots.length} 镜）` : ''}</span>
+        <span>${u.icon || '🗑'} ${esc(u.label)}${u.shots.length ? `（原 ${u.shots.length} 镜）` : ''}</span>
         <button class="btn btn-primary btn-sm" id="undoShots">↩️ 撤销</button>
         <span class="dim">${left} 秒内可撤销</span>
       </div>`;
     undoBar.querySelector('#undoShots').onclick = () => {
+      const info = store.undoInfo();
       const n = store.undoRemoveShots();
-      toast(n ? `已恢复 ${n} 个镜头` : '撤销失败：项目已切换', n ? 'ok' : 'warn');
+      const bulk = info && info.icon && info.icon !== '🗑';
+      toast(n ? (bulk ? `已撤销「${info.label}」，${n} 镜全部还原` : `已恢复 ${n} 个镜头`) : '撤销失败：项目已切换', n ? 'ok' : 'warn');
     };
     clearTimeout(undoTimer);
     undoTimer = setTimeout(renderUndoBar, 1000);
@@ -313,6 +317,161 @@ export function renderStoryboard(container) {
 
   /* ---------- 导入分镜（同学写好的表格/文档） ---------- */
   container.querySelector('#btnImportShots').onclick = () => openImportShots();
+
+  /* ---------- 🎬 一键搭景：按景别 / 角度 / 运镜，批量把镜头变成 3D 场景 + 机位 ---------- */
+  container.querySelector('#btnAutoBuild').onclick = () => openAutoBuild();
+
+  const nameOfAngle = k => (ANGLES.find(a => a.key === k) || {}).name || k;
+
+  function autoBuildTargets(scope) {
+    const out = [];
+    p.shots.forEach((s, i) => {
+      if (scope === 'sel' && !selShots.has(s.id)) return;
+      if (scope !== 'all' && hasScene(s)) return;
+      out.push(i);
+    });
+    return out;
+  }
+
+  function openAutoBuild() {
+    if (!p.shots.length) { toast('分镜板是空的，先拆个分镜', 'warn'); return; }
+    const built = p.shots.filter(hasScene).length;
+    const missing = p.shots.length - built;
+    const selMissing = p.shots.filter(s => selShots.has(s.id) && !hasScene(s)).length;
+    const keys = new Set(p.shots.map(s => String(s.sceneKey || '').trim() || '未分场'));
+    const m = modal({
+      title: '🎬 一键搭景',
+      wide: true,
+      body: `
+        <p class="dim" style="margin-top:0">按每张卡上已经写好的 <b>景别 / 角度 / 运镜</b>，把镜头直接变成能看、能改的 3D 场景 + 机位：
+        景别定机位距离（特写 0.7m ← 中景 2.5m ← 大远景 8.5m）、角度定高低（仰拍压到 0.6m、鸟瞰升到 5m）、
+        运镜给<b>起幅 / 落幅两个机位</b>（推拉前后两点、摇镜原地转向、环绕左右两点）。
+        房间类型和家具按画面描述里的关键词挑（客厅 / 卧室 / 办公室 / 教室 / 街道…），<b>同一场次沿用同一套空间和同一批人</b>，
+        人物颜色也固定，连戏不会跳。搭完随时能进导演台手改。</p>
+        <div class="form-row">
+          <label>搭哪些镜头</label>
+          <select id="abScope" class="input">
+            <option value="missing">${missing ? `只搭还没搭景的 ${missing} 镜` : '还没有需要搭的镜头'}${built ? `（已搭 ${built} 镜，跳过）` : ''}</option>
+            <option value="all">整板 ${p.shots.length} 镜全部重搭（会覆盖手搭好的场景）</option>
+            ${selShots.size ? `<option value="sel">只搭勾选的 ${selShots.size} 镜（其中没景的 ${selMissing} 镜）</option>` : ''}
+          </select>
+        </div>
+        <div class="dim" style="margin-top:2px">本场共 ${keys.size} 个场次标识（${Array.from(keys).slice(0, 6).join('、')}${keys.size > 6 ? '…' : ''}）· 同一个场次的镜头会共用一个空间</div>
+        <div class="modal-actions">
+          <div class="spacer"></div>
+          <button class="btn btn-ghost" id="abCancel">取消</button>
+          <button class="btn btn-primary" id="abOk">开始搭</button>
+        </div>`,
+    });
+    m.body.querySelector('#abCancel').onclick = () => m.close(false);
+    m.body.querySelector('#abOk').onclick = () => {
+      const scope = m.body.querySelector('#abScope').value;
+      const targets = autoBuildTargets(scope);
+      if (!targets.length) { toast('这些镜头都已经搭过景了，换「全部重搭」试试', 'warn'); return; }
+      m.close(true);
+      runAutoBuild(targets, scope);
+    };
+  }
+
+  function runAutoBuild(targets, scope) {
+    const t0 = performance.now();
+    store.boardUndo(`一键搭景 ${targets.length} 镜`, '🎬');
+    let plans;
+    try {
+      plans = planProject(p.shots, targets, { aspect: p.aspect });
+    } catch (e) {
+      console.error('[一键搭景] 规划失败', e);
+      toast('自动搭景失败：' + e.message, 'warn');
+      return;
+    }
+    const patches = [], rows = [];
+    for (const pl of plans) {
+      try {
+        const white = mnToShotScene(pl.plan.mnState);
+        /* 白模预演从「起幅」开始跑（导演台里的两个机位是起幅/落幅） */
+        white.cam = pl.plan.whiteCam;
+        patches.push({ id: pl.shot.id, patch: { scene: white, mnState: pl.plan.mnState, autoBuiltAt: Date.now() } });
+        rows.push({ idx: pl.index + 1, shot: pl.shot, notes: pl.plan.notes, mn: pl.plan.mnState, white });
+      } catch (e) {
+        console.warn('[一键搭景] 第 ' + (pl.index + 1) + ' 镜失败', e);
+        rows.push({ idx: pl.index + 1, shot: pl.shot, notes: ['搭失败：' + e.message], mn: null });
+      }
+    }
+    const n = store.updateShots(patches);
+    const ms = performance.now() - t0;
+    const took = ms < 1000 ? Math.round(ms) + ' 毫秒' : (ms / 1000).toFixed(1) + ' 秒';
+    toast(n ? `已自动搭好 ${n} 镜 · ${took} · 60 秒内可撤销` : '一个镜头都没搭成', n ? 'ok' : 'warn');
+    if (n) showAutoBuildReport(rows.filter(r => r.mn), n, scope);
+  }
+
+  /* 结果清单：一眼看出每镜被搭成什么样、机位在哪，能直接跳进去改，也能导 CSV 给同学 */
+  function showAutoBuildReport(rows, n, scope) {
+    const line = r => {
+      const c0 = (r.mn.directorShots[0] || {}).cam || {};
+      const dist = (c0.r * Math.sin(c0.phi || 1)).toFixed(1);
+      const h = (c0.ty + c0.r * Math.cos(c0.phi || 1)).toFixed(1);
+      return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:4px 6px;color:var(--muted)">${r.idx}</td>
+        <td style="padding:4px 6px;max-width:190px">${esc(String(r.shot.desc || '').slice(0, 22))}</td>
+        <td style="padding:4px 6px;white-space:nowrap">${esc(r.notes[0])}</td>
+        <td style="padding:4px 6px;white-space:nowrap">${esc(r.notes[1])}</td>
+        <td style="padding:4px 6px;white-space:nowrap" title="起幅 ${dist}m / 高 ${h}m">${esc(r.notes[2])}</td>
+        <td style="padding:4px 6px;white-space:nowrap">${esc(nameOfSize(r.shot.shotSize))}/${esc(nameOfAngle(r.shot.angle))}/${esc(nameOfMove(r.shot.cameraMove))}</td>
+        <td style="padding:4px 6px"><button class="btn btn-ghost btn-sm" data-open="${r.idx - 1}">🏗 看看</button></td>
+      </tr>`;
+    };
+    const m = modal({
+      title: `🎬 已自动搭好 ${n} 镜`,
+      wide: true,
+      body: `
+        <p class="dim" style="margin-top:0">
+          ${scope === 'all' ? '整板重搭：原来手搭的场景已被覆盖。' : '已有场景的镜头一个都没动。'}
+          不满意就点「🏗 看看」进导演台直接改，改完「💾 保存到镜头」会盖掉这一镜的自动结果；
+          整批 60 秒内可在分镜板上方一键撤销。
+        </p>
+        <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+          <thead><tr style="color:var(--muted);text-align:left">
+            <th style="padding:4px 6px">#</th><th style="padding:4px 6px">画面</th><th style="padding:4px 6px">空间</th>
+            <th style="padding:4px 6px">人物</th><th style="padding:4px 6px">机位</th><th style="padding:4px 6px">景别/角度/运镜</th><th></th>
+          </tr></thead>
+          <tbody>${rows.map(line).join('')}</tbody>
+        </table>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="abCsv">📤 导出机位表 CSV</button>
+          <div class="spacer"></div>
+          <button class="btn btn-ghost" id="abClose">关掉</button>
+          <button class="btn btn-primary" id="abPlay">▶ 去动态预演</button>
+        </div>`,
+    });
+    m.body.querySelector('#abClose').onclick = () => m.close(false);
+    m.body.querySelector('#abPlay').onclick = () => {
+      m.close(false);
+      window.dispatchEvent(new CustomEvent('bdm-nav', { detail: { view: 'preview' } }));
+    };
+    m.body.querySelector('#abCsv').onclick = () => {
+      const head = '镜号,场次,画面,景别,角度,运镜,空间,人数,机位数,起幅距离m,起幅高度m,竖向视野°\n';
+      const cell = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const body = rows.map(r => {
+        const c0 = (r.mn.directorShots[0] || {}).cam || {};
+        return [r.idx, r.shot.sceneKey || '', r.shot.desc || '', nameOfSize(r.shot.shotSize), nameOfAngle(r.shot.angle),
+          nameOfMove(r.shot.cameraMove), r.notes[0], r.notes[1], r.mn.directorShots.length,
+          (c0.r * Math.sin(c0.phi)).toFixed(2), (c0.ty + c0.r * Math.cos(c0.phi)).toFixed(2), r.mn.camera.fov]
+          .map(cell).join(',');
+      }).join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob(['\ufeff' + head + body], { type: 'text/csv;charset=utf-8' }));
+      a.download = (p.name || '项目') + '-机位表.csv';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast('机位表已导出 📤', 'ok');
+    };
+    m.body.querySelectorAll('[data-open]').forEach(b => b.onclick = () => {
+      const s2 = p.shots[+b.dataset.open];
+      if (!s2) return;
+      m.close(false);
+      openSceneBuilder(s2, () => toast('这一镜的场景已保存 ✅', 'ok'));
+    });
+  }
 
   function openImportShots() {
     const SH = window.SHOT_IMPORT;
@@ -521,6 +680,7 @@ export function renderStoryboard(container) {
     }
     p.shots.forEach((s, i) => {
       const mv = moveByKey[s.cameraMove] || moveByKey.static;
+      const hasBuilt = !!(s.scene && Array.isArray(s.scene.objects) && s.scene.objects.length);
       /* 台词配速体检：中文 ≈5 字/秒，台词在镜头时长里念不完就亮黄灯 */
       const speakLen = String(s.dialogue || '').replace(/[，。！？、…；：,.!?~\s"'“”‘’「」『』（）()【】\-—]/g, '').length;
       const speakNeed = speakLen / 5;
@@ -534,6 +694,7 @@ export function renderStoryboard(container) {
           <div class="shot-frame-tags">
             <span class="tag">${esc(SHOT_SIZES.find(x => x.key === s.shotSize)?.name || '')}</span>
             <span class="tag tag-move">${esc(mv.name)}</span>
+            ${hasBuilt ? `<span class="tag" title="${s.autoBuiltAt ? '一键搭景自动生成的 3D 场景 · 点 🏗 进去改' : '已有 3D 场景 · 点 🏗 进去改'}">🏗${s.autoBuiltAt ? '🎬' : ''}</span>` : ''}
             ${talkTag}
           </div>
           <div class="shot-dur">${s.duration}s</div>
@@ -598,7 +759,9 @@ export function renderStoryboard(container) {
       } else {
         const r = new WhiteModelRenderer(cv);
         r.setTheme({ bg1: '#eceff4', bg2: '#e1e5ed', fog: '#e8ebf1', line: 'rgba(96,106,134,.26)', ink: '#2a3040', hud: 'rgba(35,42,60,.38)' });
-        r.render(mv.sim, 0.55, 'stand', { duration: s.duration });
+        /* 卡片缩略图直接按这一镜的景别/角度取景，并且把搭好的 3D 场景画进去：
+           一眼能看出「这一镜拍的是哪块地方、机位有多近」，不再是每张卡都长一样的示意图 */
+        r.render(mv.sim, 0.55, 'stand', { duration: s.duration, scene: hasBuilt ? s.scene : undefined, size: s.shotSize, angle: s.angle });
       }
     });
     renderBatchBar();
