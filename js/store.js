@@ -231,11 +231,14 @@ class Store {
     const p = this.active;
     return p ? (p.shots || []).find(s => s.id === shotId) || null : null;
   }
-  _takeShotUndo(label) {
+  _takeShotUndo(label, icon) {
     const p = this.active; if (!p) return;
-    this._shotUndo = { projectId: p.id, label, shots: JSON.parse(JSON.stringify(p.shots || [])), at: Date.now() };
+    this._shotUndo = { projectId: p.id, label, icon: icon || '🗑', shots: JSON.parse(JSON.stringify(p.shots || [])), at: Date.now() };
     this._queueImgPurge();
   }
+  /* 整板级别的撤销：给「一键搭景」这类「不改镜头数量、只改内容」的批量操作用。
+     和删除共用同一条 60 秒窗口，撤销时按快照整板还原，字段一个都不会漏。 */
+  boardUndo(label, icon) { this._takeShotUndo(label || '批量修改', icon || '↩️'); }
   canUndoShots() {
     const u = this._shotUndo;
     return !!(u && this.active && u.projectId === this.active.id && Date.now() - u.at < Store.UNDO_WINDOW);
@@ -308,6 +311,19 @@ class Store {
     Object.assign(s, patch);
     p.updatedAt = Date.now();
     this.persistProjects(); this.emit();
+  }
+  /* 批量写镜头：整批只持久化 + 通知一次。
+     「一键搭景」要给十几条镜头同时写场景，逐条 updateShot 会把整份项目 stringify 十几遍。 */
+  updateShots(patches) {
+    const p = this.active; if (!p) return 0;
+    let n = 0;
+    for (const it of (patches || [])) {
+      const s = it && p.shots.find(x => x.id === it.id);
+      if (!s) continue;
+      Object.assign(s, it.patch || {}); n++;
+    }
+    if (n) { p.updatedAt = Date.now(); this.persistProjects(); this.emit(); }
+    return n;
   }
   deleteShot(shotId) {
     const p = this.active; if (!p) return;
