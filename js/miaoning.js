@@ -4106,6 +4106,18 @@ window.miaoningSeed = function (st) {
   MN.grid = !(st.view && st.view.grid === false);
   fitView();
   renderAll(); saveSoon();
+  /* seed 的状态里写着 3D，就直接站在 3D 给用户看（一键搭景的镜头、以及上次在立体视图里保存的景）。
+     以前只换状态不换界面 → 出现「状态是 3D、画面还是 2D 平面图」的分裂。 */
+  const want3d = !!(MN.state.view && MN.state.view.mode === '3d' && window.MN3D && MN3D.ok);
+  if (MN.state.view && !want3d) MN.state.view.mode = '2d';
+  setTimeout(() => {
+    resizeCanvas();
+    if (!want3d) return;
+    setMode('3d');
+    /* 一键搭景的镜头：打开就站到这一镜的起幅机位上，客户第一眼看到的就是「这个镜头怎么拍的」 */
+    const ds = (MN.state.directorShots || []).filter(s => s && s.cam);
+    if (MN.state.autoBuild && ds.length) MN3D.setCamera(ds[0].cam);
+  }, 80);
   setTimeout(resizeCanvas, 60);
   return true;
 };
