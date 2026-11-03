@@ -668,3 +668,20 @@
 .mn-joint-grid{display:grid;grid-template-columns:1fr;gap:2px 10px}
 .mn-joint-grid .mn-field{margin:0}
 .mn-joint-grid .mn-field span{font-size:12px}
+
+/* ==== v1.22.0 对标补齐：监看器 / 跟随 / 磁吸 / 锁定 / 垫图 ==== */
+/* 5 个页签挤一行：字号压一点，免得「环境图」换行 */
+.mn-panel-tabs button{font-size:12px;padding:0 4px}
+
+/* 镜头设置扩展块：焦段 / 翻滚 / 监看器 / 跟随，分组用现成的 mn-joint-head */
+.mn-cam-x{margin-top:4px;padding-bottom:2px}
+.mn-cam-x .mn-chip-row{margin:4px 0 8px}
+.mn-cam-x .mn-field{margin:2px 0}
+
+/* 锁定态：清单行的小锁、面板头部的锁定按钮，点亮要有明确反馈 */
+.mn-row-act.on{color:var(--accent);border-color:var(--accent)}
+.mn-ghost.on{color:var(--accent);border-color:var(--accent);font-weight:600}
+
+/* 右下监看器边框与标签：GL 只画画面，框和字用 DOM 叠上去，缩放窗口自动跟着走 */
+.mn-mon-frame{position:absolute;right:20px;bottom:56px;border:1.5px solid rgba(46,124,246,.75);border-radius:6px;pointer-events:none;z-index:6;box-shadow:0 6px 18px rgba(20,24,34,.18)}
+.mn-mon-frame span{position:absolute;left:-1px;top:-22px;font:600 11px/1 ui-monospace,Menlo,monospace;color:#fff;background:rgba(46,124,246,.9);padding:3px 7px;border-radius:5px;white-space:nowrap}
