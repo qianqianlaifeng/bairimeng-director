@@ -413,19 +413,28 @@ function dataURLToBlob(u) {
   for (let k = 0; k < bin.length; k++) arr[k] = bin.charCodeAt(k);
   return new Blob([arr], { type: (u.slice(5, i).split(';')[0] || 'image/jpeg') });
 }
-/* 存之前：src → IndexedDB，state 里只留 ref/hash（返回副本，不动正在编辑的那份） */
-export async function refEnvState(st) {
-  const e = st && st.scene && st.scene.env;
-  if (!e || !e.src || !/^data:/.test(e.src)) return st;
-  const copy = JSON.parse(JSON.stringify(st));
-  const ce = copy.scene.env, h = srcHash(e.src);
-  if (ce.ref && ce.hash === h) { delete ce.src; return copy; }
+/* 存之前：src → IndexedDB，state 里只留 ref/hash（返回副本，不动正在编辑的那份）
+   带图的位置有两个：scene.env（环境图）和 scene.ref（垫的参考图），走同一套搬运。 */
+const IMG_SLOTS = ['env', 'ref'];
+async function refSlotImage(slotObj) {
+  if (!slotObj || !slotObj.src || !/^data:/.test(slotObj.src)) return false;
+  const h = srcHash(slotObj.src);
+  if (slotObj.ref && slotObj.hash === h) { delete slotObj.src; return true; }
   let key = null;
-  try { key = await window.__bdm.putImage(dataURLToBlob(e.src)); } catch (err) { key = null; }
-  if (key) { ce.ref = key; ce.hash = h; delete ce.src; }   /* IDB 挂了就不搬，宁可占点 localStorage */
+  try { key = await window.__bdm.putImage(dataURLToBlob(slotObj.src)); } catch (err) { key = null; }
+  if (!key) return false;                       /* IDB 挂了就不搬，宁可占点 localStorage */
+  slotObj.ref = key; slotObj.hash = h; delete slotObj.src;
+  return true;
+}
+export async function refEnvState(st) {
+  if (!st || !st.scene) return st;
+  const has = IMG_SLOTS.some(k => st.scene[k] && st.scene[k].src && /^data:/.test(st.scene[k].src));
+  if (!has) return st;
+  const copy = JSON.parse(JSON.stringify(st));
+  for (const k of IMG_SLOTS) await refSlotImage(copy.scene[k]);
   return copy;
 }
-/* 打开时：ref → 原图（图丢了就把 env 摘掉，退回纯白模，别留一个黑背景） */
+/* 打开时：ref → 原图（图丢了就把这一槽摘掉，退回纯白模，别留一个黑背景/空垫图） */
 function blobToDataURL(blob) {
   return new Promise(res => {
     const fr = new FileReader();
@@ -435,13 +444,16 @@ function blobToDataURL(blob) {
   });
 }
 export async function resolveEnvState(st) {
-  const e = st && st.scene && st.scene.env;
-  if (!e || e.src || !e.ref) return st;
-  let blob = null;
-  try { blob = await window.__bdm.getImage(e.ref); } catch (err) { blob = null; }
-  if (!blob) { delete st.scene.env; return st; }
-  e.src = await blobToDataURL(blob);
-  if (!e.src) delete st.scene.env;
+  if (!st || !st.scene) return st;
+  for (const k of IMG_SLOTS) {
+    const e = st.scene[k];
+    if (!e || e.src || !e.ref) continue;
+    let blob = null;
+    try { blob = await window.__bdm.getImage(e.ref); } catch (err) { blob = null; }
+    if (!blob) { delete st.scene[k]; continue; }
+    e.src = await blobToDataURL(blob);
+    if (!e.src) delete st.scene[k];
+  }
   return st;
 }
 /* 导出成 JSON 文件时把原图塞回去：ref 只是这台电脑 IndexedDB 的编号，换台机器就是死链。
@@ -456,7 +468,7 @@ export async function inlineEnvForExport(node, depth = 0) {
   let n = 0;
   for (const k of Object.keys(node)) {
     const v = node[k];
-    if (k === 'env' && v && typeof v === 'object' && v.ref && !v.src) {
+    if (IMG_SLOTS.indexOf(k) >= 0 && v && typeof v === 'object' && v.ref && !v.src) {
       const url = await blobToDataURL(await window.__bdm.getImage(v.ref).catch(() => null));
       if (url) { v.src = url; n++; }
     } else {
@@ -476,7 +488,7 @@ export async function refEnvEverywhere(node, depth = 0) {
   let n = 0;
   for (const k of Object.keys(node)) {
     const v = node[k];
-    if (k === 'env' && v && typeof v === 'object' && v.src && !v.ref && /^data:/.test(v.src)) {
+    if (IMG_SLOTS.indexOf(k) >= 0 && v && typeof v === 'object' && v.src && !v.ref && /^data:/.test(v.src)) {
       let key = null;
       try { key = await window.__bdm.putImage(dataURLToBlob(v.src)); } catch (e) { key = null; }
       if (key) { v.ref = key; v.hash = srcHash(v.src); delete v.src; n++; }
