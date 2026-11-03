@@ -159,10 +159,11 @@
       else { const w = Math.abs(+o.w || 1), d = Math.abs(+o.d || 1); o.x = r.x - w / 2; o.y = r.y - d / 2; }
       moved.push({ kind, id: o.id, name: o.name, dist: +r.dist.toFixed(2) });
     };
-    /* 两遍：第一遍按顺序排，第二遍把第一遍被挤得又撞上的再处理一次 */
+    /* 两遍：第一遍按顺序排，第二遍把第一遍被挤得又撞上的再处理一次。
+       锁定（o.locked）的东西不参与自动避让 —— 用户手动定好的位置不该被机器挪走。 */
     for (let pass = 0; pass < 2; pass++) {
-      (scene.props || []).forEach(o => { if (!o.hidden) doOne('prop', o); });
-      (scene.persons || []).forEach(o => { if (!o.hidden && !o.sitOn) doOne('person', o); });   // 坐着的人由座位定位，不参与避让
+      (scene.props || []).forEach(o => { if (!o.hidden && !o.locked) doOne('prop', o); });
+      (scene.persons || []).forEach(o => { if (!o.hidden && !o.sitOn && !o.locked) doOne('person', o); });   // 坐着的人由座位定位，不参与避让
     }
     return moved;
   }
