@@ -1204,8 +1204,10 @@ function camExtraPanel(c) {
     ` : ''}
   </div>`;
 }
-/* 跟随：把机位算到人物身上。keepAz 默认开 —— 你转到的方位保留，只跟位置和远近 */
-function applyFollow() {
+/* 跟随：把机位算到人物身上。keepAz 默认开 —— 你转到的方位保留，只跟位置和远近。
+   setFov=true 时连焦段一起换成这一档的预设（点「远景/中景/近景」chip 才是明确意图，
+   拖动人物时不该顺手改掉用户自己选的焦段）。 */
+function applyFollow(setFov) {
   const st = MN.state;
   if (!st || !st.camera || !window.MN3D || !MN3D.ok) return false;
   const f = st.camera.follow;
@@ -1215,9 +1217,10 @@ function applyFollow() {
   if (!p) return false;
   const r = MN3D.followCam(p, f);
   if (!r) return false;
+  if (setFov) st.camera.fov = Math.round(r.fov * 10) / 10;
   MN3D.setCamera(r.cam);
   const mon = MN3D.getMonitor ? MN3D.getMonitor() : null;
-  if (mon && mon.on) MN3D.setMonitor({ cam: r.cam, fov: r.fov });   // 开着跟随 + 监看器 = 小窗实时看跟出来的构图
+  if (mon && mon.on) MN3D.setMonitor({ cam: r.cam, fov: st.camera.fov });   // 开着跟随 + 监看器 = 小窗实时看跟出来的构图
   return true;
 }
 function bindCamExtra() {
@@ -1226,7 +1229,8 @@ function bindCamExtra() {
   const M3 = window.MN3D;
   const fovEl = $('#mnCamFov', box), mmEl = $('#mnCamMm', box), rollEl = $('#mnCamRoll', box);
   const setFov = v => {
-    cam.fov = Math.max(8, Math.min(100, Math.round(v)));
+    /* 留一位小数：120mm 是 11.43°，取整成 11° 再反算就变 125mm 了 */
+    cam.fov = Math.round(Math.max(8, Math.min(100, +v || 45)) * 10) / 10;
     if (fovEl) { fovEl.value = cam.fov; const s = fovEl.parentElement.querySelector('strong'); if (s) s.textContent = cam.fov + '°'; }
     if (mmEl) { const mm = Math.round(M3.fovToMm(cam.fov)); mmEl.value = mm; const s2 = mmEl.parentElement.querySelector('strong'); if (s2) s2.textContent = mm + 'mm'; }
     saveSoon(); paint3D();
@@ -1274,7 +1278,8 @@ function bindCamExtra() {
       const ps = (MN.state.scene.persons || []).filter(p => !p.hidden);
       if (!ps.length) { cam.follow.on = false; toast('场景里还没有人物，先点右上「＋ 人物」', 'warn'); renderRight(); return; }
       if (!cam.follow.pid || !(ps.some(p => p.id === cam.follow.pid))) cam.follow.pid = (MN.sel && MN.sel.kind === 'person' ? MN.sel.id : ps[0].id);
-      applyFollow();
+      cam.follow.shot = cam.follow.shot || 'MS';
+      applyFollow(true);
       toast('已跟随人物：拖动人物镜头会自己跟上');
     }
     renderRight(); saveSoon();
@@ -1286,7 +1291,7 @@ function bindCamExtra() {
     cam.follow = cam.follow || {}; cam.follow.on = true;
     cam.follow.shot = b.dataset.fshot;
     cam.follow.dist = k.dist; cam.follow.height = k.h;
-    applyFollow(); renderRight(); saveSoon();
+    applyFollow(true); renderRight(); saveSoon();
   });
   [['mnFDist', 'dist'], ['mnFH', 'height'], ['mnFSide', 'side']].forEach(([id, key]) => {
     const el = $('#' + id, box);
