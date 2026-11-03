@@ -65,9 +65,10 @@
   let gl = null, canvas = null, prog = null, lineProg = null;
   let bufPos, bufNrm, bufCol, bufLine;
   let envProg = null, boardProg = null, shadowProg = null, depthProg = null, envQuad = null, bufEnvP = null, bufEnvT = null, bufShadow = null;
+  let refProg = null, refTex = null, refTexKey = null, refLoading = false, refSize = null;
   let shadowFb = null, shadowTex = null;
   let envTex = null, envTexKey = null, envLoadingKey = null;
-  const cam = { theta: 0.6, phi: 1.0, r: 30, tx: 7, ty: 1.5, tz: 7, inited: false };
+  const cam = { theta: 0.6, phi: 1.0, r: 30, tx: 7, ty: 1.5, tz: 7, roll: 0, inited: false };
   let bounds = { minX: 0, maxX: 14, minZ: 0, maxZ: 14 };
   let aspect = 1;
 
@@ -181,6 +182,16 @@
     uniform float uBright; uniform float uOpacity;
     void main(){ gl_FragColor = vec4(texture2D(uTex, vT).rgb * uBright, uOpacity); }`;
   /* 接触阴影：贴地一圈半透明暗斑。没有它，人物和道具就像浮在空中 —— 尤其背后铺了真实场景图时 */
+  /* 垫参考图：屏幕空间一张贴图，画在环境图之后、白模之前。
+     uHalf/uOff 是「画布比例」单位的半宽半高与中心偏移，所以同一张图在主视图和
+     监看器小窗里都能贴着自己那块画面，不会被拉伸。 */
+  const RVS = `attribute vec2 aP; varying vec2 vT; uniform vec2 uHalf; uniform vec2 uOff;
+    void main(){ vT = vec2(aP.x * 0.5 + 0.5, 0.5 - aP.y * 0.5); gl_Position = vec4(aP * uHalf + uOff, 0.0, 1.0); }`;
+  const RFS = `precision mediump float; varying vec2 vT; uniform sampler2D uTex; uniform float uOp; uniform int uLumMask;
+    void main(){ vec4 c = texture2D(uTex, vT);
+      float a = uOp * (uLumMask == 1 ? (1.0 - dot(c.rgb, vec3(0.299, 0.587, 0.114))) : 1.0) * c.a;
+      gl_FragColor = vec4(c.rgb, clamp(a, 0.0, 1.0)); }`;
+
   const SVS = `attribute vec3 aP; uniform mat4 uVP; void main(){ gl_Position = uVP * vec4(aP, 1.0); }`;
   const SFS = `precision mediump float; uniform vec4 uCol; void main(){ gl_FragColor = uCol; }`;
 
@@ -319,6 +330,7 @@
     if (!gl) { M.ok = false; return false; }
     prog = prog2(VS, FS, MESH_ATTRS); lineProg = prog2(LVS, LFS);
     envProg = prog2(EVS, EFS); boardProg = prog2(BVS, BFS); shadowProg = prog2(SVS, SFS);
+    refProg = prog2(RVS, RFS);
     depthProg = prog2(DVS, DFS, MESH_ATTRS);
     bufPos = gl.createBuffer(); bufNrm = gl.createBuffer(); bufCol = gl.createBuffer(); bufLine = gl.createBuffer();
     bufEnvP = gl.createBuffer(); bufEnvT = gl.createBuffer(); bufShadow = gl.createBuffer();
@@ -829,6 +841,48 @@
     const sp = Math.sin(cam.phi), cp = Math.cos(cam.phi), st = Math.sin(cam.theta), ct = Math.cos(cam.theta), r = cam.r;
     return [cam.tx + r * sp * ct, cam.ty + r * cp, cam.tz + r * sp * st];
   }
+  function eyeOfC(c) {
+    const sp = Math.sin(c.phi), cp = Math.cos(c.phi), st = Math.sin(c.theta), ct = Math.cos(c.theta), r = c.r;
+    return [c.tx + r * sp * ct, c.ty + r * cp, c.tz + r * sp * st];
+  }
+  /* ---------- 焦段 ↔ 视角 ----------
+     导演台的 fov 是**竖向**视角（perspective(fovy,…)）。按 24mm 全画幅竖边折算：
+     f = 12 / tan(fov/2) ⇒ 50mm ≈ 27°、24mm ≈ 53°、120mm ≈ 11.4°。
+     同学跟摄影师/AI 工具沟通只会说「50 头」，不会说「27 度」，所以面板上两个都要给。 */
+  const SENSOR_H = 24;
+  const mmToFov = mm => 2 * Math.atan(SENSOR_H / 2 / Math.max(6, +mm || 50)) * 180 / Math.PI;
+  const fovToMm = fov => SENSOR_H / 2 / Math.tan(Math.max(1, +fov || 45) * Math.PI / 360);
+  M.mmToFov = mmToFov; M.fovToMm = fovToMm;
+  /* 夹取范围放宽到 8–100°：120mm 长焦是 11.4°，原来的下限 12° 会把长焦顶死 */
+  function fovOf(state) {
+    return Math.max(8, Math.min(100, +((state && state.camera && state.camera.fov) || 45)));
+  }
+  M.fovOf = fovOf;
+  /* 绕视线轴把「上方向」转一个翻滚角 —— 真·斜角镜头（dutch angle）
+     Rodrigues：v' = v cosθ + (k×v) sinθ + k(k·v)(1−cosθ)，k 是单位视线向量 */
+  function rollUp(up, k, deg) {
+    const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    const kx = cross(k, up), kd = dot(k, up);
+    return norm([
+      up[0] * c + kx[0] * s + k[0] * kd * (1 - c),
+      up[1] * c + kx[1] * s + k[1] * kd * (1 - c),
+      up[2] * c + kx[2] * s + k[2] * kd * (1 - c),
+    ]);
+  }
+  /* 相机三轴 + 半视角正切：绘制、拾取射线、屏幕→地面、平移四处必须用同一套基，
+     否则一开翻滚就会出现「看得见但点不中」「放的物件落在别处」。
+     ⚠️ 轴的定义必须和 lookAt 完全一致：z = eye−target（不是 fwd），x = cross(up, z)。
+        写成 cross(up, fwd) 会得到反号的 right，拾取就会左右镜像。 */
+  function camBasis(c, rollDeg) {
+    const eye = c === cam ? eyeOf() : eyeOfC(c);
+    const ctr = [c.tx, c.ty, c.tz];
+    const zAxis = norm(sub(eye, ctr));
+    const fwd = [-zAxis[0], -zAxis[1], -zAxis[2]];
+    let up = c.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
+    if (rollDeg) up = rollUp(up, fwd, rollDeg);
+    const right = norm(cross(up, zAxis));
+    return { eye, ctr, fwd, up: cross(zAxis, right), right };
+  }
   function computeBounds(state) {
     const sc = state.scene;
     /* 从实际内容算包围盒：以前默认撑满 0..14 网格，只有一个角色时相机会退到 20m 外，
@@ -987,8 +1041,87 @@
   /* ---------- 绘制 ---------- */
   let drawRaf = 0;
 
-  /* 环境背景：全屏四边形 + 片元里反算射线采样全景图 */
-  function drawEnvBg(env, view, eye, tex, tanH) {
+  /* ---------- 垫参考图（对构图 / 摆姿）---------- */
+  function ensureRefTex(src) {
+    if (!src) { refTex = null; refTexKey = null; refSize = null; return null; }
+    if (refTex && refTexKey === src) return refTex;
+    if (refLoading && refTexKey === src + '#load') return null;
+    const t = gl.createTexture();
+    const img = new Image();
+    refLoading = true; refTexKey = src + '#load';
+    img.onload = () => {
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      refTex = t; refTexKey = src; refLoading = false;
+      refSize = { w: img.naturalWidth || img.width || 1, h: img.naturalHeight || img.height || 1 };
+      if (M._last) draw(M._last);
+    };
+    img.onerror = () => { refLoading = false; refTexKey = null; };
+    img.src = src;
+    return null;
+  }
+  /** 画布分数坐标 (x,y 0..1，y 向下) + 宽占画布的比例 scale → 屏幕空间贴图
+      clip 半宽 = wF/2；clip 半高 = wF/2 × 画布宽高比 × 图的高宽比（保证不拉伸） */
+  function refHalf(ref, asp) {
+    const iw = (refSize && refSize.w) || 1, ih = (refSize && refSize.h) || 1;
+    const wF = Math.max(0.05, Math.min(2.5, +ref.scale || 0.6));
+    return [wF / 2, wF / 2 * (asp || 1) * (ih / iw)];
+  }
+  function drawRef(ref, asp) {
+    M._refDraws = (M._refDraws || 0) + 1;
+    if (!refProg || !ref || !ref.src) return;
+    const tex = ensureRefTex(ref.src);
+    if (!tex || refTexKey !== ref.src) { M._refSkip = (M._refSkip || 0) + 1; return; }
+    const half = refHalf(ref, asp);
+    gl.useProgram(refProg);
+    gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindBuffer(gl.ARRAY_BUFFER, envQuad);
+    const a = gl.getAttribLocation(refProg, 'aP');
+    gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform2f(gl.getUniformLocation(refProg, 'uHalf'), half[0], half[1]);
+    gl.uniform2f(gl.getUniformLocation(refProg, 'uOff'), (ref.x != null ? ref.x : 0.5) * 2 - 1, 1 - (ref.y != null ? ref.y : 0.5) * 2);
+    /* 图里没 alpha 通道（JPEG）时 c.a 恒为 1，会把白模完全盖住 —— 拿亮度当遮罩：
+       图里越亮的地方越透明，这样垫一张照片/构图图时人物和家具仍然看得见。 */
+    gl.uniform1f(gl.getUniformLocation(refProg, 'uOp'), Math.max(0.05, Math.min(1, ref.opacity != null ? +ref.opacity : 0.5)));
+    gl.uniform1i(gl.getUniformLocation(refProg, 'uLumMask'), ref.lumMask === false ? 0 : 1);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(gl.getUniformLocation(refProg, 'uTex'), 2);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    M._refErr = gl.getError();
+    gl.disable(gl.BLEND); gl.depthMask(true); gl.enable(gl.DEPTH_TEST);
+    gl.activeTexture(gl.TEXTURE0);
+    restoreMeshAttrs();      // ⚠️ 上面把 aP 抢到了一个 attribute 槽，必须把 0/1/2 还给主通道
+  }
+  /* 把 aPos/aNrm/aCol（钉死在 0/1/2）指回自己的 buffer：
+     任何用了独立 attribute 位置的辅助通道（贴图四边形）画完都要还回来，
+     不然主通道会拿着一个「启用了但指向别处」的 attribute，整帧直接画不出来。 */
+  function restoreMeshAttrs() {
+    if (!prog) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufCol); gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+  }
+  M.refSize = () => refSize;
+  /** 屏幕点落在参考图上吗（拖动判定用）：锁定时一律不算命中 */
+  M.refHit = function (ref, cv, clientX, clientY) {
+    if (!ref || !ref.src || ref.lock) return false;
+    const rect = cv.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    const half = refHalf(ref, rect.width / rect.height);
+    const fx = (clientX - rect.left) / rect.width, fy = (clientY - rect.top) / rect.height;
+    const cx = ref.x != null ? ref.x : 0.5, cy = ref.y != null ? ref.y : 0.5;
+    return Math.abs(fx - cx) <= half[0] && Math.abs(fy - cy) <= half[1];
+  };
+
+  /* 环境背景：全屏四边形 + 片元里反算射线采样全景图
+     asp 由调用方给：主视图是整块画布的宽高比，监看器小窗是它自己的画幅比。 */
+  function drawEnvBg(env, view, eye, tex, tanH, asp) {
     gl.useProgram(envProg);
     gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.BLEND);
     gl.bindBuffer(gl.ARRAY_BUFFER, envQuad);
@@ -1003,7 +1136,7 @@
     gl.uniform2fv(gl.getUniformLocation(envProg, 'uCap'), new Float32Array([env.capX, env.capZ]));
     gl.uniform1f(gl.getUniformLocation(envProg, 'uCapH'), env.capH);
     gl.uniform1f(gl.getUniformLocation(envProg, 'uTanH'), tanH);
-    gl.uniform1f(gl.getUniformLocation(envProg, 'uAsp'), aspect || 1);
+    gl.uniform1f(gl.getUniformLocation(envProg, 'uAsp'), asp || aspect || 1);
     gl.uniform1f(gl.getUniformLocation(envProg, 'uYaw'), env.yaw);
     gl.uniform1f(gl.getUniformLocation(envProg, 'uBright'), env.bright);
     gl.uniform1f(gl.getUniformLocation(envProg, 'uVSpread'), env.vSpread);
@@ -1049,34 +1182,16 @@
     const g = buildGeo(state), L = buildLines(state), lp = L.grid;
     M._limbs = g.limbs || [];
     const geoMs = performance.now() - t0;
-    const eye = eyeOf(), up = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
-    const view = lookAt(eye, [cam.tx, cam.ty, cam.tz], up);
-    /* 3D 视图真的吃「镜头视角」——以前硬编码 45°，面板上那条滑杆等于死的 */
-    const fovDeg = Math.max(12, Math.min(90, +((state.camera && state.camera.fov) || 45)));
-    const FOV = fovDeg * Math.PI / 180, tanH = Math.tan(FOV / 2);
-    const proj = perspective(FOV, aspect || 1, 0.1, 1000);
-    const vp = mMul(proj, view);
-    M._vp = vp;
     const dark = isDark();
-
-    /* 环境图：先画无穷远的背景（或立在场景里的背景板），再画白模 */
+    /* 3D 视图真的吃「镜头视角」——以前硬编码 45°，面板上那条滑杆等于死的 */
+    const fovDeg = fovOf(state);
     const env = envOf(state);
-    gl.viewport(0, 0, canvas.width, canvas.height);
+
+    /* ---------- 几何 / 线框 / 接触阴影只上传一次 ----------
+       主视图和右下监看器吃同一批 buffer（attribute 槽位在链接时已钉死 0/1/2），
+       第二路只换矩阵和视口 —— 开监看器不是把场景再建一遍。 */
     gl.enable(gl.DEPTH_TEST);
-    /* 背景板模式下用照片均色当天空：不然照片四周露出一圈软件底色，像没做完 */
-    const cc = (env && M._envAvg && envTexKey === env.src) ? M._envAvg : [dark ? 0.10 : 0.82, dark ? 0.10 : 0.86, dark ? 0.12 : 0.90];
-    gl.clearColor(cc[0], cc[1], cc[2], 1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-    if (env) {
-      const tex = ensureEnvTex(env.src);
-      if (tex && envTexKey === env.src) {
-        if (env.mode === 'board') drawEnvBoard(env, tex, vp);
-        else drawEnvBg(env, view, eye, tex, tanH);
-      }
-    }
-
-    /* 几何体只上传一次，深度预通道和主通道共用（attribute 槽位在链接时已钉死 0/1/2） */
+    gl.viewport(0, 0, canvas.width, canvas.height);
     gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.pos), gl.DYNAMIC_DRAW);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.nrm), gl.DYNAMIC_DRAW);
@@ -1084,6 +1199,10 @@
     gl.bindBuffer(gl.ARRAY_BUFFER, bufCol); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.col), gl.DYNAMIC_DRAW);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
     const triCount = g.pos.length / 3;
+    const shadowDiscs = (g.shadows && g.shadows.length) ? new Float32Array(g.shadows) : null;
+    if (shadowDiscs) { gl.bindBuffer(gl.ARRAY_BUFFER, bufShadow); gl.bufferData(gl.ARRAY_BUFFER, shadowDiscs, gl.DYNAMIC_DRAW); }
+    const gridArr = new Float32Array(lp), pathArr = (L.paths && L.paths.length) ? new Float32Array(L.paths) : null;
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufLine); gl.bufferData(gl.ARRAY_BUFFER, gridArr, gl.DYNAMIC_DRAW);
 
     const sun = state.sun || { on: true, dir: 300, alt: 53 };
     const al = (sun.alt || 53) * Math.PI / 180, az = (sun.dir || 300) * Math.PI / 180;
@@ -1114,6 +1233,74 @@
       gl.viewport(0, 0, canvas.width, canvas.height);
     }
 
+    /* ---------- 主视图 ---------- */
+    const main = renderView(state, shadowDiscs, gridArr, pathArr, lightVP, triCount, env, dark, sdir,
+      { x: 0, y: 0, w: canvas.width, h: canvas.height }, cam, fovDeg, cam.roll || 0, false);
+    M._vp = main.vp;
+
+    /* ---------- 右下监看器：钉住的那台机位永远显示成片画面 ----------
+       自由转视角找机位时，构图不会跟着一起丢 —— 这是对标 MONOFORM 最值样的一条。 */
+    const mon = M._mon;
+    M._monRectLast = null;
+    if (mon && mon.on && mon.cam && !M._noMon && canvas.width > 120 && canvas.height > 120) {
+      const r = monRect(canvas.width, canvas.height, mon.aspect || 16 / 9);
+      if (r) { M._monRectLast = r; renderView(state, shadowDiscs, gridArr, pathArr, lightVP, triCount, env, dark, sdir,
+        r, mon.cam, mon.fov || fovDeg, mon.cam.roll || 0, true); }
+    }
+
+    /* 人物名牌 / 旋转手柄：DOM 覆盖层，只跟主视图（2D 模式自动隐藏） */
+    updateLabels(state, main.vp);
+    updateGizmo(state, main.vp);
+    M._stat.draws++; M._stat.geoMs += geoMs; M._stat.ms += performance.now() - t0;
+  }
+
+  /* 监看器矩形（设备像素，GL 的 y 从下往上）：占短边 32%，底部让开那排工具条。
+     画完之后把实际用的矩形记在 M._monRectLast，DOM 边框按它换算 —— 两边永远对齐。 */
+  function monRect(W, H, asp) {
+    const cw = canvas.clientWidth || W, ch = canvas.clientHeight || H;
+    const dpr = cw ? W / cw : 1;
+    const w = Math.max(96, Math.round(Math.min(W * 0.32, H * 0.42 * asp)));
+    const h = Math.max(64, Math.round(w / (asp || 16 / 9)));
+    const pad = Math.round((Math.min(cw, ch) * 0.025 + 6 + 40) * dpr);
+    if (w + pad * 2 >= W || h + pad >= H) return null;
+    return { x: W - w - pad, y: pad, w, h };
+  }
+  M._monRect = monRect;
+
+  /**
+   * 一路视图绘制：清屏 → 环境背景 → 实体 → 接触阴影 → 网格/走位线。
+   * rect 给视口和裁剪；clip=true 时开 scissor，让监看器小窗不糊到主画面上。
+   * c / fovDeg / rollDeg 允许与全局相机不同 —— 这就是「主视图自由看、小窗看成片」。
+   */
+  function renderView(state, shadowDiscs, gridArr, pathArr, lightVP, triCount, env, dark, sdir, rect, c, fovDeg, rollDeg, clip) {
+    const B = camBasis(c, rollDeg);
+    const view = lookAt(B.eye, B.ctr, B.up);
+    const FOV = fovDeg * Math.PI / 180, tanH = Math.tan(FOV / 2);
+    const asp = rect.w / Math.max(1, rect.h);
+    const vp = mMul(perspective(FOV, asp, 0.1, 1000), view);
+    if (clip) { gl.enable(gl.SCISSOR_TEST); gl.scissor(rect.x, rect.y, rect.w, rect.h); }
+    else gl.disable(gl.SCISSOR_TEST);
+    gl.viewport(rect.x, rect.y, rect.w, rect.h);
+    /* 背景板模式下用照片均色当天空：不然照片四周露出一圈软件底色，像没做完 */
+    const cc = (env && M._envAvg && envTexKey === env.src) ? M._envAvg : [dark ? 0.10 : 0.82, dark ? 0.10 : 0.86, dark ? 0.12 : 0.90];
+    gl.clearColor(cc[0], cc[1], cc[2], 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    if (env) {
+      const tex = ensureEnvTex(env.src);
+      if (tex && envTexKey === env.src) {
+        if (env.mode === 'board') drawEnvBoard(env, tex, vp);
+        else drawEnvBg(env, view, B.eye, tex, tanH, asp);
+      }
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufPos);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufNrm);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufCol);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+
     gl.useProgram(prog);
     gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uVP'), false, new Float32Array(vp));
     gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uView'), false, new Float32Array(view));
@@ -1134,7 +1321,7 @@
     const lights = (state.scene.lights || []).filter(l => !l.hidden);
     const ptPos = new Float32Array(12), ptCol = new Float32Array(12), ptInt = new Float32Array(4);
     const n = Math.min(lights.length, 4);
-    for (let i = 0; i < n; i++) { const l = lights[i]; ptPos[i * 3] = l.x; ptPos[i * 3 + 1] = (l.h || 2.5); ptPos[i * 3 + 2] = l.y; const c = hex2rgb(l.color || '#ffe9b0'); ptCol[i * 3] = c[0]; ptCol[i * 3 + 1] = c[1]; ptCol[i * 3 + 2] = c[2]; ptInt[i] = (l.intensity != null ? l.intensity : 1.0); }
+    for (let i = 0; i < n; i++) { const l = lights[i]; ptPos[i * 3] = l.x; ptPos[i * 3 + 1] = (l.h || 2.5); ptPos[i * 3 + 2] = l.y; const lc = hex2rgb(l.color || '#ffe9b0'); ptCol[i * 3] = lc[0]; ptCol[i * 3 + 1] = lc[1]; ptCol[i * 3 + 2] = lc[2]; ptInt[i] = (l.intensity != null ? l.intensity : 1.0); }
     gl.uniform3fv(gl.getUniformLocation(prog, 'uPtPos'), ptPos);
     gl.uniform3fv(gl.getUniformLocation(prog, 'uPtCol'), ptCol);
     gl.uniform1fv(gl.getUniformLocation(prog, 'uPtInt'), ptInt);
@@ -1145,40 +1332,88 @@
     gl.drawArrays(gl.TRIANGLES, 0, triCount);
 
     /* 接触阴影：半透明、不写深度，必须画在实体之后 —— 不然脚会被"埋"进地里 */
-    if (g.shadows && g.shadows.length) {
+    if (shadowDiscs) {
       gl.useProgram(shadowProg);
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.depthMask(false);
       gl.bindBuffer(gl.ARRAY_BUFFER, bufShadow);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(g.shadows), gl.DYNAMIC_DRAW);
       const sa = gl.getAttribLocation(shadowProg, 'aP');
       gl.enableVertexAttribArray(sa); gl.vertexAttribPointer(sa, 3, gl.FLOAT, false, 0, 0);
       gl.uniformMatrix4fv(gl.getUniformLocation(shadowProg, 'uVP'), false, new Float32Array(vp));
       gl.uniform4fv(gl.getUniformLocation(shadowProg, 'uCol'),
         new Float32Array(dark ? [0, 0, 0, 0.42] : [0.12, 0.09, 0.06, 0.26]));
-      gl.drawArrays(gl.TRIANGLES, 0, g.shadows.length / 3);
+      gl.drawArrays(gl.TRIANGLES, 0, shadowDiscs.length / 3);
       gl.depthMask(true); gl.disable(gl.BLEND);
     }
 
     gl.useProgram(lineProg);
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufLine); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lp), gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufLine);
     const la = gl.getAttribLocation(lineProg, 'aP'); gl.enableVertexAttribArray(la); gl.vertexAttribPointer(la, 3, gl.FLOAT, false, 0, 0);
     gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, 'uVP'), false, new Float32Array(vp));
     gl.uniform3fv(gl.getUniformLocation(lineProg, 'uCol'), new Float32Array(dark ? [0.30, 0.28, 0.25] : [0.62, 0.58, 0.50]));
-    gl.drawArrays(gl.LINES, 0, lp.length / 3);
+    gl.drawArrays(gl.LINES, 0, gridArr.length / 3);
     /* 人物运动轨迹单独用蓝色画一遍，和网格区分开 */
-    if (L.paths && L.paths.length) {
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(L.paths), gl.DYNAMIC_DRAW);
+    if (pathArr) {
+      gl.bufferData(gl.ARRAY_BUFFER, pathArr, gl.DYNAMIC_DRAW);
       gl.uniform3fv(gl.getUniformLocation(lineProg, 'uCol'), new Float32Array([0.18, 0.49, 0.96]));
-      gl.drawArrays(gl.LINES, 0, L.paths.length / 3);
+      gl.drawArrays(gl.LINES, 0, pathArr.length / 3);
+      gl.bufferData(gl.ARRAY_BUFFER, gridArr, gl.DYNAMIC_DRAW);
     }
 
-    /* 人物名牌：DOM 覆盖层跟随相机（2D 模式自动隐藏） */
-    updateLabels(state, vp);
-    /* 选中物体的旋转手柄（DOM 覆盖层，拖动即转） */
-    updateGizmo(state, vp);
-    M._stat.draws++; M._stat.geoMs += geoMs; M._stat.ms += performance.now() - t0;
+    /* 垫的参考图：画在最后一层（盖着看）。
+       我们的地面/房间是不透明的大平面，要像别家那样垫在底下就会被整个盖住、等于没垫；
+       放最上面 + 透明度滑杆，才能同时看清照片和白模。
+       截图/导出通道（M._noMon）里只有勾了「进入导出」才画 —— 不然镜头册会混进辅助图。 */
+    const refImg = state.scene && state.scene.ref;
+    if (refImg && refImg.src && (!M._noMon || refImg.inExport)) drawRef(refImg, asp);
+
+    gl.disable(gl.SCISSOR_TEST);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    return { vp, view, eye: B.eye, tanH, asp, rect };
   }
+
+  /* ---------- 跟随人物 ----------
+     距离 / 机位高 / 瞄准高全部以「人物真实身高 H」为单位：换体型（小孩、胖瘦）或改缩放后，
+     构图比例仍然稳定。表与 js/auto-build.js 的 SIZE_CAM 同口径（_test/cam-follow.js 逐条比对，
+     两边一旦漂移测试就红，避免出现两套「中景」）。 */
+  const FOLLOW_H = {
+    ELS: { dist: 5.00, h: 1.76, look: 0.59, fov: 40 },
+    LS: { dist: 2.82, h: 1.24, look: 0.56, fov: 35 },
+    MS: { dist: 1.47, h: 0.88, look: 0.68, fov: 27 },
+    MCU: { dist: 1.06, h: 0.88, look: 0.78, fov: 27 },
+    CU: { dist: 0.65, h: 0.91, look: 0.89, fov: 27 },
+    ECU: { dist: 0.41, h: 0.94, look: 0.93, fov: 27 },
+  };
+  M.FOLLOW_H = FOLLOW_H;
+  /** eye/target → 轨道相机（eye = target + r(sinφcosθ, cosφ, sinφsinθ)） */
+  function camFromEyeTo(eye, tgt) {
+    const dx = eye[0] - tgt[0], dy = eye[1] - tgt[1], dz = eye[2] - tgt[2];
+    const r = Math.hypot(dx, dy, dz) || 0.001;
+    return { theta: Math.atan2(dz, dx), phi: Math.acos(Math.max(-1, Math.min(1, dy / r))), r: Math.max(0.45, Math.min(60, r)), tx: tgt[0], ty: tgt[1], tz: tgt[2] };
+  }
+  M.camFromEyeTo = camFromEyeTo;
+  /**
+   * 按人物算一台机位。opt = { shot, dist, height, look, side, orbit, keepAz }
+   * keepAz（默认开）：保留你当前转到的方位角，只把「看向的地方」和远近跟到人物身上 ——
+   * 这样开着跟随还能自由环绕，拖动人物时镜头自己跟上。
+   */
+  M.followCam = function (p, opt) {
+    if (!p) return null;
+    const o = opt || {};
+    /* 骨架本身 1.68m 高，BODIES.H 是比例、scale 是整体缩放 ⇒ 真实身高（米） */
+    const H = 1.68 * personScale(p) * ((bodyOf(p) || {}).H || 1);
+    const k = FOLLOW_H[o.shot] || FOLLOW_H.MS;
+    const seatAdj = p.sitOn ? -0.45 : 0;         // 坐着的人整体矮一截（与 auto-build 的 seatShift 同口径）
+    const dist = Math.max(0.45, (o.dist != null ? +o.dist : k.dist) * H);
+    const eyeH = Math.max(0.2, (o.height != null ? +o.height : k.h) * H + seatAdj);
+    const look = Math.max(0.1, (o.look != null ? +o.look : k.look) * H + seatAdj);
+    const side = (o.side != null ? +o.side : 0) * H;
+    const th = (o.keepAz === false && o.orbit != null) ? (+o.orbit || 0) * Math.PI / 180
+      : (o.orbit != null ? +o.orbit * Math.PI / 180 : cam.theta);
+    const x = +p.x || 0, z = +p.y || 0;
+    const eye = [x + Math.cos(th) * dist - Math.sin(th) * side, eyeH, z + Math.sin(th) * dist + Math.cos(th) * side];
+    return { cam: Object.assign(camFromEyeTo(eye, [x, look, z]), { roll: cam.roll || 0 }), fov: k.fov, H: +H.toFixed(3) };
+  };
 
   /* ---------- 交互 ---------- */
   /* 屏幕点 → 地面 y=0 的世界坐标（用于 3D 里直接放置物件） */
@@ -1187,24 +1422,18 @@
     if (!rect.width || !rect.height) return null;
     const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
-    const eye = eyeOf();
-    const ctr = [cam.tx, cam.ty, cam.tz];
-    const zAxis = norm(sub(eye, ctr));                 // 相机朝 -z
-    const upv = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
-    const xAxis = norm(cross(upv, zAxis));
-    const yAxis = cross(zAxis, xAxis);
-    const fwd = [-zAxis[0], -zAxis[1], -zAxis[2]];
-    const tanH = Math.tan((Math.max(12, Math.min(90, +((M._last && M._last.camera && M._last.camera.fov) || 45))) * Math.PI / 180) / 2);
-    const aspect = rect.width / rect.height;
+    const B = camBasis(cam, cam.roll);
+    const tanH = Math.tan((fovOf(M._last) * Math.PI / 180) / 2);
+    const asp = rect.width / rect.height;
     const dir = norm([
-      fwd[0] + xAxis[0] * ndcX * tanH * aspect + yAxis[0] * ndcY * tanH,
-      fwd[1] + xAxis[1] * ndcX * tanH * aspect + yAxis[1] * ndcY * tanH,
-      fwd[2] + xAxis[2] * ndcX * tanH * aspect + yAxis[2] * ndcY * tanH,
+      B.fwd[0] + B.right[0] * ndcX * tanH * asp + B.up[0] * ndcY * tanH,
+      B.fwd[1] + B.right[1] * ndcX * tanH * asp + B.up[1] * ndcY * tanH,
+      B.fwd[2] + B.right[2] * ndcX * tanH * asp + B.up[2] * ndcY * tanH,
     ]);
     if (Math.abs(dir[1]) < 1e-4) return null;          // 与地面平行，无交点
-    const t = -eye[1] / dir[1];
+    const t = -B.eye[1] / dir[1];
     if (t <= 0) return null;                            // 交点在相机背后
-    return [eye[0] + dir[0] * t, eye[2] + dir[2] * t];
+    return [B.eye[0] + dir[0] * t, B.eye[2] + dir[2] * t];
   }
 
   /* 屏幕点 → 射线（原点到方向），供 3D 拾取使用 */
@@ -1213,20 +1442,15 @@
     if (!rect.width || !rect.height) return null;
     const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
-    const eye = eyeOf();
-    const zAxis = norm(sub(eye, [cam.tx, cam.ty, cam.tz]));
-    const upv = cam.phi < 0.05 ? [0, 0, -1] : [0, 1, 0];
-    const xAxis = norm(cross(upv, zAxis));
-    const yAxis = cross(zAxis, xAxis);
-    const fwd = [-zAxis[0], -zAxis[1], -zAxis[2]];
-    const tanH = Math.tan((Math.max(12, Math.min(90, +((M._last && M._last.camera && M._last.camera.fov) || 45))) * Math.PI / 180) / 2);
-    const aspect = rect.width / rect.height;
+    const B = camBasis(cam, cam.roll);
+    const tanH = Math.tan((fovOf(M._last) * Math.PI / 180) / 2);
+    const asp = rect.width / rect.height;
     return {
-      o: eye,
+      o: B.eye,
       d: norm([
-        fwd[0] + xAxis[0] * ndcX * tanH * aspect + yAxis[0] * ndcY * tanH,
-        fwd[1] + xAxis[1] * ndcX * tanH * aspect + yAxis[1] * ndcY * tanH,
-        fwd[2] + xAxis[2] * ndcX * tanH * aspect + yAxis[2] * ndcY * tanH,
+        B.fwd[0] + B.right[0] * ndcX * tanH * asp + B.up[0] * ndcY * tanH,
+        B.fwd[1] + B.right[1] * ndcX * tanH * asp + B.up[1] * ndcY * tanH,
+        B.fwd[2] + B.right[2] * ndcX * tanH * asp + B.up[2] * ndcY * tanH,
       ]),
     };
   }
@@ -1264,18 +1488,24 @@
     return null;
   }
   /* 拾取最近的可操作物体 */
-  function pick(state, cv, clientX, clientY) {
+  function pick(state, cv, clientX, clientY, alt) {
     const r = rayFromScreen(cv, clientX, clientY); if (!r) return null;
     const sc = state.scene, cands = [];
     const add = (kind, arr) => (arr || []).forEach(o => {
       if (o.hidden) return;
       const b = objBox(kind, o); if (!b) return;
       const t = rayAABB(r.o, r.d, b);
-      if (t != null) cands.push({ kind, id: o.id, t });
+      if (t != null) cands.push({ kind, id: o.id, t, locked: !!o.locked });
     });
     add('person', sc.persons); add('prop', sc.props); add('wall', sc.walls); add('light', sc.lights); add('room', sc.rooms);
     if (!cands.length) return null;
     cands.sort((a, b) => a.t - b.t);
+    /* Alt：跳过已经选中的那个，取被它挡住的下一层（大体积模型抢选的老毛病） */
+    if (alt) {
+      const sel = M._sel;
+      const next = cands.find(c => !sel || !(c.kind === sel.kind && c.id === sel.id));
+      if (next) return next;
+    }
     return cands[0];
   }
 
@@ -1311,7 +1541,20 @@
           return;
         }
       }
-      const hit = (e.button === 0 && !spaceHeld && st && typeof M.onSelect === 'function') ? pick(st, cv, e.clientX, e.clientY) : null;
+      /* 「移动图」开着且点在参考图上 → 这一笔归参考图，不去转视角也不选物体 */
+      const refImg = st && st.scene && st.scene.ref;
+      if (e.button === 0 && refImg && refImg.edit && M.refHit(refImg, cv, e.clientX, e.clientY)) {
+        drag = { mode: 'ref', x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: 0, fx: refImg.x != null ? refImg.x : 0.5, fy: refImg.y != null ? refImg.y : 0.5 };
+        cv.style.cursor = 'grabbing';
+        return;
+      }
+      const hit = (e.button === 0 && !spaceHeld && st && typeof M.onSelect === 'function') ? pick(st, cv, e.clientX, e.clientY, e.altKey) : null;
+      if (e.button === 0 && hit && hit.locked) {
+        /* 锁定的东西只让选、不让拖 —— 大场景里防误改 */
+        drag = { mode: 'sel', kind: hit.kind, id: hit.id, btn: 0, moved: 0, x: e.clientX, y: e.clientY };
+        if (typeof M.onSelect === 'function') M.onSelect(hit.kind, hit.id);
+        return;
+      }
       if (e.button === 0 && hit) {
         /* 命中物体 → 拖动移动（记住抓取偏移，避免瞬移） */
         const o = findObjById(st, hit.kind, hit.id);
@@ -1337,6 +1580,17 @@
         }
         return;
       }
+      if (drag.mode === 'ref') {
+        const st = M._last; if (!st || !st.scene || !st.scene.ref) return;
+        const rect = cv.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const r = st.scene.ref;
+        /* 用「按下时的分数坐标 + 累计位移」算，不逐帧累加，免得误差攒出漂移 */
+        r.x = Math.max(-0.4, Math.min(1.4, drag.fx + (e.clientX - drag.x0) / rect.width));
+        r.y = Math.max(-0.4, Math.min(1.4, drag.fy + (e.clientY - drag.y0) / rect.height));
+        requestDraw();
+        return;
+      }
       if (drag.mode === 'move') {
         const st = M._last; if (!st) return;
         const f = screenToFloor(cv, e.clientX, e.clientY); if (!f) return;
@@ -1354,12 +1608,12 @@
         else requestDraw();
       } else if (drag.mode === 'pan' || e.shiftKey) {
         cv.style.cursor = 'grabbing';
-        const eye = eyeOf(), view = lookAt(eye, [cam.tx, cam.ty, cam.tz], [0, 1, 0]);
-        const right = [view[0], view[4], view[8]], upv = [view[1], view[5], view[9]], k = cam.r * 0.0016;
-        cam.tx -= (right[0] * dx - upv[0] * dy) * k; cam.ty -= (right[1] * dx - upv[1] * dy) * k; cam.tz -= (right[2] * dx - upv[2] * dy) * k;
+        const B = camBasis(cam, cam.roll);
+        const k = cam.r * 0.0016;
+        cam.tx -= (B.right[0] * dx - B.up[0] * dy) * k; cam.ty -= (B.right[1] * dx - B.up[1] * dy) * k; cam.tz -= (B.right[2] * dx - B.up[2] * dy) * k;
         requestDraw();
       } else {
-        cam.theta -= dx * 0.01; cam.phi = Math.max(0.02, Math.min(1.52, cam.phi - dy * 0.01));
+        cam.theta -= dx * 0.01; cam.phi = Math.max(0.03, Math.min(3.0, cam.phi - dy * 0.01));
         requestDraw();
       }
     });
@@ -1372,6 +1626,10 @@
       const st = M._last;
       if (d0.mode === 'limb') {
         if (typeof M.onPoseEnd === 'function') M.onPoseEnd(d0.pid, d0.key, !wasClick);
+        return;
+      }
+      if (d0.mode === 'ref') {
+        if (typeof M.onRefMoved === 'function') M.onRefMoved(d0.moved >= 5);
         return;
       }
       if (d0.mode === 'move') {
@@ -1397,7 +1655,9 @@
       }
     };
     cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
-    cv.addEventListener('wheel', e => { e.preventDefault(); cam.r = Math.max(4, Math.min(120, cam.r * (1 + (e.deltaY > 0 ? 0.1 : -0.1)))); if (M._last) draw(M._last); }, { passive: false });
+    /* 滚轮缩放：下限从 4m 放到 0.45m —— 特写机位本来就在 1m 内，
+       原来的 4m 下限会让滚一下轮就把怼脸镜头弹回半身。 */
+    cv.addEventListener('wheel', e => { e.preventDefault(); cam.r = Math.max(0.45, Math.min(120, cam.r * (1 + (e.deltaY > 0 ? 0.1 : -0.1)))); if (M._last) draw(M._last); }, { passive: false });
     cv.addEventListener('dblclick', () => { frame(); if (M._last) draw(M._last); });
   }
   /* 按 kind/id 找对象 */
@@ -1419,9 +1679,52 @@
     cam.r = fitR() * (name === 'top' ? 1.1 : 1.0); if (M._last) draw(M._last);
   };
   M.frame = function () { frame(); if (M._last) draw(M._last); };
-  M.getCamera = function () { return { theta: cam.theta, phi: cam.phi, r: cam.r, tx: cam.tx, ty: cam.ty, tz: cam.tz }; };
-  M.setCamera = function (c) { if (!c) return; cam.theta = c.theta; cam.phi = c.phi; cam.r = c.r; cam.tx = c.tx; cam.ty = (c.ty != null ? c.ty : 1.5); cam.tz = c.tz; cam.inited = true; if (M._last) draw(M._last); };
-  M.capture = function () { if (!gl) return null; if (M._last) draw(M._last); try { return canvas.toDataURL('image/png'); } catch (e) { return null; } };
+  M.getCamera = function () { return { theta: cam.theta, phi: cam.phi, r: cam.r, tx: cam.tx, ty: cam.ty, tz: cam.tz, roll: cam.roll || 0 }; };
+  M.setCamera = function (c) {
+    if (!c) return;
+    cam.theta = c.theta; cam.phi = c.phi; cam.r = c.r; cam.tx = c.tx; cam.ty = (c.ty != null ? c.ty : 1.5); cam.tz = c.tz;
+    cam.roll = +c.roll || 0;      // 翻滚跟着机位走：斜角镜头存进镜头册，跳回来还是斜的
+    cam.inited = true; if (M._last) draw(M._last);
+  };
+  M.getRoll = () => cam.roll || 0;
+  M.setRoll = function (deg) { cam.roll = Math.max(-45, Math.min(45, +deg || 0)); if (M._last) draw(M._last); };
+  /* ---------- 监看器（右下 PiP）----------
+     on=false 关掉；cam 是钉住的机位（含 roll）；fov/aspect 独立于主视图。
+     截图/导出时临时关掉（M._noMon），镜头册要的是干净的成片画面，不是带小窗的编辑器画面。 */
+  M.setMonitor = function (o) {
+    M._mon = Object.assign({}, M._mon || {}, o || {});
+    if (M._mon.cam && typeof M._mon.cam !== 'object') M._mon.cam = null;
+    if (M._last) draw(M._last);
+    if (typeof M.onMonitor === 'function') { try { M.onMonitor(); } catch (e) { } }   // 让外壳把 DOM 边框对齐过来
+    return M._mon;
+  };
+  M.refDbg = () => ({ prog: !!refProg, tex: !!refTex, key: String(refTexKey || '').slice(0, 18), loading: refLoading, size: refSize });
+  M.getMonitor = () => M._mon || { on: false };
+  /* 把视图对准一个世界包围盒：聚焦所选物体（F） */
+  M.focusBox = function (box) {
+    if (!box) return null;
+    const cx = (box[0] + box[3]) / 2, cy = (box[1] + box[4]) / 2, cz = (box[2] + box[5]) / 2;
+    const half = Math.max(0.6, Math.hypot(box[3] - box[0], box[4] - box[1], box[5] - box[2]) / 2);
+    const fovDeg = fovOf(M._last);
+    cam.tx = cx; cam.ty = Math.max(0.4, cy); cam.tz = cz;
+    cam.r = Math.max(1.2, Math.min(60, half / Math.tan(fovDeg * Math.PI / 360) * 1.15));
+    cam.phi = Math.min(1.45, Math.max(0.35, cam.phi || 1.0));
+    cam.inited = true;
+    if (M._last) draw(M._last);
+    return { theta: cam.theta, phi: cam.phi, r: cam.r, tx: cam.tx, ty: cam.ty, tz: cam.tz, roll: cam.roll || 0 };
+  };
+  /** 原样抓一张画布（不隐藏监看器、不重画）：给测试和小窗截图用 */
+  M.captureRaw = function () { if (!gl) return null; try { return canvas.toDataURL('image/png'); } catch (e) { return null; } };
+  M.capture = function () {
+    if (!gl) return null;
+    /* 截图不带监看器小窗：镜头册 / 场景库缩略图 / 故事板都要干净的成片画面 */
+    const keep = M._noMon; M._noMon = true;
+    if (M._last) draw(M._last);
+    let url = null;
+    try { url = canvas.toDataURL('image/png'); } catch (e) { url = null; }
+    M._noMon = keep; if (M._last) draw(M._last);
+    return url;
+  };
   /* 环境图状态查询（测试 / UI 用）：loaded = 纹理是否已经传上去 */
   M._envSize = null; M._envErr = null; M._envAvg = null; M._limbs = []; M._vp = null;
   /* 某条肢体当前在屏幕上的位置（client 坐标）：测试和"该亮哪条胳膊"都要用 */
