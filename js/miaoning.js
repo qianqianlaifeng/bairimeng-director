@@ -162,7 +162,8 @@ const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls)
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const uid = () => Date.now().toString(36).slice(-4) + Math.random().toString(36).slice(2, 6);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const snap = v => Math.round(v * 2) / 2;                 // 半格吸附
+const snap = v => MN.snapOn === false ? Math.round(v * 20) / 20 : Math.round(v * 2) / 2;   // 磁吸：开=半格吸附，关=0.05 米自由微调
+const snapDeg = v => MN.snapOn === false ? Math.round(v * 10) / 10 : Math.round(v / 15) * 15;   // 磁吸关=1°自由，开=15°一档
 const CELL = 44;                                          // 1 网格 = 44px（k=1）
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 /* 颜色混合：k=0 原色，k=1 纯白（用于头/皮肤的提亮） */
@@ -497,7 +498,7 @@ function bindShell() {
     };
     /* 3D 拖动：只重绘 3D。2D 画布此时是隐藏的，paint() 里的 doPaint 纯属白烧 CPU（拖起来就卡） */
     window.MN3D.onMoveStart = () => { pushUndo(); };
-    window.MN3D.onMove = () => { saveSoon(); paint3D(); };
+    window.MN3D.onMove = () => { saveSoon(); if (!applyFollow()) paint3D(); };
     window.MN3D.onMoveEnd = (kind, id, dragged) => {
       /* 3D 里拖完也自动让开（只挪这一件）；座位联动和 2D 一致 */
       if (dragged && (kind === 'prop' || kind === 'person')) {
@@ -505,11 +506,16 @@ function bindShell() {
         else refitSeats(id);
         settleOne(kind, id, false);
       }
+      applyFollow();
       saveSoon(); paint(); renderTree();
     };
     window.MN3D.onRotateStart = () => { pushUndo(); };
+    /* 监看器开关变化 → 边框跟着走（引擎画完 GL，边框是 DOM） */
+    window.MN3D.onMonitor = () => { try { syncMonFrame(); } catch (e) { } };
+    /* 拖完垫的参考图：存一次盘并刷新面板（位置是引擎直接改在 scene.ref 上的） */
+    window.MN3D.onRefMoved = moved => { if (moved) { saveSoon(); renderRight(); } };
     window.MN3D.onRotate = () => { };
-    window.MN3D.onRotateEnd = () => { refitSeats(); refreshSel(); renderAll(); saveSoon(); toast('已旋转（Ctrl+Z 可撤销）'); };
+    window.MN3D.onRotateEnd = () => { refitSeats(); refreshSel(); applyFollow(); renderAll(); saveSoon(); toast('已旋转（Ctrl+Z 可撤销）'); };
     /* 3D 里直接拖四肢摆姿势：按下记一次快照，拖动只重绘 3D，松手才刷面板 */
     window.MN3D.onPoseStart = () => { pushUndo(); };
     window.MN3D.onPoseJoint = (pid, key, deg) => {
@@ -573,6 +579,7 @@ function setMode(mode) {
     $('#mnBtnRise').innerHTML = icon('cuboid', 's14') + '立起来';
     paint();
   }
+  if (window.MN3D) syncMonFrame();     // 切回 2D 要把监看器的框一起收掉
   saveSoon();
 }
 function toggleRise() {
@@ -761,6 +768,7 @@ function renderTree() {
         <button class="mn-grip">${icon('grip-vertical', 's14')}</button>
         <button class="mn-obj-name"><span class="mn-obj-dot" style="background:${dot}"></span><span>${esc(o.name || '未命名')}</span></button>
         <span class="mn-row-acts">
+          <button class="mn-row-act ${o.locked ? 'on' : ''}" data-lock="${o._k}:${o.id}" title="${o.locked ? '解锁' : '锁定：防误拖误删'}">${icon('lock', 's14')}</button>
           <button class="mn-row-act" data-eye="${o._k}:${o.id}" title="显隐">${icon(o.hidden ? 'eye-off' : 'eye', 's14')}</button>
           <button class="mn-row-act danger" data-del="${o._k}:${o.id}" title="删除">${icon('trash-2', 's14')}</button>
         </span></div>`;
@@ -785,12 +793,13 @@ function renderTree() {
   $$('[data-folder-eye]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const k = b.dataset.folderEye; toggleGroupVis(k); });
   $$('[data-folder-del]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const k = b.dataset.folderDel; if (confirm(`删除整组「${k}」？`)) delGroup(k); });
   $$('[data-obj]', sec).forEach(r => r.onclick = e => {
-    if (e.target.closest('[data-eye]') || e.target.closest('[data-del]')) return;
+    if (e.target.closest('[data-eye]') || e.target.closest('[data-del]') || e.target.closest('[data-lock]')) return;
     const [kind, id] = r.dataset.obj.split(':');
     if (e.shiftKey) toggleSel(kind, id); else selectOnly(kind, id);
     renderTree(); renderRight(); paint();
   });
   $$('[data-eye]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const [kind, id] = b.dataset.eye.split(':'); const o = findObj(kind, id); if (o) { o.hidden = !o.hidden; renderTree(); paint(); saveSoon(); } });
+  $$('[data-lock]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const [kind, id] = b.dataset.lock.split(':'); toggleLock(kind, id); paint(); });
   $$('[data-del]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const [kind, id] = b.dataset.del.split(':'); pushUndo(); delObj(kind, id); MN.selList = selList().filter(s => !(s.kind === kind && s.id === id)); if (MN.sel && MN.sel.id === id) MN.sel = MN.selList[MN.selList.length - 1] || null; renderAll(); saveSoon(); });
 }
 
@@ -815,7 +824,22 @@ function findObj(kind, id) {
   const arr = kind === 'room' ? sc.rooms : kind === 'wall' ? sc.walls : kind === 'prop' ? sc.props : kind === 'person' ? sc.persons : sc.lights;
   return arr.find(o => o.id === id);
 }
+/* ---------- 锁定 ----------
+   锁定后仍可选中、看属性、改颜色，但不能拖、不能删、不参与自动避让。
+   大场景里「一拖拖走后面那面墙」是最高频的误操作。 */
+function isLocked(kind, id) {
+  const o = (MN.state && MN.state.scene) ? findObj(kind, id) : null;
+  return !!(o && o.locked);
+}
+function toggleLock(kind, id) {
+  const o = findObj(kind, id); if (!o) return false;
+  o.locked = !o.locked;
+  refreshSel(); renderTree(); saveSoon();
+  toast(o.locked ? '已锁定 ' + (o.name || kind) + '：不会被拖走或误删' : '已解锁 ' + (o.name || kind));
+  return o.locked;
+}
 function delObj(kind, id) {
+  if (isLocked(kind, id)) { toast('这个已锁定，先右键「解锁」再删', 'warn'); return false; }
   const sc = MN.state.scene;
   if (kind === 'room') sc.rooms = sc.rooms.filter(o => o.id !== id);
   else if (kind === 'wall') sc.walls = sc.walls.filter(o => o.id !== id);
@@ -1036,6 +1060,9 @@ function buildViewCtl() {
     <button class="mn-vc icon" id="mnZoomOut" title="缩小">${icon('minus', 's12')}</button>
     <button class="mn-vc icon" id="mnZoomIn" title="放大">${icon('plus', 's12')}</button>
     <button class="mn-vc ${MN.grid ? 'active' : ''}" id="mnGridBtn">${icon('grid-2x2', 's12')}隐藏网格</button>
+    <button class="mn-vc ${MN.snapOn !== false ? 'active' : ''}" id="mnSnapBtn" title="开：按半格/15° 对齐；关：0.05 米自由微调">🧲 磁吸</button>
+    <button class="mn-vc" id="mnMonBtn" title="右下小窗：钉住一台机位，外面自由转视角也不丢构图">🖼 监看器</button>
+    <button class="mn-vc" id="mnSettleBtn" title="重落座 + 排开穿模家具 + 走位绕障碍">🧹 落位</button>
     <button class="mn-vc" id="mnFloorBtn">${icon('paintbrush', 's12')}地面上色</button>
     <button class="mn-vc" id="mnShotBtn" title="把当前画面存成 PNG（2D 平面图 / 3D 立体都行）">${icon('camera', 's12')}截图</button>
     <button class="mn-vc" id="mnShotAllBtn" title="镜头册里每个机位各截一张，拼成一张图">${icon('film', 's12')}机位组图</button>
@@ -1055,6 +1082,28 @@ function buildViewCtl() {
   $('#mnZoomIn').onclick = () => zoomBy(1.25);
   $('#mnZoomOut').onclick = () => zoomBy(0.8);
   $('#mnGridBtn').onclick = () => { MN.grid = !MN.grid; $('#mnGridBtn').classList.toggle('active', MN.grid); if (MN.state) { MN.state.view.grid = MN.grid; saveSoon(); } paint(); };
+  /* 🧲 磁吸：开=半格/15° 对齐（搭景快），关=0.05 米自由微调（贴墙、塞缝） */
+  $('#mnSnapBtn').onclick = () => {
+    MN.snapOn = MN.snapOn === false;
+    $('#mnSnapBtn').classList.toggle('active', MN.snapOn !== false);
+    toast(MN.snapOn !== false ? '磁吸已开：按半格 / 15° 对齐' : '磁吸已关：0.05 米自由微调');
+  };
+  /* 🧹 落位：修悬空座位 / 穿模家具 / 走位穿桌 */
+  $('#mnSettleBtn').onclick = () => settleAllScene();
+  /* 🖼 监看器：一键钉住当前机位（再点一下关掉） */
+  $('#mnMonBtn').onclick = () => {
+    if (!window.MN3D || !MN3D.ok) { toast('3D 引擎没准备好', 'warn'); return; }
+    const cur = MN3D.getMonitor ? MN3D.getMonitor() : { on: false };
+    if (cur.on) { MN3D.setMonitor({ on: false }); $('#mnMonBtn').classList.remove('active'); toast('监看器已关'); }
+    else {
+      const ds = (MN.state.directorShots || []).filter(s => s && s.cam);
+      const c0 = ds.length ? ds[ds.length - 1].cam : MN3D.getCamera();
+      MN3D.setMonitor({ on: true, cam: c0, fov: (MN.state.camera || {}).fov || 45, aspect: aspectOf((MN.state.camera || {}).size) });
+      $('#mnMonBtn').classList.add('active');
+      toast('监看器已开 🖼：' + (ds.length ? '钉住镜头册最后一个机位' : '钉住当前机位') + '（右下小窗）');
+    }
+    if (MN.state.view && MN.state.view.mode === '3d') { renderRight(); saveSoon(); }
+  };
   $('#mnFloorBtn').onclick = () => { if (MN.state) { MN.state.view.floorColor = !MN.state.view.floorColor; paint(); saveSoon(); render3D(); toast(MN.state.view.floorColor ? '房间已上色' : '房间改成线框'); } };
   $('#mnShotBtn').onclick = () => snapCurrent();
   $('#mnShotAllBtn').onclick = () => snapAllCams();
@@ -1102,6 +1151,179 @@ const PROP_COLORS = ['#d9b382', '#c98d6b', '#8a9b8e', '#7d8ca3', '#b8b0a4', '#a3
 const PERSON_COLORS = ['#2e7cf6', '#ffffff', '#f5b301', '#e33e3e', '#c98d6b', '#8a9b8e', '#7d8ca3', '#2b2c2f', '#76716b', '#3c6e9e', '#5b8c5a', '#b0aaa1'];
 const GROUND_COLORS = ['#ffffff', '#f1ece3', '#e3e5e7', '#d9d2c5', '#c4cdd6', '#b8c9b8', '#e8d5c0', '#d4c4b0', '#9aa5b1', '#5b564e'];
 
+/* ============================================================
+ * 镜头设置扩展：等效焦段 mm / 翻滚斜角 / 右下监看器 / 跟随人物
+ * 对标 MONOFORM 的相机工作流：同学说「50 头」比说「27 度」多，
+ * 焦段是主口径（换算按全画幅竖边 24mm）；翻滚给真斜角镜头；
+ * 监看器让「外面自由找机位」和「里面盯最终构图」同时成立；
+ * 跟随人物所有距离以「人物身高 H」为单位，换体型/缩放后构图比例不崩。
+ * ============================================================ */
+const LENS_MM = [18, 24, 35, 50, 85, 120];
+const FOLLOW_SHOTS = [['ELS', '大远景'], ['LS', '远景'], ['MS', '中景'], ['MCU', '中近景'], ['CU', '近景'], ['ECU', '特写']];
+function aspectOf(size) {
+  const p = String(size || '16:9').split(':');
+  const w = +p[0], h = +p[1];
+  return h > 0 ? w / h : 16 / 9;
+}
+function camExtraPanel(c) {
+  const M3 = window.MN3D || {};
+  const mm = Math.round(M3.fovToMm ? M3.fovToMm(c.fov) : 40);
+  const roll = Math.round(M3.getRoll ? M3.getRoll() : (c.roll || 0));
+  const mon = (M3.getMonitor && M3.getMonitor()) || { on: false };
+  const f = c.follow || { on: false };
+  const persons = ((MN.state.scene || {}).persons || []).filter(p => !p.hidden);
+  const near = LENS_MM.reduce((a, b) => Math.abs(b - mm) < Math.abs(a - mm) ? b : a, LENS_MM[0]);
+  const k = (M3.FOLLOW_H || {}).MS || { dist: 1.47, h: 0.88 };
+  const rng = (id, label, val, min, max, step, unit) =>
+    `<label class="mn-field"><span>${label}<strong>${(+val).toFixed(2)}${unit || ''}</strong></span>
+     <input type="range" class="mn-range" id="${id}" min="${min}" max="${max}" step="${step}" value="${val}" /></label>`;
+  return `
+  <div class="mn-cam-x">
+    <div class="mn-joint-head"><span>等效焦段</span><small>按全画幅竖边 24mm 折算</small></div>
+    <div class="mn-chip-row">${LENS_MM.map(v => `<button class="mn-chip${v === near ? ' active' : ''}" data-mm="${v}">${v}mm</button>`).join('')}</div>
+    <label class="mn-field"><span>焦段<strong>${mm}mm</strong></span><input type="range" class="mn-range" id="mnCamMm" min="14" max="135" step="1" value="${Math.max(14, Math.min(135, mm))}" /></label>
+    <label class="mn-field"><span>翻滚 · 斜角镜头<strong>${roll}°</strong></span><input type="range" class="mn-range" id="mnCamRoll" min="-30" max="30" step="1" value="${roll}" /></label>
+    <div class="mn-chip-row">
+      <button class="mn-chip" data-act="rollzero">${icon('undo-2', 's12')}水平归正</button>
+      <button class="mn-chip" data-act="focus">${icon('crosshair', 's12')}聚焦所选（F）</button>
+    </div>
+    <div class="mn-joint-head"><span>监看器</span><small>右下小窗 = 成片画面</small></div>
+    <label class="mn-check"><input type="checkbox" id="mnMonOn" ${mon.on ? 'checked' : ''} /><span>右下监看器<small>外面随便转视角，小窗始终钉着这台机位</small></span></label>
+    <div class="mn-chip-row">
+      <button class="mn-chip" data-act="monpin">📌 钉住当前机位</button>
+      <button class="mn-chip" data-act="monlast">取镜头册最后一个机位</button>
+    </div>
+    <div class="mn-joint-head"><span>跟随人物</span><small>距离按身高 H 算</small></div>
+    <label class="mn-check"><input type="checkbox" id="mnFollowOn" ${f.on ? 'checked' : ''} /><span>跟随人物<small>拖动人物，镜头自己跟上；换体型构图不崩</small></span></label>
+    ${f.on ? `
+      ${persons.length ? `<label class="mn-field"><span>跟谁</span><select id="mnFollowPid">${persons.map(p => `<option value="${esc(p.id)}" ${p.id === f.pid ? 'selected' : ''}>${esc(p.name || '人物')}</option>`).join('')}</select></label>` : '<p class="mn-help-para">场景里还没有人物，先点右上「＋ 人物」。</p>'}
+      <div class="mn-chip-row">${FOLLOW_SHOTS.map(([kk, n]) => `<button class="mn-chip${(f.shot || 'MS') === kk ? ' active' : ''}" data-fshot="${kk}">${n}</button>`).join('')}</div>
+      ${rng('mnFDist', '距离', f.dist != null ? f.dist : k.dist, 0.3, 6, 0.01, 'H')}
+      ${rng('mnFH', '机位高', f.height != null ? f.height : k.h, 0.1, 3, 0.01, 'H')}
+      ${rng('mnFSide', '左右偏移', f.side || 0, -1.2, 1.2, 0.05, 'H')}
+    ` : ''}
+  </div>`;
+}
+/* 跟随：把机位算到人物身上。keepAz 默认开 —— 你转到的方位保留，只跟位置和远近 */
+function applyFollow() {
+  const st = MN.state;
+  if (!st || !st.camera || !window.MN3D || !MN3D.ok) return false;
+  const f = st.camera.follow;
+  if (!f || !f.on) return false;
+  const ps = (st.scene.persons || []).filter(p => !p.hidden);
+  const p = ps.find(x => x.id === f.pid) || ps[0];
+  if (!p) return false;
+  const r = MN3D.followCam(p, f);
+  if (!r) return false;
+  MN3D.setCamera(r.cam);
+  const mon = MN3D.getMonitor ? MN3D.getMonitor() : null;
+  if (mon && mon.on) MN3D.setMonitor({ cam: r.cam, fov: r.fov });   // 开着跟随 + 监看器 = 小窗实时看跟出来的构图
+  return true;
+}
+function bindCamExtra() {
+  const box = $('#mnRight'); if (!box) return;
+  const cam = MN.state.camera;
+  const M3 = window.MN3D;
+  const fovEl = $('#mnCamFov', box), mmEl = $('#mnCamMm', box), rollEl = $('#mnCamRoll', box);
+  const setFov = v => {
+    cam.fov = Math.max(8, Math.min(100, Math.round(v)));
+    if (fovEl) { fovEl.value = cam.fov; const s = fovEl.parentElement.querySelector('strong'); if (s) s.textContent = cam.fov + '°'; }
+    if (mmEl) { const mm = Math.round(M3.fovToMm(cam.fov)); mmEl.value = mm; const s2 = mmEl.parentElement.querySelector('strong'); if (s2) s2.textContent = mm + 'mm'; }
+    saveSoon(); paint3D();
+  };
+  if (fovEl) fovEl.oninput = e => setFov(+e.target.value);
+  if (mmEl) mmEl.oninput = e => setFov(M3.mmToFov(+e.target.value));
+  $$('[data-mm]', box).forEach(b => b.onclick = () => {
+    setFov(M3.mmToFov(+b.dataset.mm));
+    $$('[data-mm]', box).forEach(x => x.classList.toggle('active', x === b));
+  });
+  if (rollEl) rollEl.oninput = e => {
+    cam.roll = +e.target.value; M3.setRoll(cam.roll);
+    const s = rollEl.parentElement.querySelector('strong'); if (s) s.textContent = cam.roll + '°';
+    saveSoon();
+  };
+  const doAct = (act, b) => {
+    if (act === 'rollzero') { cam.roll = 0; M3.setRoll(0); if (rollEl) { rollEl.value = 0; const s = rollEl.parentElement.querySelector('strong'); if (s) s.textContent = '0°'; } saveSoon(); }
+    else if (act === 'focus') focusSelected();
+    else if (act === 'monpin' || act === 'monlast') {
+      let c0 = null, fov0 = cam.fov;
+      if (act === 'monpin') c0 = M3.getCamera();
+      else {
+        const ds = (MN.state.directorShots || []).filter(s => s && s.cam);
+        if (ds.length) { c0 = ds[ds.length - 1].cam; fov0 = cam.fov; }
+      }
+      if (!c0) { toast(act === 'monlast' ? '镜头册还没有机位，先「📷 截图」存一个' : '3D 引擎没准备好', 'warn'); return; }
+      M3.setMonitor({ on: true, cam: c0, fov: fov0, aspect: aspectOf(cam.size) });
+      const cb = $('#mnMonOn', box); if (cb) cb.checked = true;
+      toast('已钉住这台机位 📌（右下小窗）');
+      saveSoon(); paint3D();
+    }
+  };
+  $$('[data-act]', box).forEach(b => { if (['rollzero', 'focus', 'monpin', 'monlast'].indexOf(b.dataset.act) >= 0) b.onclick = () => doAct(b.dataset.act, b); });
+  const monOn = $('#mnMonOn', box);
+  if (monOn) monOn.onchange = e => {
+    if (e.target.checked) { const c0 = M3.getCamera(); M3.setMonitor({ on: true, cam: c0, fov: cam.fov, aspect: aspectOf(cam.size) }); }
+    else M3.setMonitor({ on: false });
+    saveSoon(); paint3D();
+  };
+  const fOn = $('#mnFollowOn', box);
+  if (fOn) fOn.onchange = e => {
+    cam.follow = cam.follow || { shot: 'MS' };
+    cam.follow.on = e.target.checked;
+    if (cam.follow.on) {
+      const ps = (MN.state.scene.persons || []).filter(p => !p.hidden);
+      if (!ps.length) { cam.follow.on = false; toast('场景里还没有人物，先点右上「＋ 人物」', 'warn'); renderRight(); return; }
+      if (!cam.follow.pid || !(ps.some(p => p.id === cam.follow.pid))) cam.follow.pid = (MN.sel && MN.sel.kind === 'person' ? MN.sel.id : ps[0].id);
+      applyFollow();
+      toast('已跟随人物：拖动人物镜头会自己跟上');
+    }
+    renderRight(); saveSoon();
+  };
+  const pid = $('#mnFollowPid', box);
+  if (pid) pid.onchange = e => { cam.follow.pid = e.target.value; applyFollow(); };
+  $$('[data-fshot]', box).forEach(b => b.onclick = () => {
+    const k = M3.FOLLOW_H[b.dataset.fshot] || M3.FOLLOW_H.MS;
+    cam.follow = cam.follow || {}; cam.follow.on = true;
+    cam.follow.shot = b.dataset.fshot;
+    cam.follow.dist = k.dist; cam.follow.height = k.h;
+    applyFollow(); renderRight(); saveSoon();
+  });
+  [['mnFDist', 'dist'], ['mnFH', 'height'], ['mnFSide', 'side']].forEach(([id, key]) => {
+    const el = $('#' + id, box);
+    if (!el) return;
+    el.oninput = e => {
+      cam.follow = cam.follow || {}; cam.follow.on = true;
+      cam.follow[key] = +e.target.value;
+      const s = el.parentElement.querySelector('strong'); if (s) s.textContent = (+e.target.value).toFixed(2) + 'H';
+      applyFollow(); saveSoon();
+    };
+  });
+}
+/* F / 面板按钮：把视图对准当前选中的东西（没选就回到全景） */
+function focusSelected() {
+  if (!window.MN3D || !MN3D.ok) { toast('3D 引擎没准备好', 'warn'); return; }
+  if (MN.state.view.mode !== '3d') { toast('先在 3D（立起来）里用聚焦', 'warn'); return; }
+  const sel = MN.sel;
+  if (!sel) { MN3D.frame(); toast('没选中东西，已回到全景'); return; }
+  const o = findObj(sel.kind, sel.id);
+  if (!o) { MN3D.frame(); return; }
+  const box = boxOfSel(sel.kind, o);
+  MN3D.focusBox(box);
+  toast('已聚焦：' + (o.name || sel.kind));
+  saveSoon();
+}
+function boxOfSel(kind, o) {
+  if (kind === 'person') { const h = 1.68 * (MN3D.personScale ? MN3D.personScale(o) : 1); return [o.x - 0.4, 0, o.y - 0.4, o.x + 0.4, h, o.y + 0.4]; }
+  if (kind === 'wall') return [Math.min(o.x1, o.x2) - 0.1, 0, Math.min(o.y1, o.y2) - 0.1, Math.max(o.x1, o.x2) + 0.1, o.h || 2.6, Math.max(o.y1, o.y2) + 0.1];
+  if (kind === 'room') return [o.x, 0, o.y, o.x + (o.w || 4), o.h || 3, o.y + (o.d || 4)];
+  if (kind === 'light') return [o.x - 0.3, 0, o.y - 0.3, o.x + 0.3, 2.6, o.y + 0.3];
+  const w = Math.abs(o.w || 1), d = Math.abs(o.d || 1), h = Math.abs(o.h || 1);
+  const r = ((o.rot || 0) % 360) * Math.PI / 180, cs = Math.abs(Math.cos(r)), sn = Math.abs(Math.sin(r));
+  const bw = w * cs + d * sn, bd = w * sn + d * cs;   // 旋转后的世界宽/深
+  const cx = o.x + w / 2, cy = o.y + d / 2;
+  return [cx - bw / 2, 0, cy - bd / 2, cx + bw / 2, h, cy + bd / 2];
+}
+
 function renderRight() {
   const box = $('#mnRight'); if (!box) return;
   const tab = MN._tab || 'obj';
@@ -1110,6 +1332,7 @@ function renderRight() {
   if (tab === 'obj') body = renderObjPanel();
   else if (tab === 'sun') body = renderSunPanel();
   else if (tab === 'env') body = renderEnvPanel();
+  else if (tab === 'ref') body = renderRefPanel();
   else body = renderGroundPanel();
   box.innerHTML = `
     <div class="mn-quickadd">
@@ -1121,6 +1344,7 @@ function renderRight() {
       <button class="${tab === 'obj' ? 'active' : ''}" data-tab="obj">物体</button>
       <button class="${tab === 'sun' ? 'active' : ''}" data-tab="sun">光影</button>
       <button class="${tab === 'env' ? 'active' : ''}" data-tab="env">环境图</button>
+      <button class="${tab === 'ref' ? 'active' : ''}" data-tab="ref">垫图</button>
       <button class="${tab === 'grd' ? 'active' : ''}" data-tab="grd">地面</button>
     </div>
     ${body}
@@ -1132,7 +1356,8 @@ function renderRight() {
       <label class="mn-check"><input type="checkbox" id="mnCamFrame" ${c.frame ? 'checked' : ''} /><span>显示取景框<small>按中央 16:9 区域导出</small></span></label>
       <label class="mn-check"><input type="checkbox" id="mnCamCut" ${c.cutaway ? 'checked' : ''} /><span>剖开前方外墙<small>看清室内，方便找机位</small></span></label>
       <label class="mn-check"><input type="checkbox" id="mnCamCeil" ${c.ceil ? 'checked' : ''} /><span>封顶<small>按最低墙高封顶 · 可上色、打洞</small></span></label>
-      <label class="mn-field"><span>镜头视角<strong>${c.fov}°</strong></span><input type="range" class="mn-range" id="mnCamFov" min="15" max="90" value="${c.fov}" /></label>
+      <label class="mn-field"><span>镜头视角<strong>${c.fov}°</strong></span><input type="range" class="mn-range" id="mnCamFov" min="8" max="100" value="${c.fov}" /></label>
+      ${camExtraPanel(c)}
     </section>
     <div class="mn-tips">
       <span class="mn-eyebrow">导演，随意点。</span>
@@ -1158,6 +1383,8 @@ function renderRight() {
   $('#mnCamFov').oninput = e => { cam.fov = +e.target.value; e.target.previousElementSibling.querySelector('strong').textContent = cam.fov + '°'; saveSoon(); };
   bindObjPanel(body);
   bindLibrary();
+  bindCamExtra();
+  bindRefPanel();
   bindEnvPanel();
   bindLightPanel();
 }
@@ -1201,6 +1428,7 @@ function renderObjPanel() {
   if (!sel) return renderLibrary();
   const o = findObj(sel.kind, sel.id);
   const head = `<div class="mn-prop-head"><strong>${esc(o.name || '未命名')}</strong>
+    <button class="mn-ghost ${o.locked ? 'on' : ''}" data-act="lock" title="锁定后不能拖、不能删，也不会被自动避让挪走">${icon('lock', 's12')}${o.locked ? '已锁定' : '锁定'}</button>
     <button class="mn-ghost" data-act="hide">${icon('eye-off', 's12')}隐藏</button>
     <button class="mn-ghost" data-act="del" style="color:var(--accent)">${icon('trash-2', 's12')}</button></div>`;
   const swatches = (arr, cur, attr) => `<div class="mn-swatches">${arr.map(c => `<button class="mn-swatch ${c === (cur || '') ? 'active' : ''}" style="background:${c || 'var(--soft)'}" data-sw="${attr}" data-c="${c || ''}"></button>`).join('')}</div>`;
@@ -1427,6 +1655,7 @@ function bindObjPanel() {
     }
     else if (a === 'del') { delSel(); }
     else if (a === 'hide') { hideSel(); }
+    else if (a === 'lock') { toggleLock(MN.sel.kind, MN.sel.id); }
     else if (a === 'seat') { seatSomeoneOn(o.id); }
     else if (a === 'seatnear') { sitSelToNearestSeat(); }
     else if (a === 'unsit') { pushUndo(); standUp(o); renderAll(); saveSoon(); toast('已起身', 'ok'); }
@@ -1529,6 +1758,98 @@ function envSlider(id, label, min, max, step, val, unit) {
   return `<label class="mn-field"><span>${label}<strong>${val}${unit || ''}</strong></span>
     <input type="range" class="mn-range" id="${id}" data-unit="${unit || ''}" min="${min}" max="${max}" step="${step}" value="${val}" /></label>`;
 }
+/* ============================================================
+ * 垫图：把一张参考图贴在 3D 画布最底层，对着它匹配构图 / 摆姿势
+ * 按镜头保存（存在 scene.ref 里），原图走 IndexedDB，localStorage 只留一个 key。
+ * 「进入导出」决定这张图会不会跟着进截图 / 机位组图 / 导出画面。
+ * ============================================================ */
+const REF_DEFAULT = { x: 0.5, y: 0.5, scale: 0.62, opacity: 0.5, edit: false, lock: false, inExport: false };
+function refImageToDataURL(file, maxSide, cb) {
+  const fr = new FileReader();
+  fr.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+      const s = Math.min(1, (maxSide || 1280) / Math.max(w, h));
+      if (s >= 1 && String(fr.result).length < 700000) { cb(fr.result); return; }
+      const cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.round(w * s)); cv.height = Math.max(1, Math.round(h * s));
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      cb(cv.toDataURL('image/jpeg', 0.86));
+    };
+    img.onerror = () => cb(null);
+    img.src = fr.result;
+  };
+  fr.onerror = () => cb(null);
+  fr.readAsDataURL(file);
+}
+function renderRefPanel() {
+  const r = MN.state.scene.ref;
+  if (!r || !r.src) return `<section class="mn-section">
+    <div class="mn-sec-head"><span>垫一张参考图</span><span class="mn-sec-note">对构图 · 对摆姿</span></div>
+    <p class="mn-help-para">拉片截的帧、别人的一张构图、AI 出的一张概念图 —— 盖在 3D 画面上当描摹板，对着它调机位、摆姿势、定构图。</p>
+    <div class="mn-chip-row"><button class="mn-chip" id="mnRefPick">${icon('scan-line', 's12')}选一张参考图</button></div>
+    <input type="file" id="mnRefFile" accept="image/*" hidden />
+    <p class="mn-help-para" style="margin-top:10px">图只存在你本机浏览器里，跟着这一镜走；<b>不会</b>自动上传。</p>
+  </section>`;
+  const sl = (id, label, min, max, step, v, unit) => `<label class="mn-field"><span>${label}<strong>${(+v).toFixed(2)}${unit || ''}</strong></span><input type="range" class="mn-range" id="${id}" min="${min}" max="${max}" step="${step}" value="${v}" /></label>`;
+  return `<section class="mn-section">
+    <div class="mn-sec-head"><span>垫的参考图</span><button class="mn-ghost" id="mnRefClear">撤掉</button></div>
+    <div class="mn-env-thumb"><img src="${r.src}" alt="参考图" title="点击换一张" id="mnRefThumb" /></div>
+    <div class="mn-chip-row">
+      <button class="mn-chip ${r.edit && !r.lock ? 'active' : ''}" id="mnRefMove">${r.lock ? '已锁定' : (r.edit ? '拖动中：拖画面里的图' : '移动图')}</button>
+      <button class="mn-chip" id="mnRefCenter">居中还原</button>
+    </div>
+    ${sl('mnRefOp', '透明度', 0.1, 1, 0.05, r.opacity != null ? r.opacity : 0.5, '')}
+    ${sl('mnRefScale', '大小', 0.1, 2, 0.02, r.scale != null ? r.scale : 0.62, '×宽')}
+    <label class="mn-check"><input type="checkbox" id="mnRefLock" ${r.lock ? 'checked' : ''} /><span>锁定<small>锁了就不能拖，也不会挡住选物体</small></span></label>
+    <label class="mn-check"><input type="checkbox" id="mnRefLum" ${r.lumMask === false ? '' : 'checked'} /><span>亮的地方透<small>不然一张白底图会把白模全盖住</small></span></label>
+    <label class="mn-check"><input type="checkbox" id="mnRefExport" ${r.inExport ? 'checked' : ''} /><span>进入导出<small>截图 / 机位组图里带上这张图</small></span></label>
+    <p class="mn-help-para">图盖在画面最上面当描摹板：调「透明度」到能同时看清照片和白模，对齐完点「锁定」再回去拖人物四肢。</p>
+  </section>`;
+}
+function bindRefPanel() {
+  const box = $('#mnRight'); if (!box) return;
+  const sc = MN.state.scene;
+  const pickBtn = $('#mnRefPick', box), file = $('#mnRefFile', box), thumb = $('#mnRefThumb', box);
+  const openFile = () => { if (file) file.click(); };
+  if (pickBtn) pickBtn.onclick = openFile;
+  if (thumb) thumb.onclick = openFile;
+  if (file) file.onchange = () => {
+    const f = file.files && file.files[0]; if (!f) return;
+    refImageToDataURL(f, 1280, url => {
+      if (!url) { toast('这张图读不出来，换一张试试', 'warn'); return; }
+      pushUndo();
+      sc.ref = Object.assign({}, REF_DEFAULT, { src: url });
+      if (MN.state.view && MN.state.view.mode !== '3d') setMode('3d');
+      renderRight(); renderAll(); saveSoon();
+      toast('已垫上参考图：拖「移动图」对齐，对齐完点锁定');
+    });
+    file.value = '';
+  };
+  const r = sc.ref; if (!r || !r.src) return;
+  const set = (k, v, redraw) => { r[k] = v; if (redraw !== false) { paint3D(); saveSoon(); } };
+  const op = $('#mnRefOp', box), sz = $('#mnRefScale', box);
+  if (op) op.oninput = e => { set('opacity', +e.target.value); const s = op.parentElement.querySelector('strong'); if (s) s.textContent = (+e.target.value).toFixed(2); };
+  if (sz) sz.oninput = e => { set('scale', +e.target.value); const s = sz.parentElement.querySelector('strong'); if (s) s.textContent = (+e.target.value).toFixed(2) + '×宽'; };
+  const mv = $('#mnRefMove', box);
+  if (mv) mv.onclick = () => {
+    if (r.lock) { toast('已锁定：先取消「锁定」才能拖图', 'warn'); return; }
+    r.edit = !r.edit; mv.classList.toggle('active', r.edit);
+    mv.textContent = r.edit ? '拖动中：拖画面里的图' : '移动图';
+    toast(r.edit ? '现在可以直接在 3D 画面里拖这张图' : '已退出移动图');
+  };
+  const ct = $('#mnRefCenter', box);
+  if (ct) ct.onclick = () => { pushUndo(); r.x = 0.5; r.y = 0.5; r.scale = 0.62; renderRight(); paint3D(); saveSoon(); };
+  const lk = $('#mnRefLock', box), ex = $('#mnRefExport', box), lum = $('#mnRefLum', box);
+  if (lk) lk.onchange = e => { set('lock', e.target.checked); renderRight(); };
+  if (ex) ex.onchange = e => set('inExport', e.target.checked);
+  if (lum) lum.onchange = e => set('lumMask', e.target.checked);
+  const cl = $('#mnRefClear', box);
+  if (cl) cl.onclick = () => { pushUndo(); delete sc.ref; renderRight(); renderAll(); saveSoon(); toast('参考图已撤掉'); };
+}
+/* 拖完参考图：落一次盘（引擎里直接改了 scene.ref.x/y）—— 回调在 initMiaoning 里统一注册 */
+
 function renderEnvPanel() {
   const e = MN.state.scene.env;
   if (!e || !e.src) return `<section class="mn-section">
@@ -1727,7 +2048,29 @@ function paint3D() {
   paint3dRaf = requestAnimationFrame(() => {
     paint3dRaf = null;
     if (MN.state && window.MN3D && MN3D.ok) { try { MN3D.render(MN.state); } catch (e) { } }
+    syncMonFrame();
   });
+}
+/* 监看器的框和标签：GL 只负责画画面，边框用 DOM 叠在右下角，缩放窗口跟着走。
+   位置直接吃引擎记下的设备像素矩形（M._monRectLast）换算，两边不可能错位。 */
+function syncMonFrame() {
+  const host = $('#mnStage'), c3 = $('#mn3d');
+  if (!host || !c3) return;
+  const mon = window.MN3D && MN3D.getMonitor ? MN3D.getMonitor() : null;
+  const r = window.MN3D ? MN3D._monRectLast : null;
+  let el = $('.mn-mon-frame', host);
+  const visible = !!(mon && mon.on && mon.cam && r) && MN.state && MN.state.view && MN.state.view.mode === '3d' && c3.style.display !== 'none';
+  if (!visible) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.className = 'mn-mon-frame'; host.appendChild(el); }
+  const dpr = c3.clientWidth ? (c3.width / c3.clientWidth) : (window.devicePixelRatio || 1);
+  el.style.width = (r.w / dpr) + 'px'; el.style.height = (r.h / dpr) + 'px';
+  el.style.right = ((c3.width - r.x - r.w) / dpr) + 'px';
+  el.style.bottom = (r.y / dpr) + 'px';
+  const cam = mon.cam || {};
+  const mm = Math.round(MN3D.fovToMm(mon.fov || (MN.state.camera || {}).fov || 45));
+  const dist = (cam.r * Math.sin(cam.phi || 1)).toFixed(1);
+  const h = (cam.ty + cam.r * Math.cos(cam.phi || 1)).toFixed(1);
+  el.innerHTML = `<span>监看器 · ${mm}mm · ${dist}m/高${h}m · ${((MN.state.camera || {}).size || '16:9')}</span>`;
 }
 function paint() {
   if (paintRaf) return;
@@ -2140,9 +2483,28 @@ function finishPath() {
 /* ---------- 防穿模：自动让位 ----------
    只挪「你正在放/正在拖的那一件」，已经摆好的东西不动。
    放置、拖动松手、3D 拖动松手、AI 搭景之后都会走这里。 */
+/* ---------- 🧹 一键落位 ----------
+   我们的人物/家具没有「离地高度」这个字段（都贴在 y=0），所以这里要修的是三类真实脏数据：
+   ① sitOn 指向已被删掉或挪走的家具 → 人悬在半空；② 家具互相穿模；③ 走位线穿过桌子。 */
+function settleAllScene() {
+  const L = window.MN_LAYOUT;
+  if (!L || !MN.state || !MN.state.scene) { toast('导演台还没准备好', 'warn'); return; }
+  pushUndo();
+  const sc = MN.state.scene;
+  const bits = [];
+  const refit = L.refitSitters ? L.refitSitters(sc, null) : 0;
+  if (refit) bits.push(refit + ' 个座位重新落座');
+  const moved = L.resolveScene ? L.resolveScene(sc, { maxR: 2.5 }) : [];
+  if (moved && moved.length) bits.push('排开 ' + moved.length + ' 件穿模');
+  const routed = L.routeAllPaths ? L.routeAllPaths(sc) : { count: 0 };
+  if (routed && routed.count) bits.push('走位绕开障碍 ' + routed.count + ' 条');
+  renderAll(); saveSoon();
+  toast(bits.length ? '已落位：' + bits.join(' · ') + '（Ctrl+Z 可撤销）' : '都已经在位，没有要修的', bits.length ? 'ok' : 'info');
+}
 function settleOne(kind, id, quiet) {
   if (!window.MN_LAYOUT || !MN.state || !MN.state.scene) return false;
   const o = findObj(kind, id); if (!o) return false;
+  if (o.locked) return false;                       // 锁定的不自动挪
   /* 坐着的人不自动让位 —— 他的位置是座位说了算，否则会被从椅子上推开 */
   if (kind === 'person' && o.sitOn) return false;
   const r = window.MN_LAYOUT.settle(MN.state.scene, kind, o);
@@ -2335,6 +2697,8 @@ function onPtrDown(e) {
       if (e.shiftKey) { toggleSel(hit.kind, hit.id); refreshSel(); return; }
       if (!inSel(hit.kind, hit.id)) selectOnly(hit.kind, hit.id);
       else MN.sel = { kind: hit.kind, id: hit.id };
+      /* 锁定的只让选、不让拖 */
+      if (isLocked(hit.kind, hit.id)) { refreshSel(); toast('这个已锁定：解锁后才能拖动', 'warn'); return; }
       MN.drag = { kind: 'move', items: snapshotSel(), wx: w.x, wy: w.y, moved: false, snap: JSON.stringify(MN.state.scene) };
       refreshSel();
       return;
@@ -2483,6 +2847,8 @@ function openCtx(x, y, hit) {
     items.push({ icon: 'clipboard-paste', label: '再粘贴一个', hint: 'Ctrl+V', fn: () => pasteClip(1, 1) });
     sep();
     items.push({ icon: o && o.hidden ? 'eye' : 'eye-off', label: o && o.hidden ? '显示' : '隐藏', fn: hideSel });
+    items.push({ icon: 'lock', label: o && o.locked ? '解锁（可以拖了）' : '锁定（防误拖误删）', fn: () => toggleLock(kind, hit.id) });
+    items.push({ icon: 'crosshair', label: '聚焦它（F）', fn: focusSelected });
     items.push({ icon: 'pencil-line', label: '重命名', hint: 'F2', fn: renameSel });
     items.push({ icon: 'arrow-up-right', label: '置顶（盖住别的）', fn: bringFront });
     if (kind === 'person' || kind === 'prop') items.push({ icon: 'rotate-3d', label: '旋转 90°', fn: rotateSel });
@@ -3162,7 +3528,12 @@ function onKeyDown(e) {
     return;
     }
   }
-  if (k === 'F' && MN.state && MN.state.view.mode === '3d' && window.MN3D) { MN3D.frame(); return; }
+  if (k === 'F' && MN.state && MN.state.view.mode === '3d' && window.MN3D) {
+    /* 选中了东西就怼到它身上，什么都没选才是回全景 */
+    if (MN.sel && (selList ? selList().length : 1)) focusSelected();
+    else MN3D.frame();
+    return;
+  }
 }
 function onKeyUp(e) {
   if (e.key === ' ') { MN.spaceDown = false; if (cv) cv.style.cursor = 'default'; }
@@ -4088,6 +4459,10 @@ Object.assign(window, {
   mnSeatAfterDrop: seatAfterDrop, mnFindProp: findProp, mnSeatableProps: seatableProps,
   /* 环境图（3D 全景 / 背景板） */
   mnEnvSetFile, mnRenderRight: renderRight,
+  /* v1.22.0 对标补齐（监看器 / 跟随 / 锁定 / 磁吸 / 落位 / 垫图）：
+     测试和 m3 都要能直接调到，别再出现「函数在 IIFE 里、桥取到 undefined 静默降级」 */
+  paint3D, applyFollow, focusSelected, syncMonFrame, snap, snapDeg,
+  isLocked, toggleLock, settleAllScene, selectOnly, delSel, renderRight,
 });
 
 /* ---------- bairimeng-director 集成钩子（2026-10-25 移植时新增） ----------
@@ -4116,7 +4491,13 @@ window.miaoningSeed = function (st) {
     setMode('3d');
     /* 一键搭景的镜头：打开就站到这一镜的起幅机位上，客户第一眼看到的就是「这个镜头怎么拍的」 */
     const ds = (MN.state.directorShots || []).filter(s => s && s.cam);
-    if (MN.state.autoBuild && ds.length) MN3D.setCamera(ds[0].cam);
+    const rollSaved = (MN.state.camera && MN.state.camera.roll) || 0;
+    if (MN.state.autoBuild && ds.length) {
+      MN3D.setCamera(ds[0].cam);
+      /* 老机位里没有 roll 字段 → 别被 setCamera 归零，用镜头设置里存的那一个 */
+      if (ds[0].cam.roll == null && rollSaved) MN3D.setRoll(rollSaved);
+    } else if (rollSaved && window.MN3D && MN3D.setRoll) MN3D.setRoll(rollSaved);
+    syncMonFrame();
   }, 80);
   setTimeout(resizeCanvas, 60);
   return true;
