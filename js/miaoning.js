@@ -3811,10 +3811,11 @@ function sbRenderList() {
   }
   box.innerHTML = p.shots.map((s, i) => `
     <div class="mn-sb-shot ${i === (MN.sbSel | 0) ? 'active' : ''}" data-i="${i}">
-      <img class="mn-sb-shot-img" src="${s.image || ''}" ${s.image ? '' : 'data-empty="1"'} />
+      ${s.image ? `<img class="mn-sb-shot-img" src="${s.image}" />`
+        : `<span class="mn-sb-shot-img" data-empty="1"><em>${s.boardScene ? '未出图' : '没搭景'}</em></span>`}
       <div class="mn-sb-shot-info">
         <b>${pad2(i + 1)}. ${esc(s.title || '未命名')}</b>
-        <small>${esc(s.scene || '景别')} · ${s.duration || 3}s</small>
+        <small>${esc(s.scene || '景别')}${s.camera ? ' · ' + esc(s.camera) : ''} · ${s.duration || 3}s</small>
       </div>
     </div>`).join('');
   $$('.mn-sb-shot', box).forEach(d => d.onclick = () => { MN.sbSel = +d.dataset.i; sbRenderList(); sbRenderCanvas(); sbRenderRight(); });
