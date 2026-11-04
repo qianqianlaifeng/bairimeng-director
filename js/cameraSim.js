@@ -194,6 +194,9 @@ function addFace(hx, hy, r) {
   return parts;
 }
 
+/* 坐姿姿势自带标准座面：buildActor 的 sit 分支骨盆中心在 0.50m。
+   人「坐在多高的面上」要按这个基准取差值，不能再把 sitH 整个加一遍。 */
+const SIT_POSE_HIP = 0.50;
 function buildActor(pose) {
   const p = pose.phase, wk = pose.walk;
   const parts = [];
@@ -685,7 +688,12 @@ class WhiteModelRenderer {
           }
           return {
             x, z, yaw, scale: o.scale || 1,
-            liftY: Math.max(0, Math.min(1.6, +o.sitH || 0)),   // 坐在家具上：按坐面高度整体抬高
+            /* 坐在家具上：buildActor 的坐姿本身骨盆就在 0.50m（＝标准座面），
+               以前这里直接 +sitH 等于把座面高度算了两遍 —— 人变成「站在沙发上」。
+               正确做法跟 3D 引擎同一个约定：只补「实际座面 − 姿势自带坐高」这一小截。 */
+            liftY: o.action === 'sit'
+              ? Math.max(-0.25, Math.min(0.6, (+o.sitH || 0.45) - SIT_POSE_HIP))
+              : Math.max(0, Math.min(1.6, +o.sitH || 0)),
             pose: { phase: t * Math.PI * 6 * (o.action === 'run' ? 1.7 : 1) + i * 1.7, walk: moving ? (o.action === 'run' ? 0.95 : 0.55) : 0, sit: o.action === 'sit', joints: o.joints || null },
           };
         })
@@ -704,6 +712,8 @@ class WhiteModelRenderer {
       });
     }
     const parts = (opts.hideActor || sim.type === 'pov') ? [] : actorDefs.map(d => ({ d, parts: buildActor(d.pose) }));
+    /* QA 句柄：这一帧每个演员的坐态抬升量（回归脚本用它断言「座面高度没被算两遍」） */
+    this._lastActors = actorDefs.map(d => ({ sit: !!d.pose.sit, lift: +(d.liftY || 0).toFixed(3), scale: d.scale }));
     let propObjs = (opts.hideActor ? [] : objs.filter(o => o.type === 'prop'));
     if (opts.scene && opts.scene.cutaway) {
       /* 剖开前方外墙：只切「挡在机位和场景中心之间」的那几面墙。
