@@ -725,15 +725,16 @@ class Store {
     this._notify('参考图已挂到镜头上');
   }
 
-  /* ---------- 手绘分镜稿 ---------- */
-  async attachSketch(shotId, blob) {
+  /* ---------- 手绘分镜稿 / 宫格格子图（同一个槽：这一格的成品画面） ---------- */
+  async attachSketch(shotId, blob, opt = {}) {
     const key = await this.putImage(blob);
-    if (!key) { this._notify('手绘稿保存失败（浏览器不支持或空间不足）', 'warn'); return; }
+    if (!key) { this._notify('手绘稿保存失败（浏览器不支持或空间不足）', 'warn'); return null; }
     const old = this._findShot(shotId)?.sketch;
     this.updateShot(shotId, { sketch: key });
     if (old && old !== key) this.deleteImage(old);
-    this.addXP(2, '手绘分镜');
-    this._notify('手绘分镜稿已保存 🎨');
+    this.addXP(2, opt.xp || '手绘分镜');
+    this._notify(opt.msg || '手绘分镜稿已保存 🎨');
+    return key;
   }
   /* ---------- 审核用成片截图 ---------- */
   async attachReviewImg(shotId, file) {
