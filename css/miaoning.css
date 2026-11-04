@@ -455,6 +455,9 @@
 .mn-sb-shot.active{border-color:var(--accent);background:var(--accent-soft)}
 .mn-sb-shot-img{width:66px;height:38px;border-radius:6px;object-fit:cover;border:1px solid var(--line);background:var(--soft);flex:0 0 auto}
 .mn-sb-shot-img[data-empty="1"]{background:repeating-linear-gradient(45deg,var(--soft),var(--soft) 6px,var(--line) 6px,var(--line) 12px)}
+/* 空格子要说清楚为什么空、怎么让它不空（以前只有一片斜纹，同学以为坏了） */
+span.mn-sb-shot-img[data-empty="1"]{display:flex;align-items:center;justify-content:center}
+.mn-sb-shot-img em{font-style:normal;font-size:10.5px;line-height:1.5;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:1px 5px;white-space:nowrap}
 .mn-sb-shot-info{min-width:0}
 .mn-sb-shot-info b{font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mn-sb-shot-info small{font-size:11px;color:var(--muted)}
