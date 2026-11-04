@@ -486,6 +486,16 @@
 .mn-sb-field>span{font-weight:600;color:var(--ink)}
 .mn-sb-field input,.mn-sb-field select,.mn-sb-field textarea{width:100%;border:1px solid var(--line);border-radius:var(--radius);background:var(--soft);padding:8px;color:var(--ink);resize:vertical}
 .mn-sb-field textarea{min-height:54px}
+/* v1.23.0 故事板镜头详情：景别/角度并排 + 单格出图按钮组 + 场景状态提示 */
+.mn-sb-two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mn-sb-two .mn-sb-field{margin-bottom:12px}
+.mn-sb-acts{display:flex;flex-direction:column;gap:7px;margin-top:2px}
+.mn-sb-acts .mn-sb-field{flex-direction:row;align-items:center;gap:8px}
+.mn-sb-acts .mn-sb-field>span{flex:0 0 60px}
+.mn-sb-btn.block[disabled]{opacity:.45;cursor:not-allowed}
+.mn-sb-hint{margin:10px 0 0;font-size:11.5px;line-height:1.65;color:var(--muted);background:var(--soft);border:1px solid var(--line);border-radius:var(--radius);padding:7px 9px}
+.mn-sb-r-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.mn-sb-r-head small{font-weight:600;font-size:11px;color:var(--accent,#2e7cf6);opacity:.9}
 
 .mn-sb-timeline{border-top:1px solid var(--line);background:var(--paper);padding:10px 14px}
 .mn-sb-tl-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:8px}
