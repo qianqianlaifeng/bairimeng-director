@@ -3700,7 +3700,7 @@ function renderStoryboard() {
       <span class="mn-sb-spacer"></span>
       <button class="mn-sb-btn" id="sbAiRule" title="让 AI 按规则出三镜预演 + 分镜表">${icon('file-braces')} AI 分镜规则</button>
       <button class="mn-sb-btn primary" id="sbGen">${icon('sparkles')} 一键生成故事板</button>
-      <button class="mn-sb-btn" id="sbGrid" title="每镜自己出一格（3D 场景 / 机位截图 / AI 回填图），拼成一张能直接发的宫格故事板">${icon('grid-2x2')} 宫格图</button>
+      <button class="mn-sb-btn" id="sbGridBtn" title="每镜自己出一格（3D 场景 / 机位截图 / AI 回填图），拼成一张能直接发的宫格故事板">${icon('grid-2x2')} 宫格图</button>
       <button class="mn-sb-btn" id="sbImg4k">${icon('image')} 下载全部图片(4K)</button>
       <button class="mn-sb-btn" id="sbMp4">${icon('film')} 导出 MP4</button>
       <button class="mn-sb-btn icon" id="sbTheme" title="夜间">${icon(dark ? 'sun' : 'moon')}</button>
@@ -3764,7 +3764,9 @@ function bindStoryboard() {
   $('#sbAspect').onchange = e => { ensureProject().aspect = e.target.value; saveSoon(); renderStoryboard(); };
   $('#sbTarget').oninput = e => { const v = parseFloat(e.target.value); ensureProject().target = isNaN(v) ? 30 : v; saveSoon(); sbUpdateTotal(); };
   $('#sbGen').onclick = generateFromDirector;
-  $('#sbGrid').onclick = openStoryGrid;
+  /* ⚠️ $ 是全文档查询：分镜板那边已经有一个 id="sbGrid" 的容器，
+     这里必须用 sbGridBtn 并限定在故事板浮层内查，否则拿到的是分镜板那个 div，按钮点了没反应。 */
+  $('#sbGridBtn', $('#mnStory')).onclick = openStoryGrid;
   $('#sbAiRule').onclick = () => openAiModal(4);
   $('#sbImg4k').onclick = () => exportStoryboardImages();
   $('#sbMp4').onclick = () => exportStoryboardMP4();
