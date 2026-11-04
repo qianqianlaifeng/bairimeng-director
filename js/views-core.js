@@ -7,6 +7,7 @@ import { localBreakdown, aiBreakdown, aiEnhancePrompt, buildPrompt, moveByKey } 
 import { WhiteModelRenderer, solveCamera, focusPointOf } from './cameraSim.js';
 import { openSceneBuilder, mnToShotScene } from './builder.js';
 import { planProject, hasScene } from './auto-build.js';
+import { openGridModal, dataURLToBlob } from './mn-grid.js';
 import { esc, el, modal, confirmDlg, toast, copyText, pickFile, fmtDur, opts } from './ui.js';
 
 let store;   // 由 init 注入
@@ -268,6 +269,7 @@ export function renderStoryboard(container) {
       <div class="page-head-actions">
         <button class="btn btn-ghost btn-sm" id="btnImportShots">📥 导入分镜</button>
         <button class="btn btn-ghost btn-sm" id="btnAutoBuild" title="按每张卡的景别 / 角度 / 运镜，自动搭出 3D 场景和机位">🎬 一键搭景</button>
+        <button class="btn btn-ghost btn-sm" id="btnGridBoard" title="每镜自己出图，拼成一张宫格故事板（可选版式 / 字幕带 / 运镜箭头）">🎛 宫格图</button>
         <button class="btn btn-ghost btn-sm" id="btnExportShots">📤 导出</button>
         <button class="btn btn-ghost btn-sm" id="btnBatch">☑ 批量</button>
         <button class="btn btn-ghost btn-sm" id="btnClearShots">🧹 清空</button>
@@ -320,6 +322,17 @@ export function renderStoryboard(container) {
 
   /* ---------- 🎬 一键搭景：按景别 / 角度 / 运镜，批量把镜头变成 3D 场景 + 机位 ---------- */
   container.querySelector('#btnAutoBuild').onclick = () => openAutoBuild();
+
+  /* ---------- 🎛 宫格图：每镜用自己的 3D 场景出一格，拼成一张能直接发的故事板 ---------- */
+  container.querySelector('#btnGridBoard').onclick = () => openGridModal({
+    title: p.name,
+    aspect: p.aspect,
+    shots: p.shots,
+    source: 'board',
+    /* 「逐格回填」把 AI 出图写进这一镜的格子稿（sketch 槽），下一次拼图就优先用它 */
+    onCellArt: (i, dataURL) => store.attachSketch(p.shots[i].id, dataURLToBlob(dataURL),
+      { msg: `第 ${i + 1} 镜格子图已回填 🖼`, xp: '故事板宫格' }),
+  });
 
   const nameOfAngle = k => (ANGLES.find(a => a.key === k) || {}).name || k;
 
