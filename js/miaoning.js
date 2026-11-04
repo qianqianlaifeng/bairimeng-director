@@ -1,4 +1,17 @@
 /* ================================================================ 导演台（🎥 页）
+   v1.23.0（2026-11-05）：🎛 故事板智能化（宫格引擎在 js/mn-grid.js，window.MNGRID）——
+                          ① 故事板「一键生成」以前只认镜头册机位，分镜板写好的画面/台词/景别/角度/
+                             运镜/提示词一概不读；现在自动选源：分镜板 → 镜头册 → 五拍骨架，
+                             并把每镜搭好的白模 3D 场景一起带过来（shot.boardScene）。
+                          ② 宫格故事板图：逐镜离屏渲一张静帧（与分镜板卡片、动态分镜 mp4 同一套
+                             WhiteModelRenderer 参数，三处画面才对得上）→ 本地拼成 1×4/2×3/3×3…
+                             可配版式，格子下方带 镜号/景别/角度/运镜/时长/台词，画面上按运镜画
+                             推/拉/移/摇/绕的运动箭头，同场次尽量不跨页，超量自动分页、超尺寸自动降列。
+                          ③ 「🧾 生图提示词包」：一条提示词＝一个格子（含画幅/人物一致性/风格锁/负向锁），
+                             「🖼 逐格回填」把 AI 出的图塞回对应镜号（写 sketch 槽），再一键重拼。
+                             为什么不一次让 AI 画整张宫格：2×3 个 16:9 格子整体是 32:27，模型没有这个
+                             画幅，硬塞必裁切留黑；六格一张图没法单格重抽，格里的字还一定崩。
+                          ④ 「下载全部图片(4K)」以前对没画面的镜子会导出一堆纯色空图，现在先按 3D 机位补渲。
    v1.21.2（2026-10-29）：四肢改成**一整根连续放样管** —— 胳膊从胸廓内部的长出点一路排到指尖，腿从骨盆里排到脚踝，
                           弯折处（肩/肘/膝）**上下共用同一圈环**。以前是「管子 + 关节球」互相叠，叠再深也是两张皮，
                           换个角度就看见缝；现在是同一张曲面，结构上不存在接缝。手掌也不再是一个球：腕→掌→指三圈由圆变扁。
@@ -3687,6 +3700,7 @@ function renderStoryboard() {
       <span class="mn-sb-spacer"></span>
       <button class="mn-sb-btn" id="sbAiRule" title="让 AI 按规则出三镜预演 + 分镜表">${icon('file-braces')} AI 分镜规则</button>
       <button class="mn-sb-btn primary" id="sbGen">${icon('sparkles')} 一键生成故事板</button>
+      <button class="mn-sb-btn" id="sbGrid" title="每镜自己出一格（3D 场景 / 机位截图 / AI 回填图），拼成一张能直接发的宫格故事板">${icon('grid-2x2')} 宫格图</button>
       <button class="mn-sb-btn" id="sbImg4k">${icon('image')} 下载全部图片(4K)</button>
       <button class="mn-sb-btn" id="sbMp4">${icon('film')} 导出 MP4</button>
       <button class="mn-sb-btn icon" id="sbTheme" title="夜间">${icon(dark ? 'sun' : 'moon')}</button>
@@ -3750,6 +3764,7 @@ function bindStoryboard() {
   $('#sbAspect').onchange = e => { ensureProject().aspect = e.target.value; saveSoon(); renderStoryboard(); };
   $('#sbTarget').oninput = e => { const v = parseFloat(e.target.value); ensureProject().target = isNaN(v) ? 30 : v; saveSoon(); sbUpdateTotal(); };
   $('#sbGen').onclick = generateFromDirector;
+  $('#sbGrid').onclick = openStoryGrid;
   $('#sbAiRule').onclick = () => openAiModal(4);
   $('#sbImg4k').onclick = () => exportStoryboardImages();
   $('#sbMp4').onclick = () => exportStoryboardMP4();
@@ -3804,12 +3819,17 @@ function sbRenderList() {
 }
 function sbAddShot() {
   const p = ensureProject();
-  p.shots.push({ id: uid(), title: '新分镜 ' + (p.shots.length + 1), duration: 3, scene: '中景', action: '', dialogue: '', image: null, strokes: [], audio: null });
+  p.shots.push({
+    id: uid(), title: '新分镜 ' + (p.shots.length + 1), duration: 3, scene: '中景',
+    shotSize: 'MS', angle: 'eye', cameraMove: 'static', moveSpeed: 'std', camera: '固定镜头',
+    action: '', dialogue: '', prompt: '', sceneKey: '', boardScene: null, image: null, sketch: null, strokes: [], audio: null,
+  });
   MN.sbSel = p.shots.length - 1; saveSoon(); sbRenderList(); sbRenderCanvas(); sbRenderRight(); sbRenderTimeline(); sbUpdateTotal();
 }
 function sbDupShot() {
   const p = ensureProject(); const i = MN.sbSel | 0; if (!p.shots[i]) return;
-  const c = JSON.parse(JSON.stringify(p.shots[i])); c.id = uid(); c.title = (c.title || '分镜') + ' 副本';
+  const c = JSON.parse(JSON.stringify(p.shots[i])); c.id = uid(); c.shotId = null;
+  c.title = (c.title || '分镜') + ' 副本';
   p.shots.splice(i + 1, 0, c); MN.sbSel = i + 1; saveSoon(); sbRenderList(); sbRenderCanvas(); sbRenderRight(); sbRenderTimeline(); sbUpdateTotal();
 }
 function sbDelShot() {
@@ -3922,20 +3942,74 @@ function sbRenderRight() {
   const box = $('#sbRight'); if (!box) return;
   const p = ensureProject(); const shot = sbCurrentShot();
   if (!shot) { box.innerHTML = `<div class="mn-sb-empty">没有选中的分镜。</div>`; return; }
+  const G = window.MNGRID;
+  const ns = G ? G.normShot(shot, MN.sbSel | 0) : null;
+  const opts = (G && G.OPTS) || { sizes: [], angles: [], moves: [] };
+  const selOf = (arr, cur, dft) => arr.map(o => `<option value="${o.key}" ${(cur || dft) === o.key ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
   box.innerHTML = `
-    <div class="mn-sb-r-head">镜头详情</div>
+    <div class="mn-sb-r-head">镜头详情${ns && ns.sceneKey ? `<small>场次 ${esc(ns.sceneKey)}</small>` : ''}</div>
     <label class="mn-sb-field"><span>镜头名称</span><input id="sbRName" value="${esc(shot.title)}" maxlength="30" /></label>
-    <label class="mn-sb-field"><span>景别</span><select id="sbRScene">${['全景', '中景', '近景', '特写', '航拍', '其他'].map(s => `<option ${s === shot.scene ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
+    <div class="mn-sb-two">
+      <label class="mn-sb-field"><span>景别</span><select id="sbRSize">${selOf(opts.sizes, shot.shotSize, 'MS')}</select></label>
+      <label class="mn-sb-field"><span>角度</span><select id="sbRAngle">${selOf(opts.angles, shot.angle, 'eye')}</select></label>
+    </div>
+    <label class="mn-sb-field"><span>运镜</span><select id="sbRMove">${selOf(opts.moves, shot.cameraMove, 'static')}</select></label>
     <label class="mn-sb-field"><span>成片用时（秒）</span><input id="sbRDur" type="number" min="0.5" step="0.5" value="${shot.duration || 3}" /></label>
     <label class="mn-sb-field"><span>画面与动作</span><textarea id="sbRAction" rows="4" placeholder="谁，在哪里，做什么">${esc(shot.action || '')}</textarea></label>
     <label class="mn-sb-field"><span>对话 / 旁白</span><textarea id="sbRDlg" rows="3" placeholder="这一镜说的话">${esc(shot.dialogue || '')}</textarea></label>
-    <div class="mn-sb-field"><span>本地配音</span><button class="mn-sb-btn block" id="sbRec">${icon('mic')} 开始录音</button></div>`;
+    <label class="mn-sb-field"><span>生图 / 生视频提示词</span><textarea id="sbRPrompt" rows="3" placeholder="这一镜丢给 AI 的话">${esc(shot.prompt || '')}</textarea></label>
+    <div class="mn-sb-acts">
+      <button class="mn-sb-btn block" id="sbStill" ${shot.boardScene ? '' : 'disabled'} title="${shot.boardScene ? '按这一镜的 3D 机位渲一张静帧' : '这一镜没带 3D 场景：回分镜板点「🎬 一键搭景」'}">${icon('camera')} 出这一格（3D）</button>
+      <button class="mn-sb-btn block" id="sbCopyP">${icon('copy')} 复制生图提示词</button>
+      <div class="mn-sb-field"><span>本地配音</span><button class="mn-sb-btn block" id="sbRec">${icon('mic')} 开始录音</button></div>
+    </div>
+    <p class="mn-sb-hint">${shot.boardScene ? '这一格带 3D 场景：能自动出图，也能整板拼宫格。' : '这一格还没带 3D 场景：宫格里会落成占位格，可点「🖼 逐格回填」贴 AI 出图。'}</p>`;
   $('#sbRName').oninput = e => { shot.title = e.target.value; saveSoon(); const t = $('.mn-sb-shot.active .mn-sb-shot-info b'); if (t) t.textContent = pad2((MN.sbSel | 0) + 1) + '. ' + (e.target.value || '未命名'); };
-  $('#sbRScene').onchange = e => { shot.scene = e.target.value; saveSoon(); };
+  /* 景别/角度/运镜同时写「英文 key + 中文名」两份：key 给宫格引擎与 3D 出图用，
+     中文名给故事板自己的元信息条和老存档看，两边不会再对不上 */
+  if (G) {
+    $('#sbRSize').onchange = e => { shot.shotSize = e.target.value; shot.scene = G.sizeName(e.target.value); saveSoon(); sbRenderList(); };
+    $('#sbRAngle').onchange = e => { shot.angle = e.target.value; saveSoon(); };
+    $('#sbRMove').onchange = e => { shot.cameraMove = e.target.value; shot.camera = G.moveName(e.target.value); saveSoon(); };
+  } else {
+    $('#sbRSize').onchange = e => { shot.scene = e.target.selectedOptions[0].textContent; shot.shotSize = e.target.value; saveSoon(); sbRenderList(); };
+    $('#sbRAngle').onchange = e => { shot.angle = e.target.value; saveSoon(); };
+    $('#sbRMove').onchange = e => { shot.cameraMove = e.target.value; shot.camera = e.target.selectedOptions[0].textContent; saveSoon(); };
+  }
   $('#sbRDur').oninput = e => { const v = parseFloat(e.target.value); shot.duration = isNaN(v) ? 3 : v; saveSoon(); sbRenderTimeline(); sbUpdateTotal(); };
   $('#sbRAction').oninput = e => { shot.action = e.target.value; saveSoon(); };
   $('#sbRDlg').oninput = e => { shot.dialogue = e.target.value; saveSoon(); };
+  $('#sbRPrompt').oninput = e => { shot.prompt = e.target.value; saveSoon(); };
   $('#sbRec').onclick = () => sbRecord(shot);
+  $('#sbStill').onclick = () => sbRenderStill(shot);
+  $('#sbCopyP').onclick = () => {
+    if (!window.MNGRID) return toast('宫格引擎没加载上，刷新页面再试', 'warn');
+    const t = window.MNGRID.imagePromptOf(window.MNGRID.normShot(shot, MN.sbSel | 0), {
+      aspect: p.aspect || '16:9',
+      style: '电影感实景、自然光、真实皮肤纹理、浅景深、色调统一',
+      negative: '文字、字幕、水印、logo、多余手指、畸形手、塑料脸、拼贴多格、黑边',
+    });
+    copyText(t).then(ok => toast(ok ? '这一格的生图提示词已复制' : '复制失败，手动选文字复制吧', ok ? 'ok' : 'warn'));
+  };
+}
+/* 单格出图：拿这一镜的 3D 场景按它的景别/角度/运镜渲一张静帧，写进 shot.image */
+async function sbRenderStill(shot) {
+  const btn = $('#sbStill');
+  if (!window.MNGRID) { toast('宫格引擎没加载上，刷新页面再试', 'warn'); return; }
+  if (!shot.boardScene) { toast('这一镜没带 3D 场景：先回分镜板「🎬 一键搭景」', 'warn'); return; }
+  const p = ensureProject();
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 渲染中…'; }
+  let cell = null;
+  try {
+    const sz = sbCanvasSize(p.aspect);
+    const out = await window.MNGRID.renderStills([shot], { aspect: p.aspect, cellW: Math.min(1280, sz.w), mode: 'scene', dark: $('#mnRoot').dataset.mnTheme === 'dark' });
+    cell = out && out[0];
+  } catch (e) { cell = null; }
+  if (btn) { btn.disabled = !shot.boardScene; btn.innerHTML = icon('camera') + ' 出这一格（3D）'; }
+  if (!cell || !cell.url) { toast('这一格没渲出来', 'warn'); return; }
+  shot.image = cell.url;
+  saveSoon(); sbRenderCanvas(); sbRenderList();
+  toast('这一格已按 3D 机位出图 📷', 'ok');
 }
 async function sbRecord(shot) {
   const btn = $('#sbRec');
@@ -3974,37 +4048,86 @@ function sbUpdateTotal() {
   el2.textContent = total.toFixed(1);
 }
 
-/* ---------- 傻瓜模式：一键生成 ---------- */
+/* ---------- 傻瓜模式：一键生成（自己挑数据源） ----------
+   v1.23.0：以前这里只认「镜头册机位」，分镜板写好的画面/台词/景别/角度/运镜/提示词
+   一概不读 —— 所以同学给了分镜提示词，故事板却像不知道。现在按
+     1) 分镜板有镜 → 读分镜板（连搭好的 3D 场景一起带过来，宫格能直接出图）
+     2) 只有镜头册机位 → 用机位截图当格子
+     3) 都没有 → 按片名梗概铺五拍骨架
+   的顺序自动选。 */
+function storyShotFromBoard(s, i) {
+  const G = window.MNGRID;
+  const sizeKey = s.shotSize || 'MS', angleKey = s.angle || 'eye', moveKey = s.cameraMove || 'static';
+  return {
+    id: uid(), shotId: s.id || null,
+    title: s.title || String(s.desc || '').slice(0, 14) || ('分镜 ' + pad2(i + 1)),
+    duration: Math.max(0.5, +s.duration || 3),
+    scene: G ? G.sizeName(sizeKey) : '中景',        // 故事板老字段＝景别中文名（面板/元信息条还在用）
+    shotSize: sizeKey, angle: angleKey, cameraMove: moveKey, moveSpeed: s.moveSpeed || 'std',
+    camera: G ? G.moveName(moveKey) : '',
+    action: s.desc || '', dialogue: s.dialogue || '',
+    prompt: s.prompt || '', sceneKey: s.sceneKey || '',
+    boardScene: s.scene || null,                     // 白模 3D 场景：宫格引擎按它逐格出图
+    aimY: s.aimY ?? null, camH: s.camH ?? null,
+    focusKind: s.focusKind || 'auto', focusId: s.focusId || '',
+    image: null, sketch: null, strokes: [], audio: null,
+  };
+}
 function generateFromDirector() {
+  const board = (window.__bdm && window.__bdm.active && window.__bdm.active.shots) || [];
   const shots = (MN.state.directorShots || []);
   const p = ensureProject();
   const old = p.shots.length;
   if (old && !confirm(`故事板里已经有 ${old} 条分镜，一键生成会替换掉。继续？`)) return;
-  if (shots.length) {
+  if (board.length) {
+    p.shots = board.map((s, i) => storyShotFromBoard(s, i));
+    const built = p.shots.filter(s => s.boardScene).length;
+    toast(`已读分镜板 ${p.shots.length} 镜（${built} 镜带 3D 场景，能直接拼宫格）`, 'ok');
+  } else if (shots.length) {
     p.shots = shots.map((s, i) => ({
       id: uid(), title: s.name || ('机位 ' + (i + 1)),
       duration: 3, scene: i === 0 ? '全景' : (i === shots.length - 1 ? '近景' : '中景'),
-      action: s.note || '', dialogue: '', image: s.image || null, camera: '', strokes: [], audio: null,
+      action: s.note || '', dialogue: '', camera: '', image: s.image || null, boardScene: null, strokes: [], audio: null,
     }));
-    toast('已把导演台 ' + p.shots.length + ' 个机位同步成分镜', 'ok');
+    toast('分镜板是空的，已把导演台 ' + p.shots.length + ' 个机位同步成分镜', 'ok');
   } else {
     // 没有机位：按「一句话梗概」铺一套能直接改的五镜结构，不再是四行空白
     const src = strOr((p.title || '').replace(/[·:：].*$/, ''), '这个故事', 24);
+    const G = window.MNGRID;
+    /* 五拍骨架直接带英文 key：宫格出图 / 3D 取景 / 提示词都读 key，中文名只当显示用 */
     const beats = [
-      ['定场', '大远景', `交代空间与时间：${src}`, '', 4, '缓慢横移'],
-      ['人物进画', '全景', '主角从画面外走进来，停在关键位置', '', 4, '跟移'],
-      ['事情发生', '中景', '两个人同框，视线交错，说第一句话', '（这里填台词）', 5, '缓慢推近'],
-      ['转折', '近景', '情绪变的一刻，表情先动', '', 4, '固定 · 微微手持'],
-      ['收束', '特写', '关键道具或眼神定格', '', 3, '固定'],
+      ['定场', '大远景', 'ELS', 'eye', 'truckLeft', `交代空间与时间：${src}`, '', 4],
+      ['人物进画', '远景', 'LS', 'eye', 'trackSide', '主角从画面外走进来，停在关键位置', '', 4],
+      ['事情发生', '中景', 'MS', 'eye', 'slowPush', '两个人同框，视线交错，说第一句话', '（这里填台词）', 5],
+      ['转折', '中近景', 'MCU', 'eye', 'handheld', '情绪变的一刻，表情先动', '', 4],
+      ['收束', '近景', 'CU', 'eye', 'static', '关键道具或眼神定格', '', 3],
     ];
-    p.shots = beats.map(([t, sc, act, dlg, sec, cam]) => ({
+    p.shots = beats.map(([t, sc, size, angle, move, act, dlg, sec]) => ({
       id: uid(), title: t, duration: sec, scene: sc,
-      action: act, dialogue: dlg, camera: cam, image: null, strokes: [], audio: null,
+      shotSize: size, angle, cameraMove: move, moveSpeed: 'std',
+      camera: G ? G.moveName(move) : '',
+      action: act, dialogue: dlg, prompt: '', sceneKey: '', boardScene: null, image: null, sketch: null, strokes: [], audio: null,
     }));
     toast('机器还没拍到镜头，先按梗概铺了 ' + p.shots.length + ' 条分镜骨架，直接改就行', 'ok');
   }
   p.title = p.title || ((MN.state.scene && MN.state.scene.title) || '未命名') + '·故事板';
   MN.sbSel = 0; saveSoon(); renderStoryboard();
+}
+
+/* ---------- 宫格故事板（引擎在 js/mn-grid.js） ---------- */
+function openStoryGrid() {
+  if (!window.MNGRID) { toast('宫格引擎没加载上，刷新页面再试', 'warn'); return; }
+  const p = ensureProject();
+  if (!p.shots.length) { toast('故事板还是空的，先点「一键生成故事板」', 'warn'); return; }
+  window.MNGRID.openGridModal({
+    title: p.title || '故事板',
+    aspect: p.aspect || '16:9',
+    shots: p.shots,
+    source: 'story',
+    onClose: () => { saveSoon(); if (secActive()) renderAll(); },
+    /* 故事板这一侧的格子图直接写 shot.sketch（dataURL，跟着画布存进 IndexedDB） */
+    onCellArt: (i, url) => { const s = p.shots[i]; if (!s) return null; s.sketch = url; saveSoon(); return { ref: url }; },
+  });
 }
 
 /* ---------- 导出：4K 图片 ---------- */
@@ -4014,7 +4137,7 @@ function downloadBlob(blob, name) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
-function drawShotFrame(ctx, shot, W, H, p) {
+function drawShotFrame(ctx, shot, W, H, p, i) {
   const dark = $('#mnRoot').dataset.mnTheme === 'dark';
   // 背景
   ctx.fillStyle = dark ? '#202020' : PAL.paper; ctx.fillRect(0, 0, W, H);
@@ -4035,22 +4158,36 @@ function drawShotFrame(ctx, shot, W, H, p) {
   ctx.fillStyle = '#fff';
   ctx.textBaseline = 'middle';
   ctx.font = '700 ' + Math.round(H * 0.045) + 'px -apple-system,"Microsoft YaHei",sans-serif';
-  const title = (shot ? (shot.title || '分镜') : '分镜');
+  const title = (i >= 0 ? pad2(i + 1) + '. ' : '') + (shot ? (shot.title || '分镜') : '分镜');
   ctx.fillText(title, W * 0.03, H - barH * 0.66);
   ctx.font = Math.round(H * 0.03) + 'px -apple-system,"Microsoft YaHei",sans-serif';
-  const meta = [shot && shot.scene, shot && shot.action, shot && shot.dialogue].filter(Boolean).join(' ｜ ');
+  /* 景别/角度/运镜/时长优先按英文 key 取标准名（宫格与预演同一口径），老存档没 key 就退回中文名 */
+  const G = window.MNGRID;
+  const head = shot && G ? (() => { const n = G.normShot(shot, i || 0); return `${n.sizeName} · ${n.angleName} · ${n.moveName} · ${(+shot.duration || 3).toFixed(1)}s`; })() : (shot && shot.scene) || '';
+  const meta = [head, shot && shot.action, shot && shot.dialogue].filter(Boolean).join(' ｜ ');
   ctx.fillText(meta || '（无备注）', W * 0.03, H - barH * 0.28);
 }
-function exportStoryboardImages() {
+async function exportStoryboardImages() {
   const p = ensureProject();
   if (!p.shots.length) return toast('故事板还是空的，先生成分镜');
   const [aw, ah] = sbAspectWH(p.aspect);
   const W = 3840, H = Math.round(3840 * ah / aw);
+  /* 没画面的格子先按这一镜的 3D 机位补渲一张 —— 以前这里会导出一堆纯色空图 */
+  const need = [];
+  p.shots.forEach((s, i) => { if (!s.image && s.boardScene) need.push(i); });
+  if (need.length && window.MNGRID) {
+    toast('有 ' + need.length + ' 格没画面，先按 3D 机位补渲…');
+    const out = await window.MNGRID.renderStills(need.map(i => p.shots[i]), {
+      aspect: p.aspect, cellW: 1280, mode: 'scene', dark: $('#mnRoot').dataset.mnTheme === 'dark',
+    });
+    out.forEach((c, k) => { if (c && c.url) p.shots[need[k]].image = c.url; });
+    saveSoon();
+  }
   let pending = p.shots.length;
   p.shots.forEach((shot, i) => {
     const c = document.createElement('canvas'); c.width = W; c.height = H;
     const x = c.getContext('2d');
-    const finish = () => { drawShotFrame(x, shot, W, H, p); c.toBlob(b => { if (b) downloadBlob(b, (p.title || '故事板') + '-分镜' + pad2(i + 1) + '.png'); if (--pending === 0) toast('已导出 ' + p.shots.length + ' 张 4K 图片'); }, 'image/png'); };
+    const finish = () => { drawShotFrame(x, shot, W, H, p, i); c.toBlob(b => { if (b) downloadBlob(b, (p.title || '故事板') + '-分镜' + pad2(i + 1) + '.png'); if (--pending === 0) toast('已导出 ' + p.shots.length + ' 张 4K 图片'); }, 'image/png'); };
     if (shot && shot.image) { const img = new Image(); img.onload = finish; img.onerror = finish; img.src = shot.image; }
     else finish();
   });
@@ -4442,6 +4579,8 @@ window.miaoningAPI = {
   mnExportCanvasVideo,
   renderStoryboard, drawShotFrame, paintInkTo, sbAspectWH, ensureProject, blankProject,
   openAiModal, importAiData, importText, openImportModal,
+  /* v1.23.0 宫格故事板：读分镜板 + 单格出图 + 拼图入口（QA 脚本直接调，不靠点按钮） */
+  openStoryGrid, storyShotFromBoard, sbRenderStill, sbRenderRight, sbRenderList, sbRenderCanvas,
 };
 
 window.loadMiaoning = loadMiaoning;
