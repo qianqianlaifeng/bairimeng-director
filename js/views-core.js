@@ -552,8 +552,10 @@ export function renderStoryboard(container) {
       parsed = SH.parse(ta.value);
       const n = parsed.shots.length;
       okBtn.disabled = n === 0;
+      const mt = parsed.meta;
       info.textContent = n
-        ? `解析到 ${n} 镜` + (parsed.stats.skipped ? ` · 跳过 ${parsed.stats.skipped} 行` : '')
+        ? (mt ? `H3 时间码分镜：${n} 镜 · ${(+mt.total || 0).toFixed(1)} 秒 · ${mt.aspect || '画幅未识别'} · 出场 ${(mt.castAll || mt.cast || []).length} 人 · ${mt.globals.length} 段非镜头信息已归档`
+          : `解析到 ${n} 镜`) + (parsed.stats.skipped ? ` · 跳过 ${parsed.stats.skipped} 行` : '')
         : (ta.value.trim() ? '没解析到镜头' : '还没解析');
       warnEl.textContent = parsed.warnings.length ? '⚠ ' + parsed.warnings.join('；') : '';
       prev.innerHTML = parsed.shots.slice(0, 8).map((s, i) =>
@@ -593,8 +595,16 @@ export function renderStoryboard(container) {
     okBtn.onclick = () => {
       const replace = isReplace();
       const n = store.importShots(parsed.shots, { replace });
+      const mt = parsed.meta;
+      if (mt) {
+        /* 画幅/总时长/非镜头原文都落到项目上：预览按 21:9 取景，
+           「🧭 项目简报」按钮随时能翻回那条提示词的全部约束 */
+        const patch = { brief: String(mt.raw || '').slice(0, 20000), h3: mt };
+        if (mt.aspect && /^(16|21|4|1|9|3):(\d)$/.test(mt.aspect)) patch.aspect = mt.aspect;
+        store.updateProject(p.id, patch);
+      }
       m.close();
-      toast(`已导入 ${n} 个镜头` + (replace ? '（已替换原有分镜）' : ''), 'ok');
+      toast(`已导入 ${n} 个镜头` + (replace ? '（已替换原有分镜）' : '') + (mt ? ' · 画幅 ' + (mt.aspect || '未识别') + ' · ' + (+mt.total || 0).toFixed(1) + ' 秒' : ''), 'ok');
       renderStoryboard(container);
     };
     setTimeout(() => ta.focus(), 60);
