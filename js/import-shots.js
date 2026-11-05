@@ -283,6 +283,14 @@
     const raw = String(text || '').trim();
     if (!raw) return { shots: [], stats: { rows: 0, used: 0, skipped: 0 }, warnings: ['没有内容'] };
 
+    /* H3 / 时间码分镜提示词：这不是表格，只有「⑩ 时间码分镜」里的 [a–b] 块才是镜头，
+       ①②④⑤⑥⑦⑧⑨⑪⑫⑬⑭⑮ 那些规格/锁/账本/负面一律不变成卡片，归档进 meta。
+       以前没有这一层，整条提示词被按行拆成 51 个「中景·固定·3s」，预览不动、宫格没图。 */
+    if (window.H3PARSE && window.H3PARSE.looksLike && window.H3PARSE.looksLike(raw)) {
+      const h = window.H3PARSE.parse(raw);
+      if (h && h.shots && h.shots.length) return h;
+    }
+
     /* JSON：数组，或 {shots:[...]} */
     if (raw[0] === '[' || raw[0] === '{') {
       try {
