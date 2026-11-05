@@ -166,6 +166,14 @@ export const TPL = [
     re: /便利店|超市|柜台|店里|店铺|咖啡|吧台|药房/,
     props: [['counter', .5, .2, 0], ['shelf', .1, .6, 0], ['shelf', .32, .6, 0], ['table', .78, .62, 0], ['chair', .66, .62, 270], ['chair', .9, .62, 90], ['plant', .92, .12, 0]],
     subject: [.45, .45] },
+  { key: 'grove', name: '桃林', size: [12, 8], walls: 'none',
+    /* 武戏外景：桃林/树林/溪谷/山道。没有墙（贴脸就穿墙），两侧一排树当内景框架，
+       中间留出「横向杀线」那条空地；box/block 当溪谷湿石，plant 当草丛与落叶堆。 */
+    re: /桃林|桃树|树林|森林|竹林|果园|溪谷|山谷|山道|林间|林子|野外|荒林|桃花/,
+    props: [['tree', .05, .18, 0], ['tree', .22, .06, 0], ['tree', .44, .12, 0], ['tree', .68, .05, 0], ['tree', .88, .14, 0],
+      ['tree', .06, .74, 0], ['tree', .26, .9, 0], ['tree', .5, .88, 0], ['tree', .74, .92, 0], ['tree', .94, .7, 0],
+      ['box', .34, .46, 20], ['block', .62, .58, -15], ['plant', .18, .34, 0], ['plant', .82, .4, 0], ['plant', .48, .7, 0]],
+    subject: [.62, .5] },
   { key: 'street', name: '街道', size: [10, 7], walls: 'back',
     re: /街|马路|巷|城外|路边|夜市|广场|门口|院子|庭院|公园|湖边|沙滩|荒野|高速/,
     props: [['tree', .12, .3, 0], ['tree', .38, .18, 0], ['tree', .74, .26, 0], ['tree', .92, .5, 0], ['pillar', .26, .62, 0], ['bench', .55, .62, 0], ['box', .84, .78, 0], ['lamp', .6, .4, 0]],
@@ -201,6 +209,8 @@ export function peopleOf(shot) {
     if (!name || /^(台词|对白|字幕|画外音|旁白|无|空)$/.test(name)) return;
     if (!out.some(o => o.name === name)) out.push({ name, color: colorOf(name) });
   };
+  /* H3 提示词导入的镜头自带出场人名表（@图 绑定 + 角色词），优先照它摆，别再猜 */
+  ((shot && shot.cast) || []).forEach(add);
   /* 台词前缀：「女主：茶凉了」/「（男主）……」 */
   dlg.split(/[\n。！？!?]/).forEach(line => {
     const m = line.match(/^\s*[（(]?([^\s，。！？、：:,()（）]{1,6})[）)]?\s*[:：]/);
@@ -210,15 +220,23 @@ export function peopleOf(shot) {
   const hits = text.match(ROLE_RE) || [];
   hits.forEach(h => add(h));
   /* 明确写了人数（「三个人围着桌子」「2 名员工」「一男一女」里的数量词也算）→ 补够人数 */
+  const cap = capOf(shot, text);
   const cnt = countOf(text);
-  for (let i = out.length + 1; i <= cnt; i++) add('人物' + i);
+  for (let i = out.length + 1; i <= Math.max(cnt, ((shot && shot.cast) || []).length); i++) add('人物' + i);
   /* 兜底：有台词 / 是近景特写 / 描述里有人在做动作 → 至少 1 人；写明白是空镜就 0 人 */
   if (!out.length && !EMPTY_RE.test(text)) {
     const hasAct = /站|坐|走|躺|蹲|拿|看|说|哭|笑|打|抱|拉|推|望|回头|低|抬|吃|喝|写|敲|接|挂|开会|聊天|吵|跪|摔|亲|唱|跳|睡/.test(text);
     const tight = ['MCU', 'CU', 'ECU'].indexOf(shot && shot.shotSize) >= 0;
     if (dlg || hasAct || tight) out.push({ name: '人物', color: PALETTE[0] });
   }
-  return out.slice(0, 3);
+  return out.slice(0, cap);
+}
+
+/* 一镜最多摆几个人：普通戏还是 3 个，H3 武戏（cast 里点了 5 个人）就按人数放开，
+   否则「领头＋A＋B＋C＋青云」永远少两个人，画面里那场群架就打不起来。 */
+function capOf(shot, text) {
+  const named = ((shot && shot.cast) || []).length;
+  return Math.max(3, Math.min(8, Math.max(named, countOf(text))));
 }
 
 /* 中文数字 + 阿拉伯数字的人数；「一个人物/人群」这类不算 */
@@ -231,10 +249,15 @@ export function countOf(text) {
   const m2 = s.match(/(\d+|[一两二三四五六七八九十])\s*人/);
   if (m2) n = Math.max(n, CN_NUM[m2[1]] || +m2[1] || 0);
   if (/众人|人群|大家|一桌人|几个人/.test(s)) n = Math.max(n, 3);
-  return Math.min(3, n);
+  return Math.min(8, n);
 }
 
 /* ---------- 场景模板挑选 ---------- */
+/* 一镜「算数」时看的所有文字。place 是 H3 导入带进来的地点（桃林口内侧）：
+   时间码块里往往只写动作不写地方，少了它就会把一场桃林群架搭进客厅。 */
+export function shotText(shot) {
+  return [shot && shot.desc, shot && shot.dialogue, shot && shot.note, shot && shot.sceneKey, shot && shot.place].filter(Boolean).join(' ');
+}
 export function tplOf(text) {
   const s = String(text || '');
   for (const t of TPL) if (t.re.test(s)) return t;
@@ -330,14 +353,34 @@ function placePeople(people, scene, room, o) {
   const wantSit = !!o.sit && seats.length >= Math.min(people.length, 2);
   const n = people.length;
   const stand = [];
-  if (n === 1) stand.push([cx, cy]);
+  /* 武戏（刀剑劈刺抹磕）另走一套站位：主体站画面右、对手沿画面左一条浅弧排开，
+     双方互相面对——这就是「横向杀线」，不是开会那种围桌。 */
+  const duel = !!o.duel && n >= 2;
+  if (duel) {
+    stand.push([cx + 0.9, cy]);
+    for (let i = 1; i < n; i++) {
+      const t = (i - 1) / Math.max(1, n - 2) - 0.5;
+      stand.push([cx - 1.05 - 0.6 * Math.abs(t), cy + t * 2.9]);
+    }
+  } else if (n === 1) stand.push([cx, cy]);
   else if (n === 2) { stand.push([cx - 0.75, cy]); stand.push([cx + 0.75, cy]); }
-  else { stand.push([cx - 1.05, cy + 0.15]); stand.push([cx + 1.05, cy - 0.1]); stand.push([cx, cy + 1.05]); }
+  else if (n === 3) { stand.push([cx - 1.05, cy + 0.15]); stand.push([cx + 1.05, cy - 0.1]); stand.push([cx, cy + 1.05]); }
+  else {
+    /* 4 人以上（武戏群架）：以前 stand 只有三格，第 4 个人直接 stand[i][0] 崩。
+       主体站画面右侧、其余沿左侧一条浅弧排开并压出纵深，符合「横向杀线」的走位。 */
+    stand.push([cx + 0.9, cy]);
+    for (let i = 1; i < n; i++) {
+      const t = (i - 1) / Math.max(1, n - 2) - 0.5;
+      stand.push([cx - 1.05 - 0.5 * Math.abs(t), cy + t * 2.8]);
+    }
+  }
   const persons = people.map((pe, i) => {
     let x = stand[i][0], y = stand[i][1], rot = 90, pose = '站立', sat = null;
     /* 面对面的对话戏：两个人互相看着（景别收紧时主体那一侧仍会被机位转到正面） */
-    if (n === 2) rot = i === 0 ? 0 : 180;
-    if (n === 3) rot = i === 2 ? 90 : (i === 0 ? 20 : 160);
+    if (duel) rot = i === 0 ? 180 : 0;          // 主体朝画面左压进，对手都朝画面右
+    else if (n === 2) rot = i === 0 ? 0 : 180;
+    else if (n === 3) rot = i === 2 ? 90 : (i === 0 ? 20 : 160);
+    else if (n > 3) rot = i === 0 ? 180 : 0;
     if (wantSit && seats[i]) sat = seats[i];
     const p = {
       id: uid('a'), name: pe.name, x: +x.toFixed(2), y: +y.toFixed(2),
@@ -390,7 +433,7 @@ function subjectOf(persons, fallback, wide, text) {
  * 返回 { mnState, whiteCam, notes, tpl, layout, people }
  */
 export function planShot(shot, ctx = {}) {
-  const text = [shot.desc, shot.dialogue, shot.note, shot.sceneKey].join(' ');
+  const text = shotText(shot);
   const tpl = ctx.tpl || tplOf(text);
   const aspect = ctx.aspect || '16:9';
 
@@ -400,18 +443,19 @@ export function planShot(shot, ctx = {}) {
   const scene = { rooms: layout.rooms, walls: layout.walls, props: layout.props, lights: layout.lights };
   const room = layout.room;
 
-  /* 人：同场次沿用花名册，本镜识别到新的就补进来（上限 3） */
+  /* 人：同场次沿用花名册，本镜识别到新的就补进来（上限按这一镜点名的人数放开） */
   const found = peopleOf(shot);
+  const cap = capOf(shot, text);
   const roster = (ctx.people || []).slice();
   for (const pe of found) if (!roster.some(o => o.name === pe.name)) roster.push(pe);
   /* 明确写了空镜/无人 → 这一镜不放人（花名册留着，下一镜还会回来） */
   const emptyShot = /空镜|无人|空荡|没有人|不见人影/.test(String(shot.desc || '') + String(shot.note || ''));
-  let people = emptyShot ? [] : roster.slice(0, 3);
+  let people = emptyShot ? [] : roster.slice(0, cap);
   /* 这一镜点名的人必须在场：花名册满了就顶掉一个本镜没点名的，
      否则「特写，女主的手在抖」会因为前面一场先出现了「三个人」而拍错人。 */
   for (const pe of found) {
     if (people.some(o => o.name === pe.name)) continue;
-    if (people.length < 3) { people.push(pe); continue; }
+    if (people.length < cap) { people.push(pe); continue; }
     const i = people.findIndex(o => !found.some(f => f.name === o.name));
     people[i >= 0 ? i : people.length - 1] = pe;
   }
@@ -420,6 +464,7 @@ export function planShot(shot, ctx = {}) {
     subject: tpl.subject,
     sit: SIT_RE.test(text) && !/站|站起来|起身/.test(String(shot.desc || '')),
     walk: WALK_RE.test(String(shot.desc || '')) && !/站|坐|躺/.test(String(shot.desc || '').slice(0, 6)),
+    duel: /劈|刺|抹|磕|砍|斩|交手|格挡|抢进|让过|收势|杀|弯刀|长剑|破铁剑|拳|弓/.test(text),
   });
   scene.persons = placed.persons;
 
@@ -452,6 +497,13 @@ export function planShot(shot, ctx = {}) {
   if (ang.fovMul) base.fov = cl(base.fov * ang.fovMul, 12, 90);
   if (ang.dAz) base.az = cl(base.az + ang.dAz, -50, 50);
   const angleOver = !!ang.over && scene.persons.length >= 2;
+
+  /* 提示词里写了硬数字就照数字来（H3 导入的镜头带焦段 + 机位高度）。
+     这一步是「预览终于会读关键信息」的关键：35mm 和 100mm 不该是同一个画面，
+     「齐腰高」和「低机位微仰」也不该都落到表里的 1.5m。 */
+  if (isFinite(+shot.lens) && +shot.lens >= 8) base.fov = cl(2 * Math.atan(12 / +shot.lens) * 180 / Math.PI, 8, 100);
+  if (shot.camH != null && shot.camH !== '' && isFinite(+shot.camH)) base.h = cl(+shot.camH, 0.25, 12);
+  if (shot.aimY != null && shot.aimY !== '' && isFinite(+shot.aimY)) base.aim = cl(+shot.aimY, 0.2, 6);
 
   /* 画幅核对：并排的两个人要都进画、空镜要装下整间房 —— 该退后就得退，
      不然 16:9 里算好的「中景」到了 4:3 的窗口里就成了切头切身的近景。 */
@@ -543,7 +595,7 @@ export function planProject(shots, targets, opts = {}) {
   for (const idx of targets) {
     const shot = shots[idx];
     if (!shot) continue;
-    const text = [shot.desc, shot.dialogue, shot.note, shot.sceneKey].join(' ');
+    const text = shotText(shot);
     const key = String(shot.sceneKey || '').trim() || tplOf(text).key;
     const g = groups[key] || (groups[key] = { tpl: tplOf(text), layout: null, people: [] });
     const plan = planShot(shot, Object.assign({ aspect: opts.aspect }, g, {
