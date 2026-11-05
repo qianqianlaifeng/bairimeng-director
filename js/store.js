@@ -70,6 +70,14 @@ function newShot(partial = {}) {
     sceneId: null,      // 引用的场景库条目 id（同一场景多镜复用）
     sceneKey: '',       // 场次标识（剧本拆分自动带上，用于按场次归组）
     note: '',
+    /* —— H3 / 时间码分镜提示词导入带进来的（v1.24.0）—— */
+    from: null,         // 这一镜在本条里的起始秒
+    to: null,           // 结束秒
+    lens: null,         // 焦段 mm（→ 竖向 fov = 2·atan(12/mm)）
+    cast: [],           // 本镜出场人物（来自 @图 绑定表 + 角色词）
+    place: '',          // 地点（桃林口／溪谷…）——搭景认模板用
+    beats: [],          // [{t, txt}] @x.y 命中点
+    purpose: '',        // 「情绪目的＝…」
     review: null,       // {score, checks:{...}, note}
     ...partial,
   };
@@ -82,6 +90,8 @@ function newProject(name, aspect = '16:9') {
     script: '',
     shots: [],
     scenes: [],        // 场景库：[{id,name,scene,mnState,thumb,updatedAt}]，任意镜头可复用
+    brief: '',          // H3 提示词里「非镜头」那段原文（规格/锁/账本/音频/负面），一个字不丢
+    h3: null,           // 解析摘要 {id,aspect,total,fps,cast,refs,globals,styleLock,negative,…}
     createdAt: Date.now(),
     updatedAt: Date.now(),
     meta: { breakdownCount: 0, previewPlayed: false, exported: false, reviewed: false },
@@ -97,6 +107,9 @@ function normalizeProject(p) {
   if (!p.meta || typeof p.meta !== 'object') p.meta = {};
   if (!p.aspect) p.aspect = '16:9';
   if (!p.name) p.name = '未命名项目';
+  if (typeof p.brief !== 'string') p.brief = '';
+  if (p.h3 && typeof p.h3 !== 'object') p.h3 = null;
+  p.shots.forEach(s => { if (!Array.isArray(s.cast)) s.cast = []; if (!Array.isArray(s.beats)) s.beats = []; });
   return p;
 }
 
