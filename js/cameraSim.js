@@ -390,10 +390,17 @@ function solveCamera(sim, t, actor, opts = {}) {
       break;
     }
     case 'follow': {
-      // actor 行走由外部按 t 驱动，相机保持相对偏移
-      if (sim.dir === 'front') set([actor.x, 1.55, actor.z + 3.4], [actor.x, actor.y + 1.4, actor.z - 1]);
-      else if (sim.dir === 'behind') set([actor.x, 1.6, actor.z - 3.6], head);
-      else set([actor.x + 3.2, 1.55, actor.z + 0.6], [actor.x, actor.y + 1.35, actor.z]);
+      /* actor 行走由外部按 t 驱动，相机保持相对偏移。
+         ⚠️ 但**搭了场景**时画面里的人是场景里那几个（opts.scene.objects），
+         这个虚拟 actor 的 x/z 恒为 0 —— 相机也就一步不动，
+         「侧面跟拍/跟移」的预览就变成了一张静止图（H3 那条 30 秒里 E1/E8 正是跟移）。
+         所以有场景时让相机自己沿跟移方向走一段，看向的点仍然锁在焦点上。 */
+      const built = !!(opts.scene && typeof opts.scene === 'object');
+      const travel = built ? e * (0.4 + sp) * 2.6 : 0;
+      const fx = aim[0], fz = aim[2];
+      if (sim.dir === 'front') set([fx, 1.55, fz + 3.4 - travel], [fx, aim[1] - 0.1, fz - 1]);
+      else if (sim.dir === 'behind') set([fx, 1.6, fz - 3.6 + travel], aim);
+      else set([fx + 3.2 - travel, 1.55, fz + 0.6], [fx, aim[1] - 0.15, fz]);
       break;
     }
     case 'reveal': {
