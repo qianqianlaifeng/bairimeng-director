@@ -314,8 +314,17 @@ textarea.input { resize: vertical; line-height: 1.65; }
 .aspect-16x9 { aspect-ratio: 16 / 9; }
 .aspect-9x16 { aspect-ratio: 9 / 16; max-height: 62vh; margin-inline: auto; }
 .aspect-1x1 { aspect-ratio: 1 / 1; }
+/* 画幅类别名要配齐：只有 16x9/9x16/1x1 三条时，21:9 的项目在「动态分镜」里
+   舞台塌成 49×39 像素——时间码在走、画面却一动不动（H3 导入第一条就是 21:9）。 */
+.aspect-21x9 { aspect-ratio: 21 / 9; }
+.aspect-4x3 { aspect-ratio: 4 / 3; }
+.aspect-3x4 { aspect-ratio: 3 / 4; max-height: 62vh; margin-inline: auto; }
+.aspect-2x1 { aspect-ratio: 2 / 1; }
+.aspect-5x4 { aspect-ratio: 5 / 4; }
+.aspect-16x10 { aspect-ratio: 16 / 10; }
 .ar { display: inline-block; border: 2px solid currentColor; border-radius: 2px; margin-bottom: 6px; }
 .ar-169 { width: 34px; height: 19px; }
+.ar-219 { width: 40px; height: 17px; }
 .ar-916 { width: 19px; height: 34px; }
 .ar-11 { width: 26px; height: 26px; }
 
