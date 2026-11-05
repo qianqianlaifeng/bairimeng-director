@@ -74,7 +74,7 @@ const appEl = el(`<div class="app">
       <button class="btn btn-ghost btn-sm" id="btnCheckin">📅 签到</button>
     </header>
     <div class="content" id="viewRoot"></div>
-    <footer class="foot dim">白日梦导演台 v1.23.0 · 故事板智能化：读分镜板 / 逐镜自动出图 / 宫格拼图 / 生图提示词包 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
+    <footer class="foot dim">白日梦导演台 v1.24.0 · 提示词直接拆镜：时间码→分镜 / 焦段与机位高进预览 / 桃林武戏站位 / 宫格图 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
   </main>
 </div>`);
 document.body.appendChild(appEl);
