@@ -77,7 +77,7 @@ const appEl = el(`<div class="app">
       <button class="btn btn-ghost btn-sm" id="btnCheckin">📅 签到</button>
     </header>
     <div class="content" id="viewRoot"></div>
-    <footer class="foot dim">白日梦导演台 v1.25.1 · AI 导演台一键开拍 / 91 种道具 / 特写取景修复 / 资产图故事板 / 自定义生图接口 / 全新分组教程 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
+    <footer class="foot dim">白日梦导演台 v1.25.2 · AI 导演台一键开拍 / 91 种道具 / 特写取景修复 / 资产图故事板 / 自定义生图接口 / 全新分组教程 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
   </main>
 </div>`);
 document.body.appendChild(appEl);
@@ -322,13 +322,31 @@ window.addEventListener('bdm-save-failed', () => {
   toast('本机存储满了，这次改动没存上 —— 删掉几镜的镜头册截图、或把场景的环境图清一下再试', 'warn');
 });
 
-/* Service Worker（离线可用） */
+/* Service Worker（离线可用）
+ * 坑：新用户第一次装 SW 时 clients.claim() 也会触发 controllerchange，
+ * 老逻辑会当场 location.reload()，把用户刚点出来的「一键开拍 / 宫格故事板」
+ * 弹窗直接冲掉，看起来就像功能没实现。所以：
+ *   1) 首次安装（此前没有 SW 控制）绝不刷新；
+ *   2) 老版本升级要刷新时，等用户关掉弹窗 / 跑完任务再刷，最多等 60 秒。 */
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (sessionStorage.getItem('bdm_sw_r') === '1') return;
+  const hadController = !!navigator.serviceWorker.controller;
+  let scheduled = false;
+  const busy = () => !!document.querySelector('.modal-ov') ||
+    !!document.querySelector('#aiGo:disabled, #aiGenImg:disabled') ||
+    !!document.querySelector('.bdm-grid-prog:not([hidden])');
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || scheduled) return;
+    if (sessionStorage.getItem('bdm_sw_r') === '1') return;
+    scheduled = true;
+    const t0 = Date.now();
+    const whenIdle = () => {
+      if (busy() && Date.now() - t0 < 60000) { setTimeout(whenIdle, 1500); return; }
+      if (busy()) return;             // 一直在忙就不打断，下次打开自然是新代码
       sessionStorage.setItem('bdm_sw_r', '1');
       location.reload();
-    });
+    };
+    setTimeout(whenIdle, 1000);
+  });
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });

@@ -28,7 +28,7 @@ import { moveByKey, sizeByKey, angleByKey } from './breakdown.js';
 import { CAMERA_MOVES, ANGLES, SHOT_SIZES } from './data.js';
 import { modal, toast, esc, copyText } from './ui.js';
 
-const VERSION_TEXT = '白日梦导演台 v1.25.1';
+const VERSION_TEXT = '白日梦导演台 v1.25.2';
 const moveByName = Object.fromEntries(CAMERA_MOVES.map(m => [m.name, m.key]));
 const angleByName = Object.fromEntries(ANGLES.map(a => [a.name, a.key]));
 const sizeByName = Object.fromEntries(SHOT_SIZES.map(s => [s.name, s.key]));
