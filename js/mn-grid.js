@@ -28,7 +28,7 @@ import { moveByKey, sizeByKey, angleByKey } from './breakdown.js';
 import { CAMERA_MOVES, ANGLES, SHOT_SIZES } from './data.js';
 import { modal, toast, esc, copyText } from './ui.js';
 
-const VERSION_TEXT = '白日梦导演台 v1.23.0';
+const VERSION_TEXT = '白日梦导演台 v1.24.0';
 const moveByName = Object.fromEntries(CAMERA_MOVES.map(m => [m.name, m.key]));
 const angleByName = Object.fromEntries(ANGLES.map(a => [a.name, a.key]));
 const sizeByName = Object.fromEntries(SHOT_SIZES.map(s => [s.name, s.key]));
@@ -613,10 +613,17 @@ export function imagePromptOf(ns, ctx = {}) {
   const L = [];
   L.push(`【镜 ${pad2(ns.idx)}】${ns.sizeName} · ${ns.angleName} · ${ns.moveName} · ${ns.duration.toFixed(1)} 秒`);
   L.push(`画幅：${ctx.aspect || '16:9'}，单格交付，不要在图里写字、不要宫格、不要边框拼贴。`);
-  L.push(`画面：${ns.desc || ns.title || '（这一镜的画面描述）'}`);
+  /* H3 / 时间码分镜导进来的镜头，原文就是最准的那句话（含 @x.y 命中点与镜头规格），
+     照抄别改写；只有没有原文时才按字段现拼。 */
+  const src = String(ns.prompt || '').trim();
+  if (src.length > 30) {
+    L.push('原文（照抄，别改写）：' + src.replace(/\s+/g, ' ').slice(0, 700));
+  } else {
+    L.push(`画面：${ns.desc || ns.title || '（这一镜的画面描述）'}`);
+    L.push(`镜头：${size.prompt}；${angle.prompt}；${(move.prompt || ns.moveName)}`);
+  }
   if (cast.length) L.push(`人物：${cast.slice(0, 6).join('、')}（同一部片里长相/服装/发型不许变）。`);
   if (ns.scene) L.push(`空间：${walls ? walls + ' 面墙' : '开放式'}、${props} 件道具，同场次${ns.sceneKey ? '「' + ns.sceneKey + '」' : ''}前后镜共用同一套空间。`);
-  L.push(`镜头：${size.prompt}；${angle.prompt}；${(move.prompt || ns.moveName)}`);
   if (ns.dialogue) L.push(`台词：${ns.dialogue}（口型与台词对得上，嘴里不要有多余的字）。`);
   if (ctx.style) L.push(`风格：${ctx.style}`);
   if (ctx.negative) L.push(`负向：${ctx.negative}`);
