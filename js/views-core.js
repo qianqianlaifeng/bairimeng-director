@@ -785,7 +785,14 @@ export function renderStoryboard(container) {
         r.setTheme({ bg1: '#eceff4', bg2: '#e1e5ed', fog: '#e8ebf1', line: 'rgba(96,106,134,.26)', ink: '#2a3040', hud: 'rgba(35,42,60,.38)' });
         /* 卡片缩略图直接按这一镜的景别/角度取景，并且把搭好的 3D 场景画进去：
            一眼能看出「这一镜拍的是哪块地方、机位有多近」，不再是每张卡都长一样的示意图 */
-        r.render(mv.sim, 0.55, 'stand', { duration: s.duration, scene: hasBuilt ? s.scene : undefined, size: s.shotSize, angle: s.angle });
+        /* 和编辑弹窗、宫格故事板用同一套参数，三处画面才对得上 */
+        r.render(mv.sim, 0.55, 'stand', {
+          duration: s.duration, scene: hasBuilt ? s.scene : undefined,
+          size: s.shotSize, angle: s.angle, moveSpeed: s.moveSpeed,
+          aimY: s.aimY ?? undefined, camH: s.camH ?? undefined,
+          focus: hasBuilt ? focusPointOf(s.scene, s.focusKind, s.focusId, s.aimY ?? undefined) : undefined,
+          focusKind: s.focusKind || 'auto',
+        });
       }
     });
     renderBatchBar();

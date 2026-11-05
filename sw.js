@@ -1,12 +1,18 @@
 /* 白日梦导演台 · Service Worker（离线可用） */
-const CACHE = 'bdm-v76';
+const CACHE = 'bdm-v82-guide';
 const ASSETS = [
   './',
   './index.html',
+  './guide.html',
   './css/style.css',
   './css/miaoning.css',
+  './css/ai-director.css',
   './js/app.js',
+  './js/views-ai.js',
+  './js/ai-director.js',
+  './js/mn-props-extra.js',
   './js/data.js',
+  './js/tutorial-data.js',
   './js/store.js',
   './js/ui.js',
   './js/cameraSim.js',

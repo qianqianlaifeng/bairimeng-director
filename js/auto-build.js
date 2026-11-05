@@ -305,6 +305,8 @@ export function camToAz(c) {
     dist: Math.max(1.0, Math.abs(c.r * Math.sin(c.phi || 1))),
     h: Math.max(0.25, c.ty + c.r * Math.cos(c.phi || 1)),
     fov: 45,
+    /* 保留导演台算好的目标点（含按景别定的看向高度），别让白模机位只剩高度 */
+    tx: c.tx || 0, ty: c.ty || 0, tz: c.tz || 0,
   };
 }
 

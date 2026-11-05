@@ -975,6 +975,47 @@ body.theme-obsidian .an-endcard, body.theme-gilt .an-endcard { background: rgba(
 .tu-dots i { width: 6.5px; height: 6.5px; border-radius: 50%; background: var(--border-hi); transition: all .2s; }
 .tu-dots i.on { background: var(--acc); transform: scale(1.3); }
 
+/* v1.25.1 教程改版：左侧可跳目录 + 右侧卡片，宽屏弹窗 */
+.tu-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 16px; align-items: start; }
+.tu-nav {
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel2);
+  display: flex; flex-direction: column; max-height: min(64vh, 560px); overflow: hidden;
+}
+.tu-nav-head {
+  padding: 10px 12px; font-size: 12px; font-weight: 800;
+  border-bottom: 1px solid var(--border); display: flex; justify-content: space-between;
+}
+.tu-nav-head span { color: var(--dim); font-weight: 500; }
+.tu-nav-scroll { overflow-y: auto; padding: 7px; }
+.tu-nav-group { margin-bottom: 7px; }
+.tu-nav-g { font-size: 11px; color: var(--dim); font-weight: 700; padding: 6px 8px 3px; }
+.tu-nav-group.cur .tu-nav-g { color: var(--acc); }
+.tu-nav-item {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent;
+  color: var(--text); font-family: inherit; font-size: 12px; line-height: 1.5;
+  padding: 5px 8px; border-radius: 6px; cursor: pointer; white-space: normal;
+}
+.tu-nav-item:hover { background: var(--chip-bg); }
+.tu-nav-item.on { background: var(--acc); color: var(--acc-ink); font-weight: 700; }
+.tu-main { min-width: 0; }
+.tu-progress { display: flex; gap: 8px; font-size: 11.5px; color: var(--dim); margin-bottom: 7px; }
+.tu-progress-bar { height: 4px; border-radius: 4px; background: var(--input-bg); overflow: hidden; margin-bottom: 12px; }
+.tu-progress-bar i { display: block; height: 100%; background: var(--acc); border-radius: 4px; transition: width .2s; }
+.tu-card { min-height: 300px; }
+.tu-steps { margin: 0 0 13px; padding-left: 20px; font-size: 12.5px; line-height: 1.95; }
+.tu-steps li { margin-bottom: 5px; }
+.tu-steps li::marker { color: var(--tu-color); font-weight: 800; }
+.tu-go { margin-top: 12px; }
+.tu-link { margin-top: 12px; font-size: 12px; }
+.tu-link a { color: var(--acc); font-weight: 700; text-decoration: none; border-bottom: 1px dashed var(--acc); }
+.tu-link a:hover { color: var(--acc-hi); }
+.tu-keys { font-size: 11px; }
+@media (max-width: 760px) {
+  .tu-layout { grid-template-columns: 1fr; }
+  .tu-nav { max-height: 148px; }
+  .tu-card { min-height: 0; }
+}
+
 /* ============================================================
  * 滚动条
  * ============================================================ */

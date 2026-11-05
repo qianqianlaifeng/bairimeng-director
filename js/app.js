@@ -3,13 +3,14 @@
  * 路由 / 外壳 / 通知 / XP 动效 / 新手教程 / 主题
  * ============================================================ */
 import { Store } from './store.js';
-import { TUTORIAL } from './data.js';
-import { el, modal, toast } from './ui.js';
+import { TUTORIAL, TUTORIAL_GROUPS } from './data.js';
+import { el, esc, modal, toast } from './ui.js';
 import { initViewsCore, renderHome, renderScript, renderStoryboard, openProjectRename } from './views-core.js';
 import { initViewsStage, renderDict, renderPreview, renderScenes, renderContinuity } from './views-stage.js';
 import { initViewsPlayer, renderAnimatic, renderEditor } from './views-player.js';
 import { initViewsTools, renderPrompts, renderReview, renderAchievements, renderSettings, openProjectExport } from './views-tools.js';
 import { initViewsTeardown, renderTeardown } from './views-teardown.js';
+import { initViewsAi, renderAiDirector } from './views-ai.js';
 
 /* ---------- 初始化 ---------- */
 const store = new Store();
@@ -19,9 +20,11 @@ initViewsStage(store);
 initViewsPlayer(store);
 initViewsTools(store);
 initViewsTeardown(store);
+initViewsAi(store);
 
 const VIEWS = {
   home:        { title: '项目台',   icon: '🏠', render: renderHome,        group: '创作' },
+  aiDirector:  { title: 'AI 导演台', icon: '🤖', render: renderAiDirector, group: '创作', needProject: true },
   script:      { title: '剧本',     icon: '📜', render: renderScript,      group: '创作', needProject: true },
   storyboard:  { title: '分镜板',   icon: '🎞️', render: renderStoryboard,  group: '创作', needProject: true },
   scenes:      { title: '场景库',   icon: '🏗', render: renderScenes,      group: '创作', needProject: true },
@@ -74,7 +77,7 @@ const appEl = el(`<div class="app">
       <button class="btn btn-ghost btn-sm" id="btnCheckin">📅 签到</button>
     </header>
     <div class="content" id="viewRoot"></div>
-    <footer class="foot dim">白日梦导演台 v1.24.0 · 提示词直接拆镜：时间码→分镜 / 焦段与机位高进预览 / 桃林武戏站位 / 宫格图 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
+    <footer class="foot dim">白日梦导演台 v1.25.1 · AI 导演台一键开拍 / 91 种道具 / 特写取景修复 / 资产图故事板 / 自定义生图接口 / 全新分组教程 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
   </main>
 </div>`);
 document.body.appendChild(appEl);
@@ -106,14 +109,18 @@ function navigate(view, payload = {}) {
     view = 'home';
   }
   currentView = view;
-  if (cleanup) { try { cleanup(); } catch (e) { console.error(e); } cleanup = null; }
+  /* 有些视图会返回非函数（Promise / 订阅句柄 / DOM 节点），直接调用会抛
+     "cleanup is not a function"，把整次切页打断。只认函数。 */
+  if (typeof cleanup === 'function') { try { cleanup(); } catch (e) { console.error(e); } }
+  cleanup = null;
   viewRoot.innerHTML = '';
   viewRoot.scrollTop = 0;
   buildNav();
   renderTopbar();
   const def2 = VIEWS[view];
   try {
-    cleanup = def2.render(viewRoot, payload) || null;
+    const off = def2.render(viewRoot, payload);
+    cleanup = typeof off === 'function' ? off : null;
   } catch (e) {
     console.error(e);
     viewRoot.innerHTML = `<div class="empty-tip">页面出错了：${e.message}</div>`;
@@ -206,36 +213,86 @@ function applySettings() {
 }
 
 /* ============================================================
- * 新手教程（卡片翻页）
+ * 使用教程（分组目录 + 卡片翻页 + 一键直达对应页面）
+ * 文案全部在 js/tutorial-data.js，这里只负责排版
  * ============================================================ */
+const TUTORIAL_KEY = 'bdm_tutorial_v2';   // 教程改版后升一版，老用户也能看到新版
 function openTutorial() {
   let page = 0;
+  const groups = (TUTORIAL_GROUPS && TUTORIAL_GROUPS.length)
+    ? TUTORIAL_GROUPS
+    : [{ key: 'all', name: '全部', icon: '📖' }];
+  const groupOf = k => groups.find(g => g.key === k) || groups[0];
+
   const m = modal({
-    title: '❓ 新手教程',
-    body: '<div id="tuBox"></div>',
-    onClose: () => localStorage.setItem('bdm_tutorial_v1', '1'),
+    title: '❓ 使用教程 · 从零到出片',
+    wide: true,
+    body: '<div class="tu-layout" id="tuLayout"></div>',
+    onClose: () => {
+      document.removeEventListener('keydown', onKey);
+      try { localStorage.setItem(TUTORIAL_KEY, '1'); } catch (e) { }
+    },
   });
-  const box = m.body.querySelector('#tuBox');
+  const box = m.body.querySelector('#tuLayout');
+
+  function onKey(ev) {
+    if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+    const tag = (ev.target && ev.target.tagName) || '';
+    if (/INPUT|TEXTAREA|SELECT/.test(tag)) return;
+    ev.preventDefault();
+    const next = page + (ev.key === 'ArrowRight' ? 1 : -1);
+    if (next >= 0 && next < TUTORIAL.length) { page = next; render(); }
+  }
+  document.addEventListener('keydown', onKey);
+
   const render = () => {
-    const t = TUTORIAL[page];
+    const t = TUTORIAL[page] || TUTORIAL[0];
+    const g = groupOf(t.group);
+    const pct = ((page + 1) / TUTORIAL.length * 100).toFixed(1);
     box.innerHTML = `
-      <div class="tu-card" style="--tu-color:${t.color}">
-        <div class="tu-icon">${t.icon}</div>
-        <div class="tu-title">${t.title}</div>
-        <div class="tu-body">${t.body}</div>
-        <div class="tu-tip">💡 ${t.tip}</div>
-      </div>
-      <div class="tu-controls">
-        <div class="tu-dots">${TUTORIAL.map((_, i) => `<i class="${i === page ? 'on' : ''}"></i>`).join('')}</div>
-        <div class="spacer"></div>
-        ${page > 0 ? '<button class="btn btn-ghost btn-sm" id="tuPrev">上一页</button>' : ''}
-        ${page < TUTORIAL.length - 1
-          ? '<button class="btn btn-primary btn-sm" id="tuNext">下一页 →</button>'
-          : '<button class="btn btn-primary btn-sm" id="tuDone">开工！🎬</button>'}
-      </div>`;
+      <aside class="tu-nav">
+        <div class="tu-nav-head">目录 <span>${TUTORIAL.length} 页</span></div>
+        <div class="tu-nav-scroll">
+          ${groups.map(gr => `
+            <div class="tu-nav-group ${gr.key === t.group ? 'cur' : ''}">
+              <div class="tu-nav-g">${gr.icon} ${esc(gr.name)}</div>
+              ${TUTORIAL.map((c, i) => c.group === gr.key
+                ? `<button class="tu-nav-item ${i === page ? 'on' : ''}" data-page="${i}">${c.icon} ${esc(c.title)}</button>`
+                : '').join('')}
+            </div>`).join('')}
+        </div>
+      </aside>
+      <section class="tu-main">
+        <div class="tu-progress"><span>${g.icon} ${esc(g.name)}</span><span class="spacer"></span><span>第 ${page + 1} / ${TUTORIAL.length} 页</span></div>
+        <div class="tu-progress-bar"><i style="width:${pct}%"></i></div>
+        <div class="tu-card" style="--tu-color:${t.color}">
+          <div class="tu-icon">${t.icon}</div>
+          <div class="tu-title">${esc(t.title)}</div>
+          <div class="tu-body">${t.body || ''}</div>
+          ${(t.steps && t.steps.length)
+            ? `<ol class="tu-steps">${t.steps.map(s => `<li>${s}</li>`).join('')}</ol>` : ''}
+          <div class="tu-tip">💡 ${t.tip || ''}</div>
+          ${t.go && VIEWS[t.go]
+            ? `<div class="tu-go"><button class="btn btn-ghost btn-sm" id="tuGo">➜ 带我去「${esc(VIEWS[t.go].title)}」</button></div>` : ''}
+        </div>
+        <div class="tu-controls">
+          ${page > 0 ? '<button class="btn btn-ghost btn-sm" id="tuPrev">← 上一页</button>' : ''}
+          <span class="tu-keys dim">键盘 ← → 翻页</span>
+          <div class="spacer"></div>
+          ${page < TUTORIAL.length - 1
+            ? '<button class="btn btn-primary btn-sm" id="tuNext">下一页 →</button>'
+            : '<button class="btn btn-primary btn-sm" id="tuDone">开工！🎬</button>'}
+        </div>
+      </section>`;
+    box.querySelectorAll('[data-page]').forEach(b => b.onclick = () => { page = +b.dataset.page; render(); });
     box.querySelector('#tuPrev')?.addEventListener('click', () => { page--; render(); });
     box.querySelector('#tuNext')?.addEventListener('click', () => { page++; render(); });
     box.querySelector('#tuDone')?.addEventListener('click', () => m.close());
+    box.querySelector('#tuGo')?.addEventListener('click', () => { m.close(); navigate(t.go); });
+    try {
+      const cur = box.querySelector('.tu-nav-item.on');
+      if (cur) cur.scrollIntoView({ block: 'nearest' });
+    } catch (e) { }
   };
   render();
 }
@@ -248,8 +305,8 @@ window.addEventListener('bdm-settings', applySettings);
 store.subscribe(renderXPMini);
 renderXPMini();
 
-/* 首次访问自动弹教程 */
-if (!localStorage.getItem('bdm_tutorial_v1')) {
+/* 首次访问（或教程改版后第一次）自动弹教程 */
+if (!localStorage.getItem(TUTORIAL_KEY)) {
   setTimeout(openTutorial, 600);
 }
 

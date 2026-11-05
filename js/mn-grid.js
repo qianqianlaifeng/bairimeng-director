@@ -28,7 +28,7 @@ import { moveByKey, sizeByKey, angleByKey } from './breakdown.js';
 import { CAMERA_MOVES, ANGLES, SHOT_SIZES } from './data.js';
 import { modal, toast, esc, copyText } from './ui.js';
 
-const VERSION_TEXT = '白日梦导演台 v1.24.0';
+const VERSION_TEXT = '白日梦导演台 v1.25.1';
 const moveByName = Object.fromEntries(CAMERA_MOVES.map(m => [m.name, m.key]));
 const angleByName = Object.fromEntries(ANGLES.map(a => [a.name, a.key]));
 const sizeByName = Object.fromEntries(SHOT_SIZES.map(s => [s.name, s.key]));
@@ -59,6 +59,7 @@ const PRESETS = [
   { key: '2x4', cols: 2, per: 8, name: '2×4 八格' },
   { key: '4x2', cols: 4, per: 8, name: '4×2 八格' },
   { key: '3x3', cols: 3, per: 9, name: '3×3 九格' },
+  { key: '4x3', cols: 4, per: 12, name: '4×3 十二格' },
   { key: '4x4', cols: 4, per: 16, name: '4×4 十六格' },
 ];
 const QUALITY = [
@@ -150,7 +151,11 @@ function cnToKey(txt, byName, alias) {
 export function normShot(s, i = 0) {
   const boardScene = (s.scene && typeof s.scene === 'object') ? s.scene : (s.boardScene || null);
   const cnScene = typeof s.scene === 'string' ? s.scene : '';
-  const sizeKey = s.shotSize || cnToKey(cnScene, sizeByName, SIZE_CN) || 'MS';
+  /* 老数据 / 故事板可能把中文景别名塞在 shotSize 里，直接短路会让 SIZE_CFG 查不到、
+     静默回落成中景（表现就是「选了特写，出的图却是中景」）。 */
+  const SIZE_KEYS = new Set(['ELS', 'LS', 'MS', 'MCU', 'CU', 'ECU']);
+  const sizeKey = SIZE_KEYS.has(s.shotSize) ? s.shotSize
+    : (cnToKey(s.shotSize, sizeByName, SIZE_CN) || cnToKey(cnScene, sizeByName, SIZE_CN) || 'MS');
   const angleKey = s.angle || cnToKey(s.angleCn, angleByName, ANGLE_CN) || 'eye';
   const moveKey = s.cameraMove || cnToKey(s.camera, moveByName, MOVE_CN) || 'static';
   return {
@@ -173,6 +178,8 @@ export function normShot(s, i = 0) {
     imgRef: s.image || null,
     strokes: Array.isArray(s.strokes) ? s.strokes : [],
     aimY: s.aimY, camH: s.camH, focusKind: s.focusKind, focusId: s.focusId, showPath: s.showPath,
+    /* AI 导演台带的「看得懂」信息：画面内空间关系 / 人物动作 / 机位说明 */
+    space: s.space || '', action: s.action || '', angleNote: s.angleNote || '',
   };
 }
 
@@ -417,7 +424,9 @@ function drawCaption(ctx, ns, x, y, w, h, th) {
   const tx = x + px + badgeW + px;
   const tw = x + w - px - tx;
   const tag = ns.sceneKey ? String(ns.sceneKey).slice(0, 10) : '';
-  const rows = ns.dialogue ? 3 : 2;
+  /* AI 导演台的镜头带空间关系/动作，多给一行写清楚，故事板才「看得懂」 */
+  const hasDetail = !!(ns.space || ns.action || ns.angleNote);
+  const rows = 2 + (ns.dialogue ? 1 : 0) + (hasDetail ? 1 : 0);
   const lh = (h - px) / rows;
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
 
@@ -437,13 +446,24 @@ function drawCaption(ctx, ns, x, y, w, h, th) {
   }
   /* 第二行起：画面（有台词时只留一行）+ 台词 */
   const f2 = Math.round(lh * 0.46);
-  const bodyMax = rows === 3 ? 1 : 2;
+  const bodyMax = rows >= 3 ? 1 : 2;
   let cy = y + px * 0.5 + lh;
   const body = wrapText(ctx, ns.desc || (ns.title ? ns.title : '（这一格还没画面）'), tw, bodyMax);
   ctx.font = `400 ${f2}px ${FONT}`;
   ctx.fillStyle = th.muted;
   for (let i = 0; i < body.length; i++) {
     ctx.fillText(body[i], tx, cy);
+    cy += lh;
+  }
+  if (hasDetail) {
+    const sa = [
+      ns.angleNote ? '机位 ' + ns.angleNote : '',
+      ns.space ? '空间 ' + ns.space : '',
+      ns.action ? '动作 ' + ns.action : '',
+    ].filter(Boolean).join('   |   ');
+    ctx.font = `600 ${Math.round(f2 * 0.86)}px ${FONT}`;
+    ctx.fillStyle = accent;
+    ctx.fillText(clip(sa, tw), tx, cy);
     cy += lh;
   }
   if (ns.dialogue) {
@@ -622,6 +642,9 @@ export function imagePromptOf(ns, ctx = {}) {
     L.push(`画面：${ns.desc || ns.title || '（这一镜的画面描述）'}`);
     L.push(`镜头：${size.prompt}；${angle.prompt}；${(move.prompt || ns.moveName)}`);
   }
+  if (ns.angleNote) L.push(`机位说明：${ns.angleNote}`);
+  if (ns.space) L.push(`画面内空间关系（务必照这个摆位）：${ns.space}`);
+  if (ns.action) L.push(`人物动作与情绪：${ns.action}`);
   if (cast.length) L.push(`人物：${cast.slice(0, 6).join('、')}（同一部片里长相/服装/发型不许变）。`);
   if (ns.scene) L.push(`空间：${walls ? walls + ' 面墙' : '开放式'}、${props} 件道具，同场次${ns.sceneKey ? '「' + ns.sceneKey + '」' : ''}前后镜共用同一套空间。`);
   if (ns.dialogue) L.push(`台词：${ns.dialogue}（口型与台词对得上，嘴里不要有多余的字）。`);
@@ -649,8 +672,10 @@ export function openGridModal(cfg = {}) {
   const raw = cfg.shots || [];
   if (!raw.length) { toast('一条镜头都没有，先拆镜或加镜', 'warn'); return null; }
   const list = raw.map((s, i) => normShot(s, i));
+  const autoPreset = list.length <= 2 ? '1x2' : list.length <= 4 ? '2x2' : list.length <= 6 ? '3x2' : list.length <= 9 ? '3x3' : 'auto';
   const state = {
-    preset: list.length <= 2 ? '1x2' : list.length <= 4 ? '2x2' : list.length <= 6 ? '3x2' : list.length <= 9 ? '3x3' : 'auto',
+    /* AI 导演台按「剧情节拍数」算好的宫格数优先，用户仍可在下拉里改 */
+    preset: (cfg.preset && PRESETS.some(x => x.key === cfg.preset)) ? cfg.preset : autoPreset,
     quality: 'md',
     mode: 'auto',
     meta: true, arrows: true, title: true, dark: false,
@@ -679,6 +704,7 @@ export function openGridModal(cfg = {}) {
           <button class="btn btn-primary" data-act="build">🎨 生成宫格</button>
           <button class="btn btn-ghost" data-act="pack">🧾 生图提示词包</button>
           <button class="btn btn-ghost" data-act="fill">🖼 逐格回填</button>
+          <button class="btn" data-act="aigen">🤖 AI 逐格生图</button>
           <button class="btn btn-ghost" data-act="dl" disabled>📥 下载 PNG</button>
         </div>
         <div class="bdm-grid-prog" hidden><i></i><span></span></div>
@@ -753,6 +779,39 @@ export function openGridModal(cfg = {}) {
     if (state.mode === 'scene') { state.mode = 'auto'; const sel = B.querySelector('select[data-k="mode"]'); if (sel) sel.value = 'auto'; }
     build();
   });
+
+  /* AI 逐格生图：调用户自己配的生图接口，画完直接回填并重新拼宫格 */
+  B.querySelector('[data-act="aigen"]').onclick = async e => {
+    const st = window.__bdm;
+    const api = st && st.settings && st.settings.imageApi;
+    if (!api || !api.url) {
+      toast('先到「设置 → 生图接口」配置，免费接口可一键填', 'warn');
+      return;
+    }
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    prog.hidden = false; bar.style.width = '2%';
+    const ctx = { title: cfg.title || '故事板', aspect: cfg.aspect || '16:9', style: cfg.style || '', negative: cfg.negative || '' };
+    try {
+      const mod = await import('./ai-director.js');
+      const shots = cfg.shots || [];
+      const attach = (s, i, url) => cfg.onCellArt
+        ? cfg.onCellArt(i, url)
+        : st.attachSketch(s.id, dataURLToBlob(url));
+      const r = await mod.generateCellImages(st, shots, api, ctx, pr => {
+        bar.style.width = Math.round((pr.done + pr.failed) / Math.max(1, pr.total) * 100) + '%';
+        ptxt.textContent = `AI 生图 ${pr.done + pr.failed}/${pr.total} 格 · 失败 ${pr.failed}`;
+      }, null, (s, i) => imagePromptOf(list[i] || s, ctx), attach);
+      artCache.clear();
+      state.mode = 'image';
+      const sel = B.querySelector('select[data-k="mode"]'); if (sel) sel.value = 'image';
+      toast(r.done ? `已画好 ${r.done} 格，正在拼宫格` : '一格都没画出来，检查生图接口配置', r.done ? 'ok' : 'warn');
+      if (r.done) await build(); else prog.hidden = true;
+    } catch (err) {
+      prog.hidden = true;
+      toast('AI 生图失败：' + (err && err.message || err), 'warn');
+    } finally { btn.disabled = false; }
+  };
   return m;
 }
 
@@ -761,8 +820,8 @@ function openPackModal(cfg, list, cells, opt) {
   const plan = planGrid(list.length, opt.preset || 'auto');
   const ctx = {
     title: cfg.title || '故事板', aspect: cfg.aspect || '16:9',
-    style: '电影感实景、自然光、真实皮肤纹理、浅景深、色调统一',
-    negative: '文字、字幕、水印、logo、多余手指、畸形手、塑料脸、拼贴多格、黑边',
+    style: cfg.style || '电影感实景、自然光、真实皮肤纹理、浅景深、色调统一',
+    negative: cfg.negative || '文字、字幕、水印、logo、多余手指、畸形手、塑料脸、拼贴多格、黑边',
   };
   const body = `
     <p class="dim" style="margin-top:0">一条提示词＝一个格子。逐张生成再「🖼 逐格回填」拼成宫格，比让 AI 一次画整张宫格稳得多（格子整体比例模型对不上，格里的字必崩）。</p>

@@ -459,7 +459,14 @@ function bindShell() {
   $('#mnBtnHelp').onclick = () => openHelpModal();
   $('#mnBtnTheme').onclick = () => toggleTheme();
   $('#mnBtnRise').onclick = () => toggleRise();
-  $('#mnStep1').onclick = () => { };
+  $('#mnStep1').onclick = () => {
+    if (MN.state.view.mode !== '2d') setMode('2d');
+    MN.tool = 'select'; MN.pending = null; MN.wallDraft = null; MN.pathDraft = null;
+    const s1 = $('#mnStep1'), s2 = $('#mnStep2');
+    if (s1) s1.classList.add('active'); if (s2) s2.classList.remove('active');
+    renderToolList(); buildFloatTools(); renderRight(); paint();
+    toast('回到画空间 · 左栏挑工具，右栏物件库点道具');
+  };
   $('#mnStep2').onclick = () => enterFindShot();
   $('#mnToStory').onclick = () => openStoryboard();
   $('#mnBackHome').onclick = () => { if (window.__mnExit) window.__mnExit(); else if (window.goto) window.goto('chat'); };
@@ -604,6 +611,8 @@ function enterFindShot() {
   if (!window.MN3D || !MN3D.ok) { toast('3D 引擎不可用，先用 2D 画好空间'); return; }
   if (MN.state.view.mode !== '3d') setMode('3d');
   MN3D.setView('oblique'); MN3D.render(MN.state);
+  const s1 = $('#mnStep1'), s2 = $('#mnStep2');
+  if (s1) s1.classList.remove('active'); if (s2) s2.classList.add('active');
   toast('找镜头：拖动画面转视角，调好点「立起来，再找镜头」存机位');
 }
 
@@ -755,7 +764,16 @@ function renderTree() {
     { key: '光源', items: sc.lights.map(o => ({ ...o, _k: 'light' })) },
     { key: '造物', items: sc.props.map(o => ({ ...o, _k: 'prop' })) },
   ];
-  const total = groups.reduce((a, g) => a + g.items.length, 0);
+  /* 自定义分组：只存引用（kind:id），不搬动物体，删分组也不会删东西 */
+  (sc.customGroups || []).forEach(cg => {
+    const items = (cg.ids || []).map(k => {
+      const [kind, id] = String(k).split(':');
+      const o = findObj(kind, id);
+      return o ? { ...o, _k: kind } : null;
+    }).filter(Boolean);
+    groups.push({ key: 'grp:' + cg.name, items, custom: true });
+  });
+  const total = groups.filter(g => !g.custom).reduce((a, g) => a + g.items.length, 0);
   let html = `<div class="mn-tree-head">
       <button class="mn-tree-toggle ${treeOpen.all ? '' : 'closed'}" id="mnTreeAll">${icon('chevron-down')}场景清单<span class="mn-tree-count">${total}</span></button>
       <button class="mn-tree-act" id="mnTreeAdd" title="新建分组">${icon('folder-plus', 's14')}</button>
@@ -772,7 +790,7 @@ function renderTree() {
         <button class="mn-obj-name" data-folder-label="${g.key}">${icon('folder', 's14')}<span>${g.key}</span></button>
         <span class="mn-row-acts">
           <button class="mn-row-act" data-folder-eye="${g.key}" title="显隐">${icon('eye', 's14')}</button>
-          <button class="mn-row-act danger" data-folder-del="${g.key}" title="删除整组">${icon('trash-2', 's14')}</button>
+          <button class="mn-row-act danger" data-folder-del="${g.key}" title="${g.custom ? '解散分组（不删物体）' : '删除整组'}">${icon('trash-2', 's14')}</button>
         </span></div>`;
     if (open) html += `<div class="mn-tree-kids">` + items.map(o => {
       const sel = MN.sel && MN.sel.kind === o._k && MN.sel.id === o.id;
@@ -781,6 +799,7 @@ function renderTree() {
         <button class="mn-grip">${icon('grip-vertical', 's14')}</button>
         <button class="mn-obj-name"><span class="mn-obj-dot" style="background:${dot}"></span><span>${esc(o.name || '未命名')}</span></button>
         <span class="mn-row-acts">
+          ${g.custom ? `<button class="mn-row-act" data-grprem="${g.key}|${o._k}:${o.id}" title="移出这个分组">${icon('x', 's12')}</button>` : ''}
           <button class="mn-row-act ${o.locked ? 'on' : ''}" data-lock="${o._k}:${o.id}" title="${o.locked ? '解锁' : '锁定：防误拖误删'}">${icon('lock', 's14')}</button>
           <button class="mn-row-act" data-eye="${o._k}:${o.id}" title="显隐">${icon(o.hidden ? 'eye-off' : 'eye', 's14')}</button>
           <button class="mn-row-act danger" data-del="${o._k}:${o.id}" title="删除">${icon('trash-2', 's14')}</button>
@@ -800,11 +819,42 @@ function renderTree() {
     if (s2) { s2.focus(); try { s2.setSelectionRange(pos, pos); } catch (err) { } }
   };
   $('#mnTreeAll').onclick = () => { treeOpen.all = !treeOpen.all; renderTree(); };
-  $('#mnTreeAdd').onclick = () => toast('🚧 自定义分组建设中');
+  $('#mnTreeAdd').onclick = () => {
+    /* 把当前选中的物体收进一个自定义分组，方便「这一场要动的那几件」一起找 */
+    const picked = selList().length ? selList() : (MN.sel ? [MN.sel] : []);
+    if (!picked.length) { toast('先选中要归组的物体（框选可以多选）', 'warn'); return; }
+    const sc = MN.state.scene;
+    sc.customGroups = sc.customGroups || [];
+    const def = '分组 ' + (sc.customGroups.length + 1);
+    const input = window.prompt('给这个分组起个名字', def);
+    if (input === null) return;
+    const nm = String(input || '').trim().slice(0, 16) || def;
+    let g = sc.customGroups.find(x => x.name === nm);
+    if (!g) { g = { name: nm, ids: [] }; sc.customGroups.push(g); }
+    picked.forEach(s => { const k = s.kind + ':' + s.id; if (g.ids.indexOf(k) < 0) g.ids.push(k); });
+    treeOpen['grp:' + nm] = true;
+    renderTree(); saveSoon();
+    toast('已把 ' + picked.length + ' 个物体归入「' + nm + '」', 'ok');
+  };
+  $$('[data-grprem]', sec).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const [gkey, ref] = b.dataset.grprem.split('|');
+    const nm = gkey.slice(4);
+    const g = (MN.state.scene.customGroups || []).find(x => x.name === nm);
+    if (!g) return;
+    g.ids = (g.ids || []).filter(x => x !== ref);
+    renderTree(); saveSoon();
+  });
   $$('[data-folder]', sec).forEach(b => b.onclick = () => { treeOpen[b.dataset.folder] = !(treeOpen[b.dataset.folder] !== false); renderTree(); });
   $$('[data-folder-label]', sec).forEach(b => b.onclick = () => { treeOpen[b.dataset.folderLabel] = !(treeOpen[b.dataset.folderLabel] !== false); renderTree(); });
   $$('[data-folder-eye]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const k = b.dataset.folderEye; toggleGroupVis(k); });
-  $$('[data-folder-del]', sec).forEach(b => b.onclick = e => { e.stopPropagation(); const k = b.dataset.folderDel; if (confirm(`删除整组「${k}」？`)) delGroup(k); });
+  $$('[data-folder-del]', sec).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const k = b.dataset.folderDel;
+    const custom = k.indexOf('grp:') === 0;
+    const msg = custom ? `解散分组「${k.slice(4)}」？里面的物体不会被删除` : `删除整组「${k}」？`;
+    if (confirm(msg)) delGroup(k);
+  });
   $$('[data-obj]', sec).forEach(r => r.onclick = e => {
     if (e.target.closest('[data-eye]') || e.target.closest('[data-del]') || e.target.closest('[data-lock]')) return;
     const [kind, id] = r.dataset.obj.split(':');
@@ -818,14 +868,28 @@ function renderTree() {
 
 function toggleGroupVis(key) {
   const sc = MN.state.scene;
-  const arr = key === '场景' ? [...sc.rooms, ...sc.walls] : key === '人物' ? sc.persons : key === '光源' ? sc.lights : sc.props;
+  let arr;
+  if (key.indexOf('grp:') === 0) {
+    const nm = key.slice(4);
+    const g = (sc.customGroups || []).find(x => x.name === nm);
+    arr = (g ? g.ids : []).map(k => { const [kind, id] = String(k).split(':'); return findObj(kind, id); }).filter(Boolean);
+  } else {
+    arr = key === '场景' ? [...sc.rooms, ...sc.walls] : key === '人物' ? sc.persons : key === '光源' ? sc.lights : sc.props;
+  }
   const anyShow = arr.some(o => !o.hidden);
   arr.forEach(o => o.hidden = anyShow);
   renderTree(); paint(); saveSoon();
 }
 function delGroup(key) {
-  pushUndo();
   const sc = MN.state.scene;
+  if (key.indexOf('grp:') === 0) {
+    const nm = key.slice(4);
+    sc.customGroups = (sc.customGroups || []).filter(x => x.name !== nm);
+    renderAll(); saveSoon();
+    toast('已解散分组「' + nm + '」，物体都在', 'ok');
+    return;
+  }
+  pushUndo();
   if (key === '场景') { sc.rooms = []; sc.walls = []; }
   else if (key === '人物') sc.persons = [];
   else if (key === '光源') sc.lights = [];
@@ -1303,7 +1367,7 @@ function bindCamExtra() {
     const k = M3.FOLLOW_H[b.dataset.fshot] || M3.FOLLOW_H.MS;
     cam.follow = cam.follow || {}; cam.follow.on = true;
     cam.follow.shot = b.dataset.fshot;
-    cam.follow.dist = k.dist; cam.follow.height = k.h;
+    cam.follow.dist = k.dist; cam.follow.height = k.h; cam.follow.look = k.look;
     applyFollow(true); renderRight(); saveSoon();
   });
   [['mnFDist', 'dist'], ['mnFH', 'height'], ['mnFSide', 'side']].forEach(([id, key]) => {
@@ -1410,8 +1474,13 @@ function renderRight() {
 /* 物件库预设：直接吃道具库 mn-props.js 的全部种类，每类一个精细模型 */
 const PRESETS = (window.MN_PROP_ORDER || []).map(k => {
   const K = window.MN_PROP_KINDS[k] || {};
-  return { kind: k, name: K.name || k, w: K.w || 1, d: K.d || 1, h: K.h || 1, color: K.color || '#d9b382' };
+  return {
+    kind: k, name: K.name || k, w: K.w || 1, d: K.d || 1, h: K.h || 1,
+    color: K.color || '#d9b382',
+    cat: (window.MN_propCat && window.MN_propCat(k)) || '其他',
+  };
 });
+const LIB_CATS = (window.MN_PROP_CAT_ORDER || []).filter(c => PRESETS.some(p => p.cat === c));
 
 /* 滑杆读数：单位写在一处，免得每加一个字段就改一遍三元 */
 function fieldText(f, v, o) {
@@ -1496,9 +1565,9 @@ function renderObjPanel() {
     <div class="mn-chip-row">
       <button class="mn-chip" data-act="copy">${icon('copy', 's12')}复制</button>
       <button class="mn-chip" data-act="paste">${icon('clipboard-paste', 's12')}粘贴</button>
-      <button class="mn-chip active" data-act="move">${icon('move-3d', 's12')}移动</button>
-      <button class="mn-chip" data-act="rotate">${icon('rotate-3d', 's12')}旋转</button>
-      <button class="mn-chip" data-act="scale">${icon('scan-line', 's12')}缩放</button>
+      <button class="mn-chip active" data-act="move" title="选中后直接拖动画布上的物体，方向键微调">${icon('move-3d', 's12')}移动</button>
+      <button class="mn-chip" data-act="rotate" title="点一下转 15° · 按住 Shift 点反向转">${icon('rotate-3d', 's12')}旋转 15°</button>
+      <button class="mn-chip" data-act="scale" title="点一下放大 10% · 按住 Shift 点缩小">${icon('scan-line', 's12')}缩放 10%</button>
       <button class="mn-chip" data-act="autolayout" title="把重叠的家具/人物排开">${icon('sparkles', 's12')}自动摆好</button>
     </div>
     <label class="mn-field"><span>人物名称</span><input type="text" data-f="name" value="${esc(o.name || '')}" placeholder="给这个角色起个名字（3D 里显示在头顶）" /></label>
@@ -1556,12 +1625,17 @@ function renderLibrary() {
   return `<section class="mn-prop">
     <div class="mn-lib-head"><strong>物件库</strong>
       <button class="mn-lib-tool" data-act="autolayout" title="把重叠的家具/人物排开，墙和房间不动">🧹 自动摆好</button></div>
-    <p class="mn-lib-hint">点一下选物件 → 再点画布落地，连着点可以连续放</p>
+    <p class="mn-lib-hint">点一下选物件 → 再点画布落地，连着点可以连续放 · 共 ${PRESETS.length} 种道具</p>
     ${pend ? `<div class="mn-lib-pending">正在放 <b>${esc(pendName)}</b> · 连着点就连续放 · <button class="mn-linkbtn" data-libcancel>退出</button></div>` : ''}
     ${n > 1 ? `<div class="mn-lib-pending">已选 <b>${n}</b> 个 · Del 一起删 · 方向键一起挪</div>` : ''}
+    <label class="mn-lib-search">${icon('search', 's12')}<input id="mnLibQ" placeholder="搜道具名，比如 沙发 / 灯 / 车" value="${esc(MN.libQ || '')}" /></label>
+    <div class="mn-lib-cats">
+      <button class="mn-lib-cat" data-libcat="全部">全部 ${PRESETS.length}</button>
+      ${LIB_CATS.map(c => `<button class="mn-lib-cat" data-libcat="${esc(c)}">${esc(c)} ${PRESETS.filter(p => p.cat === c).length}</button>`).join('')}
+    </div>
     <div class="mn-lib-grid">
-      ${PRESETS.map((p, i) => `<button class="mn-lib-item ${pend && pend.preset && pend.preset.name === p.name ? 'active' : ''}" data-preset="${i}">
-        <i style="background:${p.color}"></i><span>${p.name}</span><small>${p.w}×${p.d}</small></button>`).join('')}
+      ${PRESETS.map(p => `<button class="mn-lib-item ${pend && pend.preset && pend.preset.name === p.name ? 'active' : ''}" data-preset="${p.kind}" data-cat="${esc(p.cat)}" data-name="${esc(p.name)}">
+        <i style="background:${p.color}"></i><span>${esc(p.name)}</span><small>${p.w}×${p.d}</small></button>`).join('')}
     </div>
     <div class="mn-lib-row">
       <button class="mn-chip" data-preset-kind="person">${icon('user-round', 's12')}人物</button>
@@ -1570,10 +1644,21 @@ function renderLibrary() {
     <p class="mn-help-para" style="margin-top:10px">选中后：<b>右键</b>删除 / 复制 / 改名 · 拖动移动 · 方向键微调（Shift 更细）· 空白处拖动框选</p>
   </section>`;
 }
+/* 分类 + 搜索：只切 DOM 显示，不整体重渲染，输入框不会掉焦点 */
+function filterLibrary(root, cat, q) {
+  const kw = (q || '').trim().toLowerCase();
+  $$('.mn-lib-item', root).forEach(b => {
+    const okCat = !cat || cat === '全部' || b.dataset.cat === cat;
+    const okQ = !kw || (b.dataset.name || '').toLowerCase().indexOf(kw) >= 0;
+    b.style.display = okCat && okQ ? '' : 'none';
+  });
+  $$('[data-libcat]', root).forEach(c => c.classList.toggle('active', c.dataset.libcat === cat));
+}
 function bindLibrary() {
   const root = $('#mnRight'); if (!root) return;
   $$('[data-preset]', root).forEach(b => b.onclick = () => {
-    const p = PRESETS[+b.dataset.preset];
+    const p = PRESETS.find(x => x.kind === b.dataset.preset) || PRESETS[0];
+    if (!p) return;
     MN.pending = { kind: 'prop', preset: p };
     MN.tool = 'select'; renderToolList(); buildFloatTools();
     renderRight(); paint();
@@ -1588,6 +1673,14 @@ function bindLibrary() {
   });
   const c = $('[data-libcancel]', root); if (c) c.onclick = () => { MN.pending = null; renderRight(); paint(); };
   const al = $('[data-act="autolayout"]', root); if (al) al.onclick = () => autoLayout();
+  const cat = MN.libCat || '全部';
+  $$('[data-libcat]', root).forEach(b => b.onclick = () => {
+    MN.libCat = b.dataset.libcat;
+    filterLibrary(root, MN.libCat, MN.libQ);
+  });
+  const qEl = $('#mnLibQ', root);
+  if (qEl) qEl.oninput = () => { MN.libQ = qEl.value; filterLibrary(root, MN.libCat, MN.libQ); };
+  filterLibrary(root, cat, MN.libQ);
 }
 
 function bindObjPanel() {
@@ -1659,7 +1752,7 @@ function bindObjPanel() {
       renderTree(); paint(); saveSoon();
     };
   }
-  $$('[data-act]', box).forEach(b => b.onclick = () => {
+  $$('[data-act]', box).forEach(b => b.onclick = (e) => {
     const a = b.dataset.act;
     if (a === 'jointreset') {
       pushUndo(); delete o.joints; renderRight(); paint(); saveSoon(); toast('已回到「' + (o.pose || '站立') + '」预设姿势');
@@ -1706,7 +1799,29 @@ function bindObjPanel() {
       toast(`已把「${o.name}」的 ${list.length} 个角色都换成 ${o.color}`, 'ok');
     }
     else if (a === 'addhole') { pushUndo(); (o.holes = o.holes || []).push({ t: 0.5, w: 1 }); renderRight(); paint(); saveSoon(); }
-    else if (['move', 'rotate', 'scale'].includes(a)) { $$('[data-act]', box).forEach(x => x.classList.remove('active')); b.classList.add('active'); toast('变换模式：' + a + '（3D 视图生效）'); }
+    else if (a === 'move') {
+      $$('[data-act]', box).forEach(x => x.classList.remove('active')); b.classList.add('active');
+      toast('移动：直接拖动画布上的物体，方向键微调');
+    }
+    /* 旋转 / 缩放以前只切个高亮、什么都不做（3D 里也没有对应拖拽模式），
+       现在改成点一下就真的改，按住 Shift 反向，2D/3D/白模三端同步。 */
+    else if (a === 'rotate' || a === 'scale') {
+      const back = e && e.shiftKey ? -1 : 1;
+      pushUndo();
+      if (a === 'rotate') {
+        o.rot = ((+o.rot || 0) + 15 * back + 360) % 360;
+      } else {
+        const f = back > 0 ? 1.1 : 1 / 1.1;
+        const cl = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+        if (MN.sel.kind === 'person') o.scale = cl((+o.scale || 1) * f, 0.3, 3);
+        else {
+          o.w = cl((+o.w || 1) * f, 0.2, 12); o.d = cl((+o.d || 1) * f, 0.2, 12); o.h = cl((+o.h || 1) * f, 0.2, 12);
+          if (MN.sel.kind === 'prop' && typeof refitSeats === 'function') refitSeats(o.id);
+        }
+      }
+      renderRight(); renderTree(); paint(); saveSoon();
+      toast(a === 'rotate' ? '已旋转到 ' + Math.round(o.rot) + '°（Shift 反向）' : (back > 0 ? '已放大 10%' : '已缩小 10%') + '（Shift 反向）');
+    }
   });
 }
 

@@ -210,8 +210,11 @@ export function mnToShotScene(st) {
         dist: Math.max(1.2, Math.abs(dc.r * Math.sin(dc.phi || 1.0))),
         h: Math.max(0.3, (+dc.ty || 0) + Math.abs(dc.r * Math.cos(dc.phi || 1.0))),
         fov,
+        /* 把「看向哪里」一起带过去。以前只留机位高度，目标点蒸发，
+           白模渲染只能写死看 1.15m —— 特写就拍成肚子了。 */
+        tx: +dc.tx || 0, ty: (+dc.ty || 0), tz: +dc.tz || 0,
       }
-    : { az: 25, dist: 7.5, h: 1.8, fov };
+    : { az: 25, dist: 7.5, h: 1.8, fov, tx: 0, ty: 1.15, tz: 0 };
 
   return {
     base: 'plain',
@@ -581,7 +584,7 @@ export function openSceneBuilder(shot, onSaved, opts = {}) {
   if (curLibId && !libItem) { toast('这套景已经不在了（可能被删了或换了项目）', 'warn'); curLibId = null; }
   /* 新手教程是弹窗层（z-index 高于搭建浮层），会挡住画布点击 —— 进搭建时自动收起 */
   document.querySelectorAll('.modal-ov').forEach(o => {
-    if (o.querySelector('#tuBox')) { o.remove(); try { localStorage.setItem('bdm_tutorial_v1', '1'); } catch (e) { } }
+    if (o.querySelector('#tuLayout') || o.querySelector('#tuBox')) { o.remove(); try { localStorage.setItem('bdm_tutorial_v2', '1'); } catch (e) { } }
   });
   if (!ovEl) buildOverlay();
   ovEl.classList.add('open');

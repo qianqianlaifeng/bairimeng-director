@@ -1,0 +1,56 @@
+/* AI 智能导演台 · 只在 #/aiDirector 页面用到，跟三套主题共用变量 */
+.page-head:has(.ai-status) { flex-wrap: wrap; }
+.ai-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 14px; }
+.ai-status .tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.ai-card { padding: 16px 18px; margin-bottom: 14px; }
+.ai-h { font-size: 14.5px; font-weight: 750; margin-bottom: 11px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ai-h .dim { font-size: 11.5px; font-weight: 400; }
+.ai-text { width: 100%; font-size: 13px; line-height: 1.7; resize: vertical; font-family: var(--font); }
+.ai-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 12px 0 10px; font-size: 12.5px; color: var(--text); }
+.ai-opts label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.ai-opts input[type=checkbox] { accent-color: var(--acc); }
+.ai-opts .dim { font-size: 11px; }
+.ai-card > .input:not(textarea) { width: 100%; }
+.ai-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.ai-actions .dim { font-size: 11.5px; }
+
+/* 步骤条 */
+.ai-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.ai-step { padding: 5px 10px; border-radius: 999px; font-size: 11.5px;
+  border: 1px solid var(--border); background: var(--panel2); color: var(--dim); white-space: nowrap; }
+.ai-step.on { border-color: var(--acc); color: var(--acc); background: var(--chip-bg); }
+.ai-step.ok { border-color: color-mix(in srgb, var(--ok) 45%, transparent); color: var(--ok); background: color-mix(in srgb, var(--ok) 9%, transparent); }
+.ai-note { margin: 9px 0 0; font-size: 12px; color: var(--dim); line-height: 1.6; }
+.ai-ok { color: var(--ok); font-weight: 650; }
+.ai-err { color: var(--bad); }
+
+/* 资产图 */
+.ai-drop { border: 1.5px dashed var(--border-hi, var(--border)); border-radius: var(--radius);
+  padding: 22px 14px; text-align: center; cursor: pointer; font-size: 12.5px; color: var(--dim);
+  background: var(--input-bg); transition: border-color .15s, background .15s; }
+.ai-drop:hover, .ai-drop.on { border-color: var(--acc); color: var(--acc); background: var(--chip-bg); }
+.ai-assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; margin-top: 10px; }
+.ai-asset { display: flex; align-items: center; gap: 8px; padding: 6px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--panel); min-width: 0; }
+.ai-asset img { width: 46px; height: 46px; object-fit: cover; border-radius: 5px; flex: 0 0 auto; background: var(--panel2); }
+.ai-asset-txt { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.ai-asset-txt b { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-asset-txt span { font-size: 10.5px; color: var(--dim); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ai-x { border: 0; background: transparent; color: var(--dim); font-size: 17px; cursor: pointer; padding: 0 3px; align-self: flex-start; }
+.ai-x:hover { color: var(--bad); }
+
+/* 结果表 */
+.ai-shots { max-height: 380px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 10px 0; }
+.ai-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.ai-table th, .ai-table td { padding: 7px 9px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; line-height: 1.5; }
+.ai-table th { position: sticky; top: 0; background: var(--panel2); font-weight: 650; white-space: nowrap; z-index: 1; }
+.ai-table tr:last-child td { border-bottom: 0; }
+.ai-table td:nth-child(1), .ai-table td:nth-child(2) { white-space: nowrap; }
+.ai-table .dim { font-size: 10.5px; }
+#aiImgProgress { margin-top: 9px; font-size: 12px; }
+
+@media (max-width: 720px) {
+  .ai-card { padding: 13px; }
+  .ai-assets { grid-template-columns: 1fr 1fr; }
+}

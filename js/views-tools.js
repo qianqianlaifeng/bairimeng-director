@@ -423,6 +423,38 @@ export function renderSettings(container) {
     </div>
 
     <div class="card set-card">
+      <div class="card-title">🎨 生图接口（可选 · 故事板逐格出图用）</div>
+      <div class="dim set-sub">配好之后，AI 导演台和宫格故事板里可以一键把每一格画成图。支持任意 OpenAI 兼容的 <b>/images/generations</b>，也支持<b>免费无密钥</b>的 URL 直出接口。密钥只发给你填的那个地址，本站没有中间层。</div>
+      <div class="api-grid">
+        <div class="form-row"><label>接口类型</label>
+          <select id="imgApiMode" class="input">
+            <option value="openai" ${(st.imageApi?.mode || 'openai') === 'openai' ? 'selected' : ''}>OpenAI 兼容 /images/generations</option>
+            <option value="url" ${st.imageApi?.mode === 'url' ? 'selected' : ''}>URL 直出（GET，{prompt} 占位，可免密钥）</option>
+          </select></div>
+        <div class="form-row"><label>名称</label><input id="imgApiName" class="input" placeholder="我的生图接口" value="${esc(st.imageApi?.name || '')}"></div>
+        <div class="form-row" style="grid-column:1/-1"><label>接口地址</label><input id="imgApiUrl" class="input" placeholder="OpenAI 兼容填 https://xxx/v1 ；URL 直出填 https://xxx/prompt/{prompt}?w={w}&h={h}" value="${esc(st.imageApi?.url || '')}"></div>
+        <div class="form-row"><label>模型名 <span class="dim">（URL 直出可空）</span></label><input id="imgApiModel" class="input" placeholder="flux / dall-e-3 / Kolors / …" value="${esc(st.imageApi?.model || '')}"></div>
+        <div class="form-row"><label>API Key <span class="dim">（免费接口可空）</span></label><input id="imgApiKey" class="input" type="password" placeholder="sk-…" value="${esc(st.imageApi?.key || '')}"></div>
+        <div class="form-row"><label>图片尺寸</label><input id="imgApiSize" class="input" list="imgSizeList" placeholder="1024x1024" value="${esc(st.imageApi?.size || '1024x1024')}">
+          <datalist id="imgSizeList"><option value="1024x1024"><option value="1344x768"><option value="768x1344"><option value="1024x1792"><option value="1792x1024"><option value="512x512"></datalist></div>
+        <div class="form-row"><label>返回格式</label>
+          <select id="imgApiFmt" class="input">
+            <option value="b64_json" ${(st.imageApi?.responseFormat ?? 'b64_json') === 'b64_json' ? 'selected' : ''}>b64_json（最常见）</option>
+            <option value="" ${st.imageApi?.responseFormat === '' ? 'selected' : ''}>不传这个字段（部分接口不认）</option>
+          </select></div>
+        <div class="form-row" style="grid-column:1/-1"><label>额外参数 <span class="dim">（可选，JSON，会合并进请求体）</span></label><input id="imgApiExtra" class="input" placeholder='例：{"steps":20,"seed":-1}' value="${esc(st.imageApi?.extra || '')}"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost btn-sm" id="imgApiFree">🆓 一键填免费接口</button>
+        <button class="btn btn-ghost" id="imgApiTest">🖼 测试画一张</button>
+        <div class="spacer"></div>
+        ${st.imageApi ? '<button class="btn btn-danger btn-sm" id="imgApiClear">清除配置</button>' : ''}
+        <button class="btn btn-primary" id="imgApiSave">保存</button>
+      </div>
+      <div class="api-status dim" id="imgApiStatus"></div>
+    </div>
+
+    <div class="card set-card">
       <div class="card-title">💾 数据管理</div>
       <div class="dim set-sub">所有数据（项目/分镜/成就/设置）都只存在这台设备的浏览器里。换电脑前记得导出备份。</div>
       <div class="modal-actions">
@@ -435,7 +467,7 @@ export function renderSettings(container) {
 
     <div class="card set-card about-card">
       <div class="card-title">🌙 关于</div>
-      <p>白日梦导演台 v1.24.0 · 纯前端 AI 影片导演工作台</p>
+      <p>白日梦导演台 v1.25.1 · 纯前端 AI 影片导演工作台</p>
       <p class="dim">剧本 → 分镜 → 运镜预演 → 动态分镜 → 剪辑 → 提示词 → 审核，一站式完成 AI 短片前期制作。<br>
       无后端、无追踪、无依赖，部署在 GitHub Pages 上，离线也能用。</p>
     </div>`;
@@ -478,6 +510,49 @@ export function renderSettings(container) {
   };
   const clearBtn = container.querySelector('#apiClear');
   if (clearBtn) clearBtn.onclick = () => { store.setSettings({ api: null }); toast('已清除 AI 接口配置'); renderSettings(container); };
+
+  /* ---------- 生图接口 ---------- */
+  const readImageApi = () => ({
+    mode: container.querySelector('#imgApiMode').value,
+    name: container.querySelector('#imgApiName').value.trim(),
+    url: container.querySelector('#imgApiUrl').value.trim(),
+    model: container.querySelector('#imgApiModel').value.trim(),
+    key: container.querySelector('#imgApiKey').value.trim(),
+    size: container.querySelector('#imgApiSize').value.trim() || '1024x1024',
+    responseFormat: container.querySelector('#imgApiFmt').value,
+    extra: container.querySelector('#imgApiExtra').value.trim(),
+  });
+  const istatus = container.querySelector('#imgApiStatus');
+  container.querySelector('#imgApiFree').onclick = () => {
+    container.querySelector('#imgApiMode').value = 'url';
+    container.querySelector('#imgApiName').value = 'Pollinations 免费';
+    container.querySelector('#imgApiUrl').value = 'https://image.pollinations.ai/prompt/{prompt}?width={w}&height={h}&nologo=true';
+    container.querySelector('#imgApiModel').value = '';
+    container.querySelector('#imgApiKey').value = '';
+    istatus.textContent = '已填好免费接口（不用密钥），点「保存」就能用；出图慢时多等几秒。';
+    toast('已填入免费接口，点「保存」', 'ok');
+  };
+  container.querySelector('#imgApiTest').onclick = async e => {
+    const btn = e.currentTarget;
+    btn.disabled = true; istatus.textContent = '正在真的画一张测试图…（10~60 秒）';
+    try {
+      const { testImageAPI } = await import('./ai-director.js');
+      istatus.textContent = '✅ ' + await testImageAPI(readImageApi());
+      istatus.className = 'api-status text-ok';
+    } catch (err) {
+      istatus.textContent = '❌ ' + err.message;
+      istatus.className = 'api-status text-bad';
+    } finally { btn.disabled = false; }
+  };
+  container.querySelector('#imgApiSave').onclick = () => {
+    const a = readImageApi();
+    const ok = a.url && (a.mode === 'url' || a.model);
+    store.setSettings({ imageApi: ok ? a : null });
+    toast(ok ? '生图接口已保存 ✅' : '地址/模型没填全，已清空配置', ok ? 'ok' : 'warn');
+    renderSettings(container);
+  };
+  const iclear = container.querySelector('#imgApiClear');
+  if (iclear) iclear.onclick = () => { store.setSettings({ imageApi: null }); toast('已清除生图接口配置'); renderSettings(container); };
 
   container.querySelector('#dataExport').onclick = () => {
     const data = JSON.stringify(store.exportAll(), null, 2);

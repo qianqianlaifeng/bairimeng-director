@@ -9,7 +9,7 @@ const LS = {
   settings: 'bdm_settings_v1',
   projects: 'bdm_projects_v1',
   achv: 'bdm_achv_v1',
-  tutorial: 'bdm_tutorial_v1',
+  tutorial: 'bdm_tutorial_v2',
 };
 
 /* ---------------- 工具 ---------------- */
@@ -39,7 +39,8 @@ const DEFAULT_SETTINGS = {
   bgMask: 40,
   effects: true,       // 动效全开
   noise: false,        // 噪点质感（默认关闭）
-  api: null,           // {name,url,model,key}
+  api: null,           // {name,url,model,key} 文本/视觉接口
+  imageApi: null,      // {mode,name,url,model,key,size,responseFormat,extra} 生图接口
   lastProjectId: null,
   uiRev: 2,            // 2 = 浅色红点缀视觉
 };

@@ -417,7 +417,17 @@ export function renderPreview(container, payload = {}) {
     const angle = container.querySelector('#pvAngle').value;
     const size = container.querySelector('#pvSize').value;
     const aimV = container.querySelector('#pvAim').value, camHV = container.querySelector('#pvCamH').value;
-    const fine = { aimY: aimV === 'auto' ? undefined : +aimV, camH: camHV === 'auto' ? undefined : +camHV };
+    /* 俯视示意图必须和主画面用同一套场景/焦点，否则搭过景的镜头在地图上是另一台机位 */
+    const sceneV2 = container.querySelector('#pvScene').value;
+    const usedScene = sceneV2 === '__shot__' ? builtScene : sceneV2;
+    const fRaw2 = container.querySelector('#pvFocus').value;
+    const fine = {
+      aimY: aimV === 'auto' ? undefined : +aimV,
+      camH: camHV === 'auto' ? undefined : +camHV,
+      scene: usedScene,
+      focus: focusValue(fRaw2, usedScene, aimV === 'auto' ? undefined : +aimV),
+      focusKind: fRaw2.split(':')[0],
+    };
     const action = container.querySelector('#pvAction').value;
     const dur = +container.querySelector('#pvDur').value || 4;
     const N = 48;
