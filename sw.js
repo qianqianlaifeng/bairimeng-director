@@ -1,5 +1,5 @@
 /* 白日梦导演台 · Service Worker（离线可用） */
-const CACHE = 'bdm-v75';
+const CACHE = 'bdm-v76';
 const ASSETS = [
   './',
   './index.html',
@@ -24,6 +24,7 @@ const ASSETS = [
   './js/mn-props.js',
   './js/mn-layout.js',
   './js/import-shots.js',
+  './js/h3-parse.js',
   './js/env-import.js',
   './js/env-import-ui.js',
   './js/tear-down.js',
