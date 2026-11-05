@@ -120,6 +120,7 @@ export function renderHome(container) {
         <div class="form-row"><label>画幅</label>
           <div class="aspect-picker" id="npAspect">
             <button class="aspect-opt selected" data-v="16:9"><span class="ar ar-169"></span>横屏 16:9<div class="aspect-sub">长视频 / B 站</div></button>
+            <button class="aspect-opt" data-v="21:9"><span class="ar ar-219"></span>宽银幕 21:9<div class="aspect-sub">电影 / 预告片</div></button>
             <button class="aspect-opt" data-v="9:16"><span class="ar ar-916"></span>竖屏 9:16<div class="aspect-sub">短剧 / 抖音</div></button>
             <button class="aspect-opt" data-v="1:1"><span class="ar ar-11"></span>方形 1:1<div class="aspect-sub">社交 / 贴图</div></button>
           </div>
