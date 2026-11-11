@@ -1,5 +1,5 @@
 /* 白日梦导演台 · Service Worker（离线可用） */
-const CACHE = 'bdm-v83-swsafe';
+const CACHE = 'bdm-v84-ai3d';
 const ASSETS = [
   './',
   './index.html',
@@ -7,8 +7,10 @@ const ASSETS = [
   './css/style.css',
   './css/miaoning.css',
   './css/ai-director.css',
+  './css/ai3d.css',
   './js/app.js',
   './js/views-ai.js',
+  './js/views-ai3d.js',
   './js/ai-director.js',
   './js/mn-props-extra.js',
   './js/data.js',

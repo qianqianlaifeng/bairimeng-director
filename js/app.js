@@ -11,6 +11,7 @@ import { initViewsPlayer, renderAnimatic, renderEditor } from './views-player.js
 import { initViewsTools, renderPrompts, renderReview, renderAchievements, renderSettings, openProjectExport } from './views-tools.js';
 import { initViewsTeardown, renderTeardown } from './views-teardown.js';
 import { initViewsAi, renderAiDirector } from './views-ai.js';
+import { initViewsAi3d, renderAi3d } from './views-ai3d.js';
 
 /* ---------- 初始化 ---------- */
 const store = new Store();
@@ -21,10 +22,12 @@ initViewsPlayer(store);
 initViewsTools(store);
 initViewsTeardown(store);
 initViewsAi(store);
+initViewsAi3d(store);
 
 const VIEWS = {
   home:        { title: '项目台',   icon: '🏠', render: renderHome,        group: '创作' },
   aiDirector:  { title: 'AI 导演台', icon: '🤖', render: renderAiDirector, group: '创作', needProject: true },
+  ai3d:        { title: 'AI 3D 预演', icon: '🧊', render: renderAi3d, group: '创作', needProject: true },
   script:      { title: '剧本',     icon: '📜', render: renderScript,      group: '创作', needProject: true },
   storyboard:  { title: '分镜板',   icon: '🎞️', render: renderStoryboard,  group: '创作', needProject: true },
   scenes:      { title: '场景库',   icon: '🏗', render: renderScenes,      group: '创作', needProject: true },
