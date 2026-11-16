@@ -29,7 +29,7 @@
   background: var(--input-bg); cursor: crosshair; touch-action: none;
 }
 .a3-walk-btns { display: flex; flex-wrap: wrap; gap: 5px; margin: 9px 0 10px; }
-.a3-walk-btns .btn-xs { font-size: 11px; padding: 4px 7px; }
+.a3-walk-btns .btn-xs { font-size: 11px; padding: 5px 11px; gap: 4px; white-space: nowrap; }
 .a3-check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dim); margin-top: 8px; cursor: pointer; }
 
 /* 3D 舞台 */
@@ -74,7 +74,7 @@
 .a3-take-top .dim { font-size: 10px; }
 .a3-take-meta { font-size: 10.5px; line-height: 1.5; margin: 4px 0 7px; }
 .a3-take-btns { display: flex; gap: 4px; flex-wrap: wrap; }
-.a3-take-btns .btn-xs { font-size: 10.5px; padding: 3px 6px; }
+.a3-take-btns .btn-xs { font-size: 10.5px; padding: 4px 10px; gap: 4px; white-space: nowrap; }
 .a3-exit { margin-top: 10px; }
 
 .a3-help p { font-size: 13px; line-height: 1.8; margin: 0 0 10px; }
