@@ -80,7 +80,7 @@ const appEl = el(`<div class="app">
       <button class="btn btn-ghost btn-sm" id="btnCheckin">📅 签到</button>
     </header>
     <div class="content" id="viewRoot"></div>
-    <footer class="foot dim">白日梦导演台 v1.25.2 · AI 导演台一键开拍 / 91 种道具 / 特写取景修复 / 资产图故事板 / 自定义生图接口 / 全新分组教程 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
+    <footer class="foot dim">白日梦导演台 v1.25.3 · 建模升级：圆截面道具 / 壁挂件安装高度 / 坐面高度校准 / 全库几何除闪纹 · 数据仅存于本机浏览器 · 纯前端，可离线使用</footer>
   </main>
 </div>`);
 document.body.appendChild(appEl);

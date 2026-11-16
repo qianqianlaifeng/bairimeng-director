@@ -361,6 +361,41 @@
       for (const k of [0, 1, 2, 0, 2, 3]) { const p = wp[k]; g.pos.push(p[0], p[1], p[2]); g.nrm.push(wn[0], wn[1], wn[2]); g.col.push(col[0], col[1], col[2]); }
     }
   }
+  /* 圆柱 / 椭圆柱：道具库标了 cyl 的部件（圆桌、圆凳、花瓶、树冠、柱子、灯笼…）
+     走这里，截面真的圆。hw/hd = 半径，hh = 半高，loc 与 pushBox 同义。
+     法线按椭圆逐顶点算，转动时不会出现方盒的硬边。 */
+  function pushCyl(g, hw, hh, hd, a, tx, ty, tz, col, loc, seg, ax) {
+    const N = seg || 16;
+    const lx = loc ? loc[0] : 0, ly = loc ? loc[1] : 0, lz = loc ? loc[2] : 0;
+    /* ax='z'：横置圆柱（车轮）—— 圆在 XY 平面里，沿 Z 挤出；
+       默认竖置：圆在 XZ 平面里，沿 Y 挤出。s 是沿轴方向的 -1..1。 */
+    const pt = ax === 'z'
+      ? (t, s) => tfPoint(a, tx, ty, tz, [lx + Math.cos(t) * hw, ly + Math.sin(t) * hh, lz + s * hd])
+      : (t, s) => tfPoint(a, tx, ty, tz, [lx + Math.cos(t) * hw, ly + s * hh, lz + Math.sin(t) * hd]);
+    const nr = ax === 'z'
+      ? t => tfDir(a, norm([Math.cos(t) / Math.max(0.004, hw), Math.sin(t) / Math.max(0.004, hh), 0]))
+      : t => tfDir(a, norm([Math.cos(t) / Math.max(0.004, hw), 0, Math.sin(t) / Math.max(0.004, hd)]));
+    for (let i = 0; i < N; i++) {
+      const t0 = (i / N) * TAU, t1 = ((i + 1) / N) * TAU;
+      const n0 = nr(t0), n1 = nr(t1);
+      const b0 = pt(t0, -1), b1 = pt(t1, -1), u0 = pt(t0, 1), u1 = pt(t1, 1);
+      for (const [q, n] of [[b0, n0], [b1, n1], [u1, n1], [b0, n0], [u1, n1], [u0, n0]]) {
+        g.pos.push(q[0], q[1], q[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]);
+      }
+    }
+    const cap = (s, up) => {
+      const n = tfDir(a, ax === 'z' ? [0, 0, up ? 1 : -1] : [0, up ? 1 : -1, 0]);
+      const c = pt(0, s);
+      for (let i = 0; i < N; i++) {
+        const t0 = (i / N) * TAU, t1 = ((i + 1) / N) * TAU;
+        const q0 = pt(t0, s), q1 = pt(t1, s);
+        for (const q of [c, up ? q0 : q1, up ? q1 : q0]) {
+          g.pos.push(q[0], q[1], q[2]); g.nrm.push(n[0], n[1], n[2]); g.col.push(col[0], col[1], col[2]);
+        }
+      }
+    };
+    cap(-1, false); cap(1, true);
+  }
   function pushFloor(g, x0, z0, x1, z1, col, y) {
     y = (y == null ? 0.02 : y);
     const p = [[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]], n = [0, 1, 0];
@@ -643,17 +678,26 @@
       const roleCol = c => c === 'dark' ? base.map(v => v * 0.58)
         : c === 'light' ? base.map(v => Math.min(1, v + (1 - v) * 0.45))
           : c === 'accent' ? accent : base;
+      /* elev：壁挂类道具（挂画/空调/挂钟/吊灯…）整件抬到安装高度，
+         否则它们只能躺在地上。按 h 比例缩放，改尺寸时也跟得上。 */
+      const elev = K && K.elev ? K.elev * (K.h ? ph / K.h : 1) : 0;
       if (K && K.parts) {
         const sx = K.w ? pw / K.w : 1, sy = K.h ? ph / K.h : 1, sz = K.d ? pd / K.d : 1;
         for (const pt of K.parts()) {
           const hw = Math.max(0.004, pt.w * sx / 2), hh = Math.max(0.004, pt.h * sy / 2), hd = Math.max(0.004, pt.d * sz / 2);
-          pushBox(g, hw, hh, hd, yaw, ct.x, 0, ct.y, roleCol(pt.c),
-            [pt.x * sx, (pt.y * sy) + hh, pt.z * sz]);
+          const loc = [pt.x * sx, (pt.y * sy) + hh + elev, pt.z * sz];
+          /* cyl：截面圆（圆桌/花瓶/树冠/柱子…）—— 以前只有 2D 画圆、3D 是方盒子 */
+          /* 横置圆柱（ax='z'，如车轮）：pt.w = 直径(横向)、pt.h = 直径(竖向)、pt.d = 轮宽 */
+          if (pt.cyl && pt.ax === 'z') pushCyl(g, hw, hh, hd, yaw, ct.x, 0, ct.y, roleCol(pt.c), loc, 20, 'z');
+          else if (pt.cyl) pushCyl(g, hw, hh, hd, yaw, ct.x, 0, ct.y, roleCol(pt.c), loc, 16);
+          else pushBox(g, hw, hh, hd, yaw, ct.x, 0, ct.y, roleCol(pt.c), loc);
         }
       } else {
-        pushBox(g, pw / 2, ph / 2, pd / 2, yaw, ct.x, 0, ct.y, base, [0, ph / 2, 0]);
+        pushBox(g, pw / 2, ph / 2, pd / 2, yaw, ct.x, 0, ct.y, base, [0, ph / 2 + elev, 0]);
       }
-      pushDisc(g, ct.x, ct.y, Math.max(0.14, pw * 0.62), Math.max(0.14, pd * 0.62), SHADOW_Y);
+      /* 壁挂/吊装的道具不在地上留接触阴影（阴影盘在 y=0，挂在 2m 高的东西
+         底下出现一块暗斑很假） */
+      if (elev < 0.35) pushDisc(g, ct.x, ct.y, Math.max(0.14, pw * 0.62), Math.max(0.14, pd * 0.62), SHADOW_Y);
     }
     for (const p of sc.persons) {
       if (p.hidden) continue;

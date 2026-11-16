@@ -116,10 +116,17 @@ function kindPropPolys(o) {
   if (!K || !K.parts) return null;
   const pw = Math.abs(+o.w || K.w || 1), pd = Math.abs(+o.d || K.d || 1), ph = Math.abs(+o.h || K.h || 1);
   const sx = K.w ? pw / K.w : 1, sy = K.h ? ph / K.h : 1, sz = K.d ? pd / K.d : 1;
+  const elev = K.elev ? K.elev * sy : 0;   // 壁挂件抬到安装高度（与 3D 一致）
   let polys = [];
   for (const pt of K.parts()) {
     const w = Math.max(0.008, pt.w * sx), h = Math.max(0.008, pt.h * sy), d = Math.max(0.008, pt.d * sz);
-    polys = polys.concat(boxPolys(pt.x * sx, (pt.y * sy) + h / 2, pt.z * sz, w, h, d, KIND_SHADE[pt.c] || 0.9));
+    const shade = KIND_SHADE[pt.c] || 0.9;
+    /* 白模预演与 3D 导演台保持一致：cyl 部件是圆截面（圆桌/花瓶/树冠/柱子…）。
+       frustumPolys 的 cy 是「底面」高度，boxPolys 的 cy 是「中心」高度 —— 不能混用。
+       横置圆柱（车轮）白模里仍用方盒，属于构图用的中性低模。 */
+    polys = (pt.cyl && pt.ax !== 'z')
+      ? polys.concat(frustumPolys(pt.x * sx, (pt.y * sy) + elev, pt.z * sz, w / 2, w / 2, h, 16, shade))
+      : polys.concat(boxPolys(pt.x * sx, (pt.y * sy) + elev + h / 2, pt.z * sz, w, h, d, shade));
   }
   return polys;
 }
