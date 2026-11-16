@@ -304,6 +304,62 @@ const TEMPLATES = [
   { name: '客厅', ico: 'box', make: () => { const s = blankState('客厅'); const R = (n, x, y, w, d) => ({ id: uid(), name: n, x, y, w, d, h: 4, color: '' }); const W = (a, b, c, d) => ({ id: uid(), name: '', x1: a, y1: b, x2: c, y2: d, h: 2.6, holes: [] }); s.scene.rooms = [R('会客区', 1, 1, 8, 6), R('电视墙', 10, 1, 4, 6), R('餐厅', 1, 8, 5, 4), R('走廊', 7, 8, 7, 4)]; s.scene.walls = [W(1, 1, 1, 12), W(14, 1, 14, 12), W(1, 1, 14, 1), W(1, 12, 14, 12), W(9.5, 1, 9.5, 7.5), W(1, 7.5, 13.5, 7.5)]; s.scene.walls.forEach((w, i) => w.name = '墙面 ' + (i + 1)); s.scene.props = [{ id: uid(), name: '沙发', x: 2, y: 2, w: 3, d: 1.2, h: 0.8, color: '#8a9b8e' }, { id: uid(), name: '茶几', x: 3, y: 4, w: 1.6, d: 1, h: 0.45, color: '#d9b382' }]; return s; } },
   { name: '厨房', ico: 'box', make: () => { const s = blankState('厨房'); const R = (n, x, y, w, d) => ({ id: uid(), name: n, x, y, w, d, h: 4, color: '' }); const W = (a, b, c, d) => ({ id: uid(), name: '', x1: a, y1: b, x2: c, y2: d, h: 2.6, holes: [] }); s.scene.rooms = [R('灶台', 1, 1, 6, 2), R('水槽', 8, 1, 4, 2), R('操作台', 1, 4, 5, 2), R('餐厅', 7, 4, 5, 4)]; s.scene.walls = [W(1, 1, 1, 8), W(12, 1, 12, 8), W(1, 1, 12, 1), W(1, 8, 12, 8), W(7.5, 1, 7.5, 3.5), W(1, 3.5, 11.5, 3.5)]; s.scene.walls.forEach((w, i) => w.name = '墙面 ' + (i + 1)); return s; } },
   { name: '卫浴', ico: 'door-open', make: () => { const s = blankState('卫浴'); const R = (n, x, y, w, d) => ({ id: uid(), name: n, x, y, w, d, h: 4, color: '' }); const W = (a, b, c, d) => ({ id: uid(), name: '', x1: a, y1: b, x2: c, y2: d, h: 2.6, holes: [] }); s.scene.rooms = [R('浴缸', 1, 1, 4, 3), R('马桶', 6, 1, 2, 2), R('洗手台', 9, 1, 3, 2), R('过道', 1, 5, 11, 2)]; s.scene.walls = [W(1, 1, 1, 7), W(12, 1, 12, 7), W(1, 1, 12, 1), W(1, 7, 12, 7), W(5.5, 1, 5.5, 4), W(8.5, 1, 8.5, 4), W(1, 4.5, 11.5, 4.5)]; s.scene.walls.forEach((w, i) => w.name = '墙面 ' + (i + 1)); return s; } },
+  { name: '建模样板间', ico: 'box', make: () => {
+    /* 建模优化展示厅：一件一区，摆的全是这轮修过的模型 ——
+       圆桌/圆凳/花瓶/树（cyl 圆柱截面）、汽车（车轮接地）、楼梯（实心踏步）、
+       沙发/床/扶手椅（坐面高度校准）、挂画/空调/吊灯（elev 壁挂安装高度）、
+       上下铺（上铺床垫+护栏）、电视（屏幕层）… */
+    const s = blankState('建模样板间');
+    const R = (n, x, y, w, d) => ({ id: uid(), name: n, x, y, w, d, h: 4, color: '' });
+    const W = (x1, y1, x2, y2) => ({ id: uid(), name: '', x1, y1, x2, y2, h: 2.8, holes: [] });
+    s.scene.rooms = [R('展示厅', 1, 1, 14, 10)];
+    s.scene.walls = [W(1, 1, 15, 1), W(15, 1, 15, 11), W(15, 11, 1, 11), W(1, 11, 1, 1)];
+    s.scene.walls.forEach((w, i) => w.name = '墙面 ' + (i + 1));
+    const Pp = (kind, name, x, y, w, d, h, rot, color) =>
+      ({ id: uid(), type: 'prop', kind, name, x, y, w, d, h, rot: rot || 0, color: color || '' });
+    s.scene.props = [
+      /* 左：圆桌 + 两把椅子（圆柱截面 + 坐面 0.50） */
+      Pp('roundtable', '圆桌', 2.4, 2.2, 1.1, 1.1, 0.75),
+      Pp('chair', '椅子', 2.5, 3.5, 0.5, 0.5, 0.92, 180),
+      Pp('chair', '椅子', 3.6, 2.2, 0.5, 0.5, 0.92, 90),
+      /* 左后：柱子 + 盆栽 + 花瓶（全圆柱） */
+      Pp('pillar', '柱子', 4.6, 1.4, 0.45, 0.45, 2.6),
+      Pp('plant', '盆栽', 5.6, 1.3, 0.5, 0.5, 0.82),
+      Pp('vase', '花瓶', 4.6, 2.4, 0.24, 0.24, 0.5),
+      /* 中：沙发 + 茶几（坐面 0.47） */
+      Pp('sofa', '沙发', 8.4, 2.0, 2.0, 0.85, 0.82, 180, '#8a9b8e'),
+      Pp('coffee', '茶几', 8.4, 3.4, 1.1, 0.6, 0.42),
+      /* 右：床 + 上下铺（坐面/床垫） */
+      Pp('bed', '床', 12.4, 2.6, 1.6, 2.0, 0.80, 0),
+      Pp('bunk', '上下铺', 12.6, 5.4, 2.0, 1.0, 1.9, 0),
+      /* 后墙：电视 + 挂画 + 空调（elev 安装高度） */
+      Pp('tv', '电视', 8.4, 1.06, 1.2, 0.12, 0.78, 0),
+      Pp('picture', '挂画', 5.2, 1.06, 1.0, 0.06, 0.7, 0),
+      Pp('ac', '空调', 11.4, 1.10, 0.9, 0.22, 0.3, 0),
+      /* 中上：吊灯（2.3m 悬吊） */
+      Pp('chandelier', '吊灯', 8.4, 5.0, 0.7, 0.7, 0.7, 0),
+      /* 前区：楼梯（实心踏步）+ 扶手椅 + 落地灯 */
+      Pp('stairs', '楼梯', 3.2, 8.6, 1.0, 2.2, 1.8, 0),
+      Pp('armchair', '扶手椅', 6.4, 8.4, 0.9, 0.9, 0.88, 180),
+      Pp('lamp', '落地灯', 7.6, 8.6, 0.4, 0.4, 1.46),
+      /* 门外空地：汽车（四轮落地）+ 树 */
+      Pp('car', '汽车', 11.0, 8.6, 4.4, 1.9, 1.5, 0, '#c93346'),
+      Pp('tree', '树', 14.0, 9.6, 1.2, 1.2, 2.9),
+    ];
+    /* 两个人物：一个站着、一个坐在沙发上，直接看坐面高度对不对 */
+    const A = (name, x, y, rot, color, extra) => Object.assign({
+      id: uid(), name, x, y, rot, color, scale: 1, build: '标准',
+      pose: '站立', face: 1, faceDir: 0, joints: {},
+    }, extra || {});
+    s.scene.persons = [
+      A('阿澈', 9.9, 3.9, 300, '#2e7cf6'),
+      A('小满', 8.0, 2.55, 180, '#e0524a', { pose: '坐下' }),
+    ];
+    s.scene.lights = [{ id: uid(), name: '主灯', x: 8.4, y: 5.0, h: 3.1, color: '#ffe9b0', on: true }];
+    /* 默认直接进 3D：这个模板就是用来看立体的 */
+    s.view = { mode: '3d', material: 'original', zoom: 1, x: 0, y: 0, grid: true, floorColor: true };
+    return s;
+  } },
   { name: '工作室', ico: 'film', make: () => { const s = blankState('工作室'); const R = (n, x, y, w, d) => ({ id: uid(), name: n, x, y, w, d, h: 4, color: '' }); const W = (a, b, c, d) => ({ id: uid(), name: '', x1: a, y1: b, x2: c, y2: d, h: 2.6, holes: [] }); s.scene.rooms = [R('工位 A', 1, 1, 5, 4), R('工位 B', 7, 1, 5, 4), R('会议角', 1, 6, 6, 5), R('器材架', 8, 6, 4, 5)]; s.scene.walls = [W(1, 1, 1, 11), W(13, 1, 13, 11), W(1, 1, 13, 1), W(1, 11, 13, 11), W(6.5, 1, 6.5, 5.5), W(1, 5.5, 12.5, 5.5), W(7.5, 5.5, 7.5, 11)]; s.scene.walls.forEach((w, i) => w.name = '墙面 ' + (i + 1)); return s; } },
 ];
 
@@ -3778,7 +3834,12 @@ function onKeyUp(e) {
 
 /* ---------- 总渲染 ---------- */
 function renderAll() {
-  renderLeft(); renderRight(); renderShots(); paint(); render3D();
+  renderLeft(); renderRight(); renderShots();
+  /* 画布显隐/按钮文案必须跟着 view.mode 走：套用模板或导入 AI 数据时，
+     view.mode 可能直接变成 '3d'，以前 renderAll 只调 paint()+render3D()，
+     结果 3D 画布还是 display:none、「立起来」按钮也没切——要手动点两下才出来。 */
+  const mode = (MN.state.view && MN.state.view.mode) === '3d' ? '3d' : '2d';
+  if (mode === '3d') setMode('3d'); else { paint(); render3D(); }
 }
 function fitView() {
   const st = $('#mnStage'); if (!st) { MN.view = { x: 80, y: 60, k: 1 }; return; }
