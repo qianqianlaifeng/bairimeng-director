@@ -264,7 +264,7 @@ const MN = {
 function blankState(title) {
   return {
     format: 'aistudio-director', version: 1,
-    scene: { title: title || '未命名画布', rooms: [], walls: [], props: [], persons: [], lights: [], ground: { color: '#ffffff', grid: true } },
+    scene: { title: title || '未命名画布', rooms: [], walls: [], props: [], persons: [], lights: [], markers: [], ground: { color: '#ffffff', grid: true } },
     view: { mode: '2d', material: 'original', zoom: 1, x: 0, y: 0, grid: true, floorColor: true },
     sun: { on: true, dir: 300, alt: 53 },
     camera: { size: '16:9', frame: false, cutaway: false, ceil: false, fov: 45 },
@@ -325,6 +325,7 @@ async function loadCanvas(id) {
     try { await dbPut('canvas:' + id, st); } catch (e) { /* 存储失败不打断，内存里照样能用 */ }
   }
   MN.state = st;
+  if (!MN.state.scene.markers) MN.state.scene.markers = [];   // 旧画布容错：地面标点
   MN.sel = null; MN.selList = []; MN.pending = null; MN.pathDraft = null;
   const stash = MN._undoStash[id];
   MN.undo = stash ? stash.u : []; MN.redo = stash ? stash.r : [];
@@ -434,6 +435,7 @@ function buildShell() {
               <button class="mn-material-ball original active" data-mat="original" title="原图"><i></i></button>
               <button class="mn-material-ball random" data-mat="random" title="随机"><i></i></button>
               <button class="mn-material-ball depth" data-mat="depth" title="深度"><i></i></button>
+              <button class="mn-material-ball white" data-mat="white" title="白模"><i></i></button>
             </div>
             <button class="mn-icon-btn" id="mnUndo" title="撤销">${icon('undo-2')}</button>
             <button class="mn-icon-btn" id="mnRedo" title="重做">${icon('redo-2')}</button>
@@ -477,7 +479,7 @@ function bindShell() {
     $$('#mnMaterials .mn-material-ball').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     if (MN.state) { MN.state.view.material = b.dataset.mat; saveSoon(); }
-    toast('材质：' + (b.dataset.mat === 'original' ? '原图' : b.dataset.mat === 'random' ? '随机' : '深度') + '（3D 视图生效）');
+    toast('材质：' + ({ original: '原图', random: '随机', depth: '深度', white: '白模' }[b.dataset.mat] || '原图') + '（3D 视图生效）');
     render3D();
   });
   const cv = $('#mnCanvas');
@@ -511,7 +513,7 @@ function bindShell() {
   const cv3 = $('#mn3d'); if (cv3) { cv3.style.display = 'none'; if (window.MN3D) { try { MN3D.ensure(cv3); } catch (e) { } } }
   /* 3D 视图里点地面直接放置（射线求交地面 → 世界 x,z） */
   if (window.MN3D) {
-    window.MN3D.isPlacing = () => !!(MN.pending || MN.tool === 'person' || MN.tool === 'light');
+    window.MN3D.isPlacing = () => !!(MN.pending || MN.tool === 'person' || MN.tool === 'light' || MN.tool === 'marker');
     window.MN3D.onSelect = (kind, id) => {
       if (!kind) { clearSel(); refreshSel(); return; }
       selectOnly(kind, id); refreshSel();
@@ -556,6 +558,7 @@ function bindShell() {
     window.MN3D.onPlace = (x, z) => {
       const px = snap(x), pz = snap(z);
       if (MN.pending) { placePending(px, pz); return; }
+      if (MN.tool === 'marker') { placeMarker(px, pz); return; }
       if (MN.tool === 'person' || MN.tool === 'light') {
         pushUndo();
         if (MN.tool === 'person') {
@@ -583,7 +586,7 @@ function setMode(mode) {
     if (c2) c2.style.display = 'none';
     if (c3) c3.style.display = 'block';
     const lb = document.querySelector('.mn3d-labels'); if (lb) lb.style.display = '';
-    if (c3) c3.style.cursor = MN.pending || MN.tool === 'person' || MN.tool === 'light' ? 'copy' : 'default';
+    if (c3) c3.style.cursor = MN.pending || MN.tool === 'person' || MN.tool === 'light' || MN.tool === 'marker' ? 'copy' : 'default';
     $('#mnModeBadge').textContent = '3D';
     $('#mnStageName').textContent = '立体布景';
     $('#mnStageSub').textContent = '左拖转视角 · 滚轮缩放 · 右键平移 / 菜单 · 选中后拖 ↻ 旋转（Q/E 微调 15°）';
@@ -624,11 +627,14 @@ const TOOLS = [
   { id: 'hole', name: '打洞', sub: '点一格，或拖一片', key: 'H', ico: 'door-open' },
   { id: 'person', name: '人物', sub: '放个小人，演不演随它', key: 'N', ico: 'user-round' },
   { id: 'path', name: '运动轨迹', sub: '给人物画一条走位线', key: 'P', ico: 'route' },
+  { id: 'marker', name: '地面标点', sub: '点一下记为 A/B/C，走位锚点', key: 'K', ico: 'crosshair' },
   { id: 'sun', name: '光影调节', sub: '太阳比我有前途', key: 'O', ico: 'sun' },
   { id: 'light', name: '额外光源', sub: '有光也不一定有用', key: 'I', ico: 'lightbulb' },
   { id: 'genie', name: '仙人模式', sub: '我超威！', key: 'J', ico: 'sparkles' },
   { id: 'motion', name: '运镜录制', sub: '镜头自己走。你歇着。', key: 'M', ico: 'clapperboard' },
   { id: 'cut', name: '剪辑台', sub: '剪两刀，凑一段。', key: 'E', ico: 'scissors' },
+  { id: 'timeline', name: '时间轴机位', sub: '机位排成段，硬切或平滑', key: 'T', ico: 'film' },
+  { id: 'agent', name: 'AI 导演助手', sub: '说需求，AI 帮你搭景走位', key: 'G', ico: 'bot' },
 ];
 
 function renderLeft() {
@@ -692,9 +698,11 @@ function setTool(id) {
   if (id === 'genie') { if (window.MN3) MN3.openGenie(); return; }
   if (id === 'motion') { if (window.MN3) MN3.openMotion(); return; }
   if (id === 'cut') { if (window.MN3) MN3.openCut(); return; }
+  if (id === 'timeline') { if (window.MN_STAGE) MN_STAGE.openTimeline(); else toast('舞台工具没加载，刷新试试'); return; }
+  if (id === 'agent') { if (window.MN_AGENT) MN_AGENT.toggle(); else toast('AI 助手没加载，刷新试试'); return; }
   MN.tool = id; MN.wallDraft = null; MN.pending = null; MN.pathDraft = null;
   renderToolList(); buildFloatTools(); paint();
-  const hints = { select: '点选 · 拖动移动 · 右键删除 · 空白拖动框选', room: '按住拖矩形 · 松手就是一间 · 接着画', wall: '点两下连线 · 斜着也行 · Esc 取消', prop: '拖一个矩形 · 块方的，里面空的', hole: '点一下墙 · 开出个门洞', person: '点一下 · 放个小人', pan: '拖着看 · 松手停' };
+  const hints = { select: '点选 · 拖动移动 · 右键删除 · 空白拖动框选', room: '按住拖矩形 · 松手就是一间 · 接着画', wall: '点两下连线 · 斜着也行 · Esc 取消', prop: '拖一个矩形 · 块方的，里面空的', hole: '点一下墙 · 开出个门洞', person: '点一下 · 放个小人', marker: '点一下地面 · 记为点 A/B/C · 选中后可拖动改位置', pan: '拖着看 · 松手停' };
   $('#mnHint').innerHTML = `${icon('mouse-pointer-2', 's14')}<span>${hints[id] || ''}</span>`;
 }
 
@@ -763,6 +771,7 @@ function renderTree() {
     { key: '人物', items: sc.persons.map(o => ({ ...o, _k: 'person' })) },
     { key: '光源', items: sc.lights.map(o => ({ ...o, _k: 'light' })) },
     { key: '造物', items: sc.props.map(o => ({ ...o, _k: 'prop' })) },
+    { key: '标点', items: (sc.markers || []).map(o => ({ ...o, _k: 'marker' })) },
   ];
   /* 自定义分组：只存引用（kind:id），不搬动物体，删分组也不会删东西 */
   (sc.customGroups || []).forEach(cg => {
@@ -794,7 +803,7 @@ function renderTree() {
         </span></div>`;
     if (open) html += `<div class="mn-tree-kids">` + items.map(o => {
       const sel = MN.sel && MN.sel.kind === o._k && MN.sel.id === o.id;
-      const dot = o._k === 'person' ? (o.color || '#2e7cf6') : o._k === 'prop' ? (o.color || '#d9b382') : o._k === 'light' ? '#f5b301' : o._k === 'room' ? '#9db4c0' : '#5b564e';
+      const dot = o._k === 'person' ? (o.color || '#2e7cf6') : o._k === 'prop' ? (o.color || '#d9b382') : o._k === 'light' ? '#f5b301' : o._k === 'marker' ? (o.color || '#ff7a45') : o._k === 'room' ? '#9db4c0' : '#5b564e';
       return `<div class="mn-tree-row ${sel ? 'sel' : ''}" data-obj="${o._k}:${o.id}" style="${o.hidden ? 'opacity:.45' : ''}">
         <button class="mn-grip">${icon('grip-vertical', 's14')}</button>
         <button class="mn-obj-name"><span class="mn-obj-dot" style="background:${dot}"></span><span>${esc(o.name || '未命名')}</span></button>
@@ -874,7 +883,7 @@ function toggleGroupVis(key) {
     const g = (sc.customGroups || []).find(x => x.name === nm);
     arr = (g ? g.ids : []).map(k => { const [kind, id] = String(k).split(':'); return findObj(kind, id); }).filter(Boolean);
   } else {
-    arr = key === '场景' ? [...sc.rooms, ...sc.walls] : key === '人物' ? sc.persons : key === '光源' ? sc.lights : sc.props;
+    arr = key === '场景' ? [...sc.rooms, ...sc.walls] : key === '人物' ? sc.persons : key === '光源' ? sc.lights : key === '标点' ? (sc.markers || []) : sc.props;
   }
   const anyShow = arr.some(o => !o.hidden);
   arr.forEach(o => o.hidden = anyShow);
@@ -893,13 +902,31 @@ function delGroup(key) {
   if (key === '场景') { sc.rooms = []; sc.walls = []; }
   else if (key === '人物') sc.persons = [];
   else if (key === '光源') sc.lights = [];
+  else if (key === '标点') sc.markers = [];
   else sc.props = [];
   MN.sel = null; renderAll(); saveSoon();
 }
 function findObj(kind, id) {
   const sc = MN.state.scene;
-  const arr = kind === 'room' ? sc.rooms : kind === 'wall' ? sc.walls : kind === 'prop' ? sc.props : kind === 'person' ? sc.persons : sc.lights;
+  const arr = kind === 'room' ? sc.rooms : kind === 'wall' ? sc.walls : kind === 'prop' ? sc.props : kind === 'person' ? sc.persons : kind === 'marker' ? (sc.markers || []) : sc.lights;
   return arr.find(o => o.id === id);
+}
+/* ---------- 地面标点（走位锚点 A/B/C…） ---------- */
+function nextMarkerName() {
+  const used = (MN.state.scene.markers || []).map(m => m.name);
+  for (let i = 0; i < 26; i++) { const L = String.fromCharCode(65 + i); if (used.indexOf(L) < 0) return L; }
+  return '点 ' + ((MN.state.scene.markers || []).length + 1);
+}
+function placeMarker(px, pz, name) {
+  const sc = MN.state.scene;
+  sc.markers = sc.markers || [];
+  pushUndo();
+  const nm = (name && String(name).trim()) || nextMarkerName();
+  const o = { id: uid(), name: nm, x: px, y: pz, color: '#ff7a45', hidden: false };
+  sc.markers.push(o);
+  selectOnly('marker', o.id); refreshSel(); saveSoon(); paint();
+  toast('已记为点 ' + nm + '（' + px + ', ' + pz + '）· 右侧面板可改名/坐标/颜色');
+  return o;
 }
 /* ---------- 锁定 ----------
    锁定后仍可选中、看属性、改颜色，但不能拖、不能删、不参与自动避让。
@@ -922,6 +949,7 @@ function delObj(kind, id) {
   else if (kind === 'wall') sc.walls = sc.walls.filter(o => o.id !== id);
   else if (kind === 'prop') sc.props = sc.props.filter(o => o.id !== id);
   else if (kind === 'person') sc.persons = sc.persons.filter(o => o.id !== id);
+  else if (kind === 'marker') sc.markers = (sc.markers || []).filter(o => o.id !== id);
   else sc.lights = sc.lights.filter(o => o.id !== id);
   if (MN.sel && MN.sel.id === id) MN.sel = null;
 }
@@ -1604,6 +1632,20 @@ function renderObjPanel() {
     <label class="mn-field"><span>人脸朝向<strong>${o.faceDir || 0}°</strong></span><input type="range" class="mn-range" data-f="faceDir" min="0" max="360" step="15" value="${o.faceDir || 0}" /></label>
     <label class="mn-field"><span>跳跃高度<strong>${o.jump || 0}</strong></span><input type="range" class="mn-range" data-f="jump" min="0" max="3" step="0.1" value="${o.jump || 0}" /></label>
   </section>`;
+  if (sel.kind === 'marker') return `<section class="mn-prop">${head}
+    <label class="mn-field"><span>点名（走位口令里用它，如「跑到 A 点」）</span><input type="text" data-f="name" value="${esc(o.name)}" /></label>
+    <div class="mn-num3">
+      <label class="mn-field"><span>位置 X</span><input type="number" step="0.5" data-f="x" value="${o.x}" /></label>
+      <label class="mn-field"><span>位置 Y</span><input type="number" step="0.5" data-f="y" value="${o.y}" /></label>
+    </div>
+    <label class="mn-field"><span>颜色</span></label>${swatches(['#ff7a45', '#2e7cf6', '#27ae60', '#f5b301', '#9b59b6', '#e74c3c'], o.color, 'color')}
+    <label class="mn-field mn-color-row"><span>自定义颜色 <b class="mn-color-now" style="background:${o.color || '#ff7a45'}"></b><code>${esc(o.color || '#ff7a45')}</code></span><input type="color" class="mn-color" data-f="color" value="${o.color || '#ff7a45'}" /></label>
+    <label class="mn-field"><span>备注</span><input type="text" data-f="note" value="${esc(o.note || '')}" placeholder="这个点是干嘛的（可选）" /></label>
+    <div class="mn-chip-row">
+      <button class="mn-chip" data-act="markerperson" title="把选中人物挪到这个点（没有选中人物则放一个新人物）">${icon('user-round', 's12')}人物站到这里</button>
+      <button class="mn-chip" data-act="markerwalk" title="让选中人物从这个点走到画布上他现在的位置（生成走位关键帧）">${icon('route', 's12')}从这里出发走位</button>
+    </div>
+  </section>`;
   /* light */
   return `<section class="mn-prop">${head}
     <label class="mn-field"><span>名称</span><input type="text" data-f="name" value="${esc(o.name)}" /></label>
@@ -1787,6 +1829,34 @@ function bindObjPanel() {
         o.path = r.pts; renderRight(); paint(); saveSoon();
         toast(`已绕开家具：${o.path.length} 个点（新增 ${r.added} 个拐点）`, 'ok');
       } else toast('这条线没有穿过任何东西');
+    }
+    else if (a === 'markerperson') {
+      pushUndo();
+      let p = (MN.state.scene.persons || [])[0];
+      const ps = selList().filter(s => s.kind === 'person');
+      if (ps.length) p = findObj('person', ps[0].id);
+      if (!p) {
+        p = { id: uid(), name: '人物 ' + ((MN.state.scene.persons || []).length + 1), x: o.x, y: o.y, rot: 0, color: '#2e7cf6', pose: '站立', face: 1, faceDir: 0, jump: 0 };
+        MN.state.scene.persons.push(p);
+      } else { p.x = o.x; p.y = o.y; delete p.path; if (p.sitOn) standUp(p); }
+      selectOnly('person', p.id); renderAll(); saveSoon();
+      toast('「' + (p.name || '人物') + '」已站到点 ' + o.name, 'ok');
+    }
+    else if (a === 'markerwalk') {
+      let p = null;
+      const ps = selList().filter(s => s.kind === 'person');
+      if (ps.length) p = findObj('person', ps[0].id);
+      if (!p) p = (MN.state.scene.persons || [])[0];
+      if (!p) { toast('场景里还没有人物，先放一个（快捷键 N）', 'warn'); return; }
+      if (Math.hypot(p.x - o.x, p.y - o.y) < 0.3) { toast('人物已经在这个点上了，先把他拖到终点再试', 'warn'); return; }
+      pushUndo();
+      const end = { x: p.x, y: p.y };
+      p.path = [{ x: o.x, y: o.y }, end];
+      p.x = o.x; p.y = o.y; p.pose = '走路';
+      if (!p.speed) p.speed = 1.2;
+      selectOnly('person', p.id); renderAll(); saveSoon();
+      if (window.MN_STAGE && MN_STAGE.playWalk) MN_STAGE.playWalk(p.id);
+      toast('已生成走位：' + (p.name || '人物') + ' 从点 ' + o.name + ' 走到 (' + end.x + ', ' + end.y + ')，正在播放', 'ok');
     }
     else if (a === 'copy') { copySel(); }
     else if (a === 'paste') { pasteClip(1, 1); }
@@ -2404,6 +2474,26 @@ function doPaint() {
     ctx.restore();
   }
 
+  /* 地面标点（走位锚点 A/B/C） */
+  for (const mk of (sc.markers || [])) {
+    if (mk.hidden) continue;
+    const q = w2s(mk.x, mk.y);
+    const r = Math.max(9, 0.32 * C);
+    ctx.save();
+    ctx.strokeStyle = mk.color || '#ff7a45'; ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.arc(q.x, q.y, r + 4, 0, 7); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = mk.color || '#ff7a45';
+    ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold ' + Math.max(10, r) + 'px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(mk.name || '?').slice(0, 3), q.x, q.y + 0.5);
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+    ctx.restore();
+    if (isSel('marker', mk.id)) selRect(q.x - r - 7, q.y - r - 7, (r + 7) * 2, (r + 7) * 2);
+  }
+
   /* 光源 */
   for (const l of sc.lights) {    if (l.hidden) continue;
     const q = w2s(l.x, l.y);
@@ -2497,6 +2587,7 @@ function isSel(kind, id) { return inSel(kind, id); }
 function hitTest(wx, wy) {
   const sc = MN.state.scene;
   const near = (a, b, t) => Math.abs(a - b) <= t;
+  for (const mk of (sc.markers || [])) if (!mk.hidden && near(mk.x, wx, 0.5) && near(mk.y, wy, 0.5)) return { kind: 'marker', id: mk.id };
   for (const l of sc.lights) if (!l.hidden && near(l.x, wx, 0.5) && near(l.y, wy, 0.5)) return { kind: 'light', id: l.id };
   for (const p of sc.persons) if (!p.hidden && near(p.x, wx, 0.5) && near(p.y, wy, 0.5)) return { kind: 'person', id: p.id };
   for (const p of sc.props) { if (p.hidden) continue; const b = window.MN_propAABB(p); if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.d) return { kind: 'prop', id: p.id }; }
@@ -2584,6 +2675,7 @@ function objectsInRect(x0, y0, x1, y1) {
   sc.walls.forEach(o => { if (!o.hidden && inter(Math.min(o.x1, o.x2), Math.min(o.y1, o.y2), Math.abs(o.x2 - o.x1), Math.abs(o.y2 - o.y1))) out.push({ kind: 'wall', id: o.id }); });
   sc.persons.forEach(o => { if (!o.hidden && inside(o.x, o.y)) out.push({ kind: 'person', id: o.id }); });
   sc.lights.forEach(o => { if (!o.hidden && inside(o.x, o.y)) out.push({ kind: 'light', id: o.id }); });
+  (sc.markers || []).forEach(o => { if (!o.hidden && inside(o.x, o.y)) out.push({ kind: 'marker', id: o.id }); });
   return out;
 }
 
@@ -2880,6 +2972,10 @@ function onPtrDown(e) {
     refreshSel(); saveSoon(); paint();
     return;
   }
+  if (tool === 'marker') {
+    placeMarker(snap(w.x), snap(w.y));
+    return;
+  }
 }
 function onPtrMove(e) {
   const r = cv.getBoundingClientRect();
@@ -3061,6 +3157,7 @@ function pasteClip(dx, dy) {
     else if (kind === 'room') { c.x += dx; c.y += dy; MN.state.scene.rooms.push(c); }
     else if (kind === 'light') { c.x += dx; c.y += dy; MN.state.scene.lights.push(c); }
     else if (kind === 'person') { c.x += dx; c.y += dy; MN.state.scene.persons.push(c); }
+    else if (kind === 'marker') { c.x += dx; c.y += dy; c.name = nextMarkerName(); (MN.state.scene.markers = MN.state.scene.markers || []).push(c); }
     else { c.x += dx; c.y += dy; MN.state.scene.props.push(c); }
     added.push({ kind, id: c.id });
   });
@@ -3082,7 +3179,7 @@ function renameSel() {
   const o = findObj(s.kind, s.id); if (!o) return;
   /* 2026-10-27：原来用浏览器原生 prompt()，部分环境（webview/嵌入/被策略拦截）会直接返回 null，
      表现为「点重命名没反应」。改用应用内弹窗，任何环境都稳。 */
-  const kindName = { room: '房间', wall: '墙', prop: '造物', person: '人物', light: '光源' }[s.kind] || '物体';
+  const kindName = { room: '房间', wall: '墙', prop: '造物', person: '人物', light: '光源', marker: '标点' }[s.kind] || '物体';
   const m = openModal('改个名字', kindName,
     `<label class="mn-field"><span>名称</span><input type="text" id="mnRenameInput" value="${esc(o.name || '')}" maxlength="20" placeholder="给它起个名字" /></label>`,
     [
@@ -3105,7 +3202,7 @@ function renameSel() {
 function bringFront() {
   const s = MN.sel; if (!s) return;
   const sc = MN.state.scene;
-  const arr = s.kind === 'room' ? sc.rooms : s.kind === 'prop' ? sc.props : s.kind === 'person' ? sc.persons : s.kind === 'wall' ? sc.walls : sc.lights;
+  const arr = s.kind === 'room' ? sc.rooms : s.kind === 'prop' ? sc.props : s.kind === 'person' ? sc.persons : s.kind === 'wall' ? sc.walls : s.kind === 'marker' ? (sc.markers || []) : sc.lights;
   const i = arr.findIndex(o => o.id === s.id); if (i < 0 || i === arr.length - 1) return;
   pushUndo(); arr.push(arr.splice(i, 1)[0]); renderTree(); paint(); saveSoon();
   toast('已置顶');
@@ -3137,6 +3234,7 @@ function selectAll() {
   sc.props.forEach(o => { if (!o.hidden) list.push({ kind: 'prop', id: o.id }); });
   sc.persons.forEach(o => { if (!o.hidden) list.push({ kind: 'person', id: o.id }); });
   sc.lights.forEach(o => { if (!o.hidden) list.push({ kind: 'light', id: o.id }); });
+  (sc.markers || []).forEach(o => { if (!o.hidden) list.push({ kind: 'marker', id: o.id }); });
   MN.selList = list; MN.sel = list[list.length - 1] || null;
   refreshSel();
   toast('全选 ' + list.length + ' 个');
@@ -3245,7 +3343,7 @@ function normPerson(p, i, center) {
 function normScene(sc) {
   const out = {
     title: strOr(sc.title, '未命名画布', 30),
-    rooms: [], walls: [], props: [], persons: [], lights: [],
+    rooms: [], walls: [], props: [], persons: [], lights: [], markers: [],
     ground: Object.assign({ color: '#ffffff', grid: true }, sc.ground || {}),
   };
   arrOf(sc.rooms).forEach((r, i) => out.rooms.push({
@@ -3268,6 +3366,11 @@ function normScene(sc) {
     /* 高度和强度也要跟着导入走，否则壁炉的暖光、吊灯的顶光、窗外的月光全是一个高度一个亮度 */
     h: clamp(numOr(l.h, 2.5), 0.05, 6), intensity: clamp(numOr(l.intensity, 1), 0, 3),
     light: true,
+  }));
+  arrOf(sc.markers).forEach((m, i) => out.markers.push({
+    id: m.id || uid(), name: strOr(m.name, String.fromCharCode(65 + Math.min(i, 25)), 8),
+    x: numOr(m.x, 0), y: numOr(m.y, 0), color: m.color || '#ff7a45',
+    hidden: !!m.hidden, note: strOr(m.note, '', 40),
   }));
   return out;
 }
@@ -3449,13 +3552,14 @@ function openHelpModal() {
 }
 
 /* ---------- 快捷键弹窗 ---------- */
-const DEF_KEYS = { select: 'V', room: 'R', wall: 'L', prop: 'B', hole: 'H', person: 'N', path: 'P', pan: 'Space', sun: 'O', genie: 'J', motion: 'M', cut: 'E' };
+const DEF_KEYS = { select: 'V', room: 'R', wall: 'L', prop: 'B', hole: 'H', person: 'N', path: 'P', marker: 'K', pan: 'Space', sun: 'O', genie: 'J', motion: 'M', cut: 'E', timeline: 'T', agent: 'G' };
 function openKeysModal() {
   const prefs = MN.state.editorPreferences;
   const keys = Object.assign({}, DEF_KEYS, prefs.shortcuts || {});
   const rows = [
     ['select', '选择', '默认 V'], ['room', '画房间 / 走进中物体', '默认 R'], ['wall', '画墙', '默认 L'],
     ['prop', '造物', '默认 B'], ['hole', '打洞', '默认 H'], ['person', '放人物', '默认 N'],
+    ['marker', '地面标点', '默认 K'], ['timeline', '时间轴机位', '默认 T'], ['agent', 'AI 导演助手', '默认 G'],
     ['pan', '拖住平移', '拖住生效'], ['sun', '光影调节', '默认 O'],
   ];
   const editRows = [
@@ -4725,6 +4829,10 @@ Object.assign(window, {
      测试和 m3 都要能直接调到，别再出现「函数在 IIFE 里、桥取到 undefined 静默降级」 */
   paint3D, applyFollow, focusSelected, syncMonFrame, snap, snapDeg,
   isLocked, toggleLock, settleAllScene, selectOnly, delSel, renderRight,
+  /* 地面标点 + 舞台/Agent 需要的核心 API */
+  placeMarker, nextMarkerName, findObj, delObj, renderTree, renderObjPanel,
+  mnImportAiData: importAiData, mnNormScene: normScene,
+  mnPathLen: pathLen, mnSelectAll: selectAll, mnPasteClip: pasteClip,
 });
 
 /* ---------- bairimeng-director 集成钩子（2026-10-25 移植时新增） ----------
@@ -4736,6 +4844,7 @@ window.miaoningSeed = function (st) {
   const prevSnap = (MN.state && MN.state.scene) ? snapState(MN.state) : null;
   const fresh = blankState((st.scene && st.scene.title) || '未命名画布');
   MN.state = Object.assign(fresh, st);
+  if (!MN.state.scene.markers) MN.state.scene.markers = [];   // 旧种子容错
   MN.state.format = 'aistudio-director';
   MN.sel = null; MN.selList = []; MN.pending = null; MN.pathDraft = null;
   MN.undo = prevSnap ? [prevSnap] : []; MN.redo = [];

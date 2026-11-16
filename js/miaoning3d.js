@@ -111,7 +111,8 @@
     }
     void main(){
       vec3 N = normalize(vN); vec3 base = vC;
-      if(uMode==2){ float d = clamp((-vVZ)/26.0,0.0,1.0); base = vec3(1.0-d); }
+      if(uMode==2){ float d = clamp((-vVZ)/26.0,0.0,1.0); gl_FragColor = vec4(vec3(1.0-d), 1.0); return; }
+      if(uMode==3){ base = vec3(0.93); }
       vec3 col = base * uAmb;
       float s = max(dot(N, normalize(uSunDir)), 0.0);
       col += base * uSunCol * s * shadowAt(vW);
@@ -824,6 +825,7 @@
         }
         else if (M._sel.kind === 'person') rad = 0.5;
         else if (M._sel.kind === 'light') { cx0 = so.x; cz0 = so.y; rad = 0.4; }
+        else if (M._sel.kind === 'marker') rad = 0.4;
         else if (M._sel.kind === 'room') { cx0 = so.x + so.w / 2; cz0 = so.y + so.d / 2; rad = Math.min(so.w, so.d) / 2 + 0.1; }
         else if (M._sel.kind === 'wall') { cx0 = (so.x1 + so.x2) / 2; cz0 = (so.y1 + so.y2) / 2; rad = Math.hypot(so.x2 - so.x1, so.y2 - so.y1) / 2 + 0.2; }
         const N = 28, yy = y + 0.05;
@@ -897,6 +899,7 @@
     });
     sc.persons.forEach(p => acc(p.x - 0.6, p.y - 0.6, p.x + 0.6, p.y + 0.6));
     sc.lights.forEach(l => acc(l.x - 0.4, l.y - 0.4, l.x + 0.4, l.y + 0.4));
+    (sc.markers || []).forEach(mk => acc(mk.x - 0.3, mk.y - 0.3, mk.x + 0.3, mk.y + 0.3));
     if (!isFinite(minX)) { minX = 0; maxX = 14; minZ = 0; maxZ = 14; }
     if (maxX - minX < 2) { const c = (minX + maxX) / 2; minX = c - 1; maxX = c + 1; }
     if (maxZ - minZ < 2) { const c = (minZ + maxZ) / 2; minZ = c - 1; maxZ = c + 1; }
@@ -947,6 +950,41 @@
       el.style.left = sp.x.toFixed(1) + 'px';
       el.style.top = sp.y.toFixed(1) + 'px';
       el.style.setProperty('--lb', p.color || '#2e7cf6');
+    });
+  }
+
+  /* ---------- 地面标点 A/B/C（DOM 覆盖层，跟名牌同一套投影） ---------- */
+  let markerLayer = null;
+  function ensureMarkerLayer() {
+    if (markerLayer && markerLayer.isConnected) return markerLayer;
+    const host = canvas && canvas.parentElement;
+    if (!host) return null;
+    markerLayer = document.createElement('div');
+    markerLayer.className = 'mn3d-labels mn3d-markers';
+    host.appendChild(markerLayer);
+    return markerLayer;
+  }
+  function updateMarkers(state, vp) {
+    const layer = ensureMarkerLayer();
+    if (!layer) return;
+    const on = state.view && state.view.mode === '3d';
+    layer.style.display = on ? '' : 'none';
+    if (!on) { return; }
+    const marks = ((state.scene && state.scene.markers) || []).filter(mk => !mk.hidden);
+    while (layer.children.length > marks.length) layer.removeChild(layer.lastChild);
+    marks.forEach((mk, i) => {
+      let el = layer.children[i];
+      if (!el) { el = document.createElement('div'); el.className = 'mn3d-marker'; layer.appendChild(el); }
+      const sp = projToScreen(vp, mk.x, 0.08, mk.y);
+      if (!sp) { el.style.display = 'none'; return; }
+      el.style.display = '';
+      const txt = mk.name || '?';
+      if (el.textContent !== txt) el.textContent = txt;
+      el.style.left = sp.x.toFixed(1) + 'px';
+      el.style.top = sp.y.toFixed(1) + 'px';
+      el.style.setProperty('--mk', mk.color || '#ff7a45');
+      const sel = M._sel && M._sel.kind === 'marker' && M._sel.id === mk.id;
+      el.classList.toggle('sel', !!sel);
     });
   }
 
@@ -1250,6 +1288,7 @@
 
     /* 人物名牌 / 旋转手柄：DOM 覆盖层，只跟主视图（2D 模式自动隐藏） */
     updateLabels(state, main.vp);
+    updateMarkers(state, main.vp);
     updateGizmo(state, main.vp);
     M._stat.draws++; M._stat.geoMs += geoMs; M._stat.ms += performance.now() - t0;
   }
@@ -1281,8 +1320,11 @@
     if (clip) { gl.enable(gl.SCISSOR_TEST); gl.scissor(rect.x, rect.y, rect.w, rect.h); }
     else gl.disable(gl.SCISSOR_TEST);
     gl.viewport(rect.x, rect.y, rect.w, rect.h);
+    /* 白模导出：中性灰底 + 不铺环境图，白模才干净 */
+    const matMode = (state.view && state.view.material === 'depth') ? 2 : (state.view && state.view.material === 'white') ? 3 : 0;
+    if (matMode) env = null;   // 深度/白模导出都不铺环境图，输出才干净
     /* 背景板模式下用照片均色当天空：不然照片四周露出一圈软件底色，像没做完 */
-    const cc = (env && M._envAvg && envTexKey === env.src) ? M._envAvg : [dark ? 0.10 : 0.82, dark ? 0.10 : 0.86, dark ? 0.12 : 0.90];
+    const cc = matMode === 2 ? [0, 0, 0] : matMode === 3 ? [0.56, 0.58, 0.62] : (env && M._envAvg && envTexKey === env.src) ? M._envAvg : [dark ? 0.10 : 0.82, dark ? 0.10 : 0.86, dark ? 0.12 : 0.90];
     gl.clearColor(cc[0], cc[1], cc[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -1305,7 +1347,7 @@
     gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uVP'), false, new Float32Array(vp));
     gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uView'), false, new Float32Array(view));
     gl.uniform3fv(gl.getUniformLocation(prog, 'uSunDir'), new Float32Array(sdir));
-    gl.uniform3fv(gl.getUniformLocation(prog, 'uSunCol'), new Float32Array([0.95, 0.88, 0.72]));
+    gl.uniform3fv(gl.getUniformLocation(prog, 'uSunCol'), new Float32Array(matMode ? [1, 1, 1] : [0.95, 0.88, 0.72]));
     gl.uniform1f(gl.getUniformLocation(prog, 'uAmb'), 0.55);
     /* 方向投影：把光视深度图按世界坐标采样一遍，只有太阳直射项被挡 */
     if (lightVP) {
@@ -1321,18 +1363,18 @@
     const lights = (state.scene.lights || []).filter(l => !l.hidden);
     const ptPos = new Float32Array(12), ptCol = new Float32Array(12), ptInt = new Float32Array(4);
     const n = Math.min(lights.length, 4);
-    for (let i = 0; i < n; i++) { const l = lights[i]; ptPos[i * 3] = l.x; ptPos[i * 3 + 1] = (l.h || 2.5); ptPos[i * 3 + 2] = l.y; const lc = hex2rgb(l.color || '#ffe9b0'); ptCol[i * 3] = lc[0]; ptCol[i * 3 + 1] = lc[1]; ptCol[i * 3 + 2] = lc[2]; ptInt[i] = (l.intensity != null ? l.intensity : 1.0); }
+    for (let i = 0; i < n; i++) { const l = lights[i]; ptPos[i * 3] = l.x; ptPos[i * 3 + 1] = (l.h || 2.5); ptPos[i * 3 + 2] = l.y; const lc = matMode ? [1, 1, 1] : hex2rgb(l.color || '#ffe9b0'); ptCol[i * 3] = lc[0]; ptCol[i * 3 + 1] = lc[1]; ptCol[i * 3 + 2] = lc[2]; ptInt[i] = (l.intensity != null ? l.intensity : 1.0); }
     gl.uniform3fv(gl.getUniformLocation(prog, 'uPtPos'), ptPos);
     gl.uniform3fv(gl.getUniformLocation(prog, 'uPtCol'), ptCol);
     gl.uniform1fv(gl.getUniformLocation(prog, 'uPtInt'), ptInt);
     gl.uniform1i(gl.getUniformLocation(prog, 'uPtN'), n);
-    gl.uniform1i(gl.getUniformLocation(prog, 'uMode'), ((state.view && state.view.material) === 'depth') ? 2 : 0);
+    gl.uniform1i(gl.getUniformLocation(prog, 'uMode'), matMode);
     /* 背后铺了真实场景图时压一档曝光：白模本来会过曝成纯白，跟照片一比就像贴了张纸 */
     gl.uniform1f(gl.getUniformLocation(prog, 'uExp'), env ? 0.95 : 1.0);
     gl.drawArrays(gl.TRIANGLES, 0, triCount);
 
     /* 接触阴影：半透明、不写深度，必须画在实体之后 —— 不然脚会被"埋"进地里 */
-    if (shadowDiscs) {
+    if (shadowDiscs && matMode !== 2) {
       gl.useProgram(shadowProg);
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.depthMask(false);
@@ -1341,7 +1383,7 @@
       gl.enableVertexAttribArray(sa); gl.vertexAttribPointer(sa, 3, gl.FLOAT, false, 0, 0);
       gl.uniformMatrix4fv(gl.getUniformLocation(shadowProg, 'uVP'), false, new Float32Array(vp));
       gl.uniform4fv(gl.getUniformLocation(shadowProg, 'uCol'),
-        new Float32Array(dark ? [0, 0, 0, 0.42] : [0.12, 0.09, 0.06, 0.26]));
+        new Float32Array(matMode ? [0, 0, 0, 0.30] : dark ? [0, 0, 0, 0.42] : [0.12, 0.09, 0.06, 0.26]));
       gl.drawArrays(gl.TRIANGLES, 0, shadowDiscs.length / 3);
       gl.depthMask(true); gl.disable(gl.BLEND);
     }
@@ -1350,10 +1392,10 @@
     gl.bindBuffer(gl.ARRAY_BUFFER, bufLine);
     const la = gl.getAttribLocation(lineProg, 'aP'); gl.enableVertexAttribArray(la); gl.vertexAttribPointer(la, 3, gl.FLOAT, false, 0, 0);
     gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, 'uVP'), false, new Float32Array(vp));
-    gl.uniform3fv(gl.getUniformLocation(lineProg, 'uCol'), new Float32Array(dark ? [0.30, 0.28, 0.25] : [0.62, 0.58, 0.50]));
-    gl.drawArrays(gl.LINES, 0, gridArr.length / 3);
+    gl.uniform3fv(gl.getUniformLocation(lineProg, 'uCol'), new Float32Array(matMode ? [0.55, 0.55, 0.55] : dark ? [0.30, 0.28, 0.25] : [0.62, 0.58, 0.50]));
+    gl.drawArrays(gl.LINES, 0, matMode === 2 ? 0 : gridArr.length / 3);
     /* 人物运动轨迹单独用蓝色画一遍，和网格区分开 */
-    if (pathArr) {
+    if (pathArr && matMode !== 2) {
       gl.bufferData(gl.ARRAY_BUFFER, pathArr, gl.DYNAMIC_DRAW);
       gl.uniform3fv(gl.getUniformLocation(lineProg, 'uCol'), new Float32Array([0.18, 0.49, 0.96]));
       gl.drawArrays(gl.LINES, 0, pathArr.length / 3);
@@ -1365,7 +1407,7 @@
        放最上面 + 透明度滑杆，才能同时看清照片和白模。
        截图/导出通道（M._noMon）里只有勾了「进入导出」才画 —— 不然镜头册会混进辅助图。 */
     const refImg = state.scene && state.scene.ref;
-    if (refImg && refImg.src && (!M._noMon || refImg.inExport)) drawRef(refImg, asp);
+    if (refImg && refImg.src && !matMode && (!M._noMon || refImg.inExport)) drawRef(refImg, asp);
 
     gl.disable(gl.SCISSOR_TEST);
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -1485,6 +1527,7 @@
     }
     if (kind === 'light') { const h = o.h || 2.5; return [o.x - 0.22, h - 0.22, o.y - 0.22, o.x + 0.22, h + 0.22, o.y + 0.22]; }
     if (kind === 'room') return [o.x, 0, o.y, o.x + o.w, 0.07, o.y + o.d];
+    if (kind === 'marker') return [o.x - 0.25, 0, o.y - 0.25, o.x + 0.25, 0.3, o.y + 0.25];
     return null;
   }
   /* 拾取最近的可操作物体 */
@@ -1497,6 +1540,7 @@
       const t = rayAABB(r.o, r.d, b);
       if (t != null) cands.push({ kind, id: o.id, t, locked: !!o.locked });
     });
+    add('marker', sc.markers);
     add('person', sc.persons); add('prop', sc.props); add('wall', sc.walls); add('light', sc.lights); add('room', sc.rooms);
     if (!cands.length) return null;
     cands.sort((a, b) => a.t - b.t);
@@ -1663,7 +1707,7 @@
   /* 按 kind/id 找对象 */
   function findObjById(state, kind, id) {
     const sc = state && state.scene; if (!sc) return null;
-    const arr = kind === 'person' ? sc.persons : kind === 'prop' ? sc.props : kind === 'wall' ? sc.walls : kind === 'light' ? sc.lights : kind === 'room' ? sc.rooms : null;
+    const arr = kind === 'person' ? sc.persons : kind === 'prop' ? sc.props : kind === 'wall' ? sc.walls : kind === 'light' ? sc.lights : kind === 'room' ? sc.rooms : kind === 'marker' ? (sc.markers || []) : null;
     return (arr || []).find(o => o.id === id) || null;
   }
 

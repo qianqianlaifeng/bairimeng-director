@@ -157,6 +157,13 @@
   font-size:11px;line-height:1.6;padding:1px 7px;border-radius:5px;
   background:rgba(24,26,32,.74);color:#fff;border-left:3px solid var(--lb,#2e7cf6);
   box-shadow:0 2px 8px rgba(0,0,0,.28);letter-spacing:.02em;font-weight:600}
+/* 3D 地面标点 A/B/C：圆牌贴地投影，颜色随标点 */
+.mn3d-marker{position:absolute;transform:translate(-50%,-50%);width:22px;height:22px;
+  border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:var(--mk,#ff7a45);color:#fff;font-size:12px;font-weight:700;
+  border:2px solid rgba(255,255,255,.85);box-shadow:0 2px 8px rgba(0,0,0,.35);
+  letter-spacing:0}
+.mn3d-marker.sel{outline:2px solid #fff;outline-offset:2px;box-shadow:0 0 0 4px rgba(255,122,69,.4),0 2px 8px rgba(0,0,0,.35)}
 /* 人物自定义取色 */
 .mn-color-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .mn-color{width:56px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--soft);cursor:pointer}
@@ -178,6 +185,7 @@
 .mn-material-ball.original i{background:linear-gradient(135deg,#fff 0 50%,#c9c2b6 50% 100%)}
 .mn-material-ball.random i{background:conic-gradient(#e33,#fd3,#3c3,#3cf,#93f,#e33)}
 .mn-material-ball.depth i{background:linear-gradient(135deg,#fff,#333)}
+.mn-material-ball.white i{background:linear-gradient(135deg,#fdfdfd,#c9ccd4)}
 .mn-material-ball.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
 .mn-ctl-div{width:1px;height:15px;background:var(--line);margin:0 2px}
 .mn-stage-controls .mn-icon-btn{width:34px;height:28px;border-radius:5px}
@@ -708,3 +716,33 @@ span.mn-sb-shot-img[data-empty="1"]{display:flex;align-items:center;justify-cont
 /* 右下监看器边框与标签：GL 只画画面，框和字用 DOM 叠上去，缩放窗口自动跟着走 */
 .mn-mon-frame{position:absolute;right:20px;bottom:56px;border:1.5px solid rgba(46,124,246,.75);border-radius:6px;pointer-events:none;z-index:6;box-shadow:0 6px 18px rgba(20,24,34,.18)}
 .mn-mon-frame span{position:absolute;left:-1px;top:-22px;font:600 11px/1 ui-monospace,Menlo,monospace;color:#fff;background:rgba(46,124,246,.9);padding:3px 7px;border-radius:5px;white-space:nowrap}
+
+/* ===== 时间轴机位剪辑（MN_STAGE）===== */
+.mn-tl-panel{width:min(560px,92vw)}
+.mn-tl-rows{max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.mn-tl-empty{font-size:12px;color:var(--muted);padding:10px;border:1px dashed var(--line);border-radius:8px}
+.mn-tl-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.mn-tl-idx{font-size:12px;color:var(--muted);min-width:16px;text-align:center}
+.mn-tl-row select,.mn-tl-row input{height:26px;font-size:12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);padding:0 4px}
+.mn-tl-shot{flex:1;min-width:90px}
+.mn-tl-dur{width:58px}
+.mn-tl-mini{width:24px;height:24px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink);cursor:pointer;font-size:12px;line-height:1}
+.mn-tl-mini:hover{background:var(--hover)}
+.mn-tl-mini.danger{color:#e5484d}
+.mn-tl-name{width:100%;font-size:11px;color:var(--muted)}
+/* ===== AI 导演助手（MN_AGENT）===== */
+.mn-agent-panel{position:absolute;top:56px;right:12px;bottom:120px;width:min(340px,86vw);display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.18);z-index:40;overflow:hidden}
+.mn-agent-head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600}
+.mn-agent-head .mn-modal-x{margin-left:auto}
+.mn-agent-log{flex:1;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.mn-agent-msg{max-width:92%;padding:8px 10px;border-radius:10px;font-size:12.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.mn-agent-msg.user{align-self:flex-end;background:var(--accent,#4f7cff);color:#fff;border-bottom-right-radius:3px}
+.mn-agent-msg.ai{align-self:flex-start;background:var(--hover,rgba(127,127,127,.12));color:var(--ink);border-bottom-left-radius:3px}
+.mn-agent-msg.sys{align-self:center;font-size:11px;color:var(--muted);background:transparent;padding:2px 6px}
+.mn-agent-input{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line)}
+.mn-agent-input textarea{flex:1;resize:none;height:56px;font-size:12.5px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);padding:8px;font-family:inherit}
+.mn-agent-send{width:44px;border:none;border-radius:8px;background:var(--accent,#4f7cff);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.mn-agent-send:disabled{opacity:.5;cursor:default}
+.mn-agent-quick{display:flex;gap:6px;flex-wrap:wrap;padding:0 10px 8px}
+.mn-agent-quick button{font-size:11px;padding:4px 8px;border:1px solid var(--line);border-radius:99px;background:transparent;color:var(--muted);cursor:pointer}
+.mn-agent-quick button:hover{color:var(--ink);background:var(--hover)}

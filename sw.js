@@ -1,5 +1,5 @@
 /* 白日梦导演台 · Service Worker（离线可用） */
-const CACHE = 'bdm-v84-ai3d';
+const CACHE = 'bdm-v85-agent';
 const ASSETS = [
   './',
   './index.html',
@@ -41,6 +41,8 @@ const ASSETS = [
   './js/miaoning.js',
   './js/miaoning3d.js',
   './js/miaoning_m3.js',
+  './js/mn-stage.js',
+  './js/mn-agent.js',
   './manifest.webmanifest',
   './icon.svg',
 ];
