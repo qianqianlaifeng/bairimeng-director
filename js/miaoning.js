@@ -512,6 +512,28 @@ function buildShell() {
   buildViewCtl();
 }
 
+/* 顶栏「返回桌面」：收起搭建浮层 → 回项目台。
+   以前这里只写了 if (window.__mnExit) ... else if (window.goto) ...，
+   但工程里两者都没有赋值，点下去毫无反应（用户反馈）。现在自带兜底：
+   先问宿主注册的退出钩子，没有就自己关浮层 + 改 hash 路由。 */
+function exitToDesktop() {
+  const ov = document.getElementById('sbMnOverlay');
+  if (typeof window.__mnExit === 'function') {
+    try { window.__mnExit(); return; } catch (e) { /* 钩子出错就往下走兜底 */ }
+  }
+  try {
+    window.mnOrbitStop && window.mnOrbitStop();
+    if (ov) ov.classList.remove('open');
+    document.body.classList.remove('sb-mn-open');
+  } catch (e) { /* ignore */ }
+  try {
+    if (typeof window.goto === 'function') { window.goto('home'); return; }
+  } catch (e) { /* ignore */ }
+  const cur = (location.hash.match(/^#\/([^/?#]+)/) || [])[1];
+  if (cur === 'home') window.dispatchEvent(new HashChangeEvent('hashchange'));
+  else location.hash = '#/home';
+}
+
 function bindShell() {
   $('#mnBtnKeys').onclick = () => openKeysModal();
   $('#mnBtnHelp').onclick = () => openHelpModal();
@@ -527,7 +549,7 @@ function bindShell() {
   };
   $('#mnStep2').onclick = () => enterFindShot();
   $('#mnToStory').onclick = () => openStoryboard();
-  $('#mnBackHome').onclick = () => { if (window.__mnExit) window.__mnExit(); else if (window.goto) window.goto('chat'); };
+  $('#mnBackHome').onclick = () => exitToDesktop();
   $('#mnUndo').onclick = undo;
   $('#mnRedo').onclick = redo;
   $('#mnMaximize').onclick = () => toggleImmersive();

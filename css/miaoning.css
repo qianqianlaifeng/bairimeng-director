@@ -60,6 +60,8 @@
   border-radius:var(--radius);border:1px solid var(--line);background:var(--soft);font-size:13px;white-space:nowrap}
 .mn-btn:hover{border-color:var(--accent);color:var(--accent)}
 .mn-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+/* 主按钮（立起来 / 躺下去）：文字两侧留足空间，视觉上不再「贴边被切」 */
+#mnBtnRise{padding:0 22px;min-width:108px;letter-spacing:.2px;gap:8px}
 .mn-btn.primary:hover{filter:brightness(1.08);color:#fff}
 .mn-btn.sm{height:29px;padding:0 10px;font-size:12px}
 .mn-btn.block{width:100%}

@@ -367,6 +367,21 @@ function closeOverlay() {
   document.body.classList.remove('sb-mn-open');
 }
 
+/* 导演台顶栏「返回桌面」的出口。
+   miaoning.js 里那个按钮写的是 if (window.__mnExit) __mnExit(); else if (window.goto) goto('chat')，
+   但整个工程没有任何地方给这两个赋值 —— 于是点「返回桌面」静默无反应（用户反馈的问题）。
+   由宿主（本浮层）注册真正的退出动作：收起浮层 + 回到桌面路由。 */
+window.__mnExit = function () {
+  try { closeOverlay(); } catch (e) { /* 浮层没建好也继续往下走 */ }
+  /* 回到项目台：优先用站点的 hash 路由，其次直接改 hash */
+  try {
+    if (typeof window.goto === 'function') { window.goto('home'); return; }
+    const m = location.hash.match(/^#\/([^/?#]+)/);
+    if (!m || m[1] !== 'home') location.hash = '#/home';
+    else window.dispatchEvent(new HashChangeEvent('hashchange'));
+  } catch (e) { location.hash = '#/home'; }
+};
+
 /* 镜头册最新截图 → 挂成镜头参考图（白模预演时可替换白模） */
 async function attachLatestShot(st) {
   const shots = (st && st.directorShots) || [];
